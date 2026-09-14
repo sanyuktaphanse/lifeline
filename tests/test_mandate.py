@@ -4,7 +4,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from contracts.schemas import Action, ActionType, Mandate, Tier
+from contracts.schemas import Action, ActionType, Mandate, Source, Tier
 from core.mandate import check
 from core.tiers import TIERS
 
@@ -246,6 +246,28 @@ def _executed_today(
         purpose="rent",
         confirmation_token=confirmation_token,
     )
+
+
+def test_transfer_proposed_by_pasted_text_is_refused_on_its_own():
+    action = Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0500-test",
+        amount=Decimal("1200"),
+        currency="SGD",
+        corridor="SG>BR",
+        payee_id="landlord_sp",
+        purpose="rent",
+        source=Source.PASTED_TEXT,
+    )
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R01"]
+
+
+def test_source_defaults_to_the_user_turn():
+    assert _executed_today("txn-0501-test", "1200").source is Source.USER_TURN
 
 
 def test_transfer_without_a_token_is_allowed_but_needs_confirmation():

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import date, timezone
 from decimal import Decimal
 
-from contracts.schemas import Action, ActionType, Decision, Mandate, Tier
+from contracts.schemas import Action, ActionType, Decision, Mandate, Source, Tier
 from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
@@ -71,6 +71,18 @@ def check(
     action: Action, mandate: Mandate, history: Sequence[Action] = ()
 ) -> Decision:
     tier = TIERS[action.type]
+
+    if action.source is not Source.USER_TURN:
+        return Decision(
+            allowed=False,
+            reasons=[
+                f"This action came from {action.source.value}, which is data and "
+                "never an instruction. Only the user's own turn can ask for an action."
+            ],
+            rule_ids=["R01"],
+            tier=tier,
+        )
+
     reasons: list[str] = []
     rule_ids: list[str] = []
 

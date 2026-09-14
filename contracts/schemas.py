@@ -10,6 +10,14 @@ Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]
 
 
+class Source(str, Enum):
+    USER_TURN = "user_turn"
+    PASTED_TEXT = "pasted_text"
+    TOOL_RESULT = "tool_result"
+    TRANSLATED_TEXT = "translated_text"
+    PROVIDER_STATUS = "provider_status"
+
+
 class Tier(str, Enum):
     T0 = "T0"
     T1 = "T1"
@@ -30,6 +38,7 @@ class ActionType(str, Enum):
 
 class Action(BaseModel):
     type: ActionType
+    source: Source = Source.USER_TURN
     idempotency_key: str = Field(min_length=8)
     requested_at: AwareDatetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
