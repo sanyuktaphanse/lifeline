@@ -65,3 +65,20 @@ def test_transfer_on_disallowed_corridor_is_denied():
 
     assert decision.allowed is False
     assert "R05" in decision.rule_ids
+
+
+def test_transfer_with_disallowed_purpose_is_denied():
+    action = Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0004-test",
+        amount=Decimal("1200"),
+        currency="SGD",
+        corridor="SG>BR",
+        payee_id="landlord_sp",
+        purpose="crypto",
+    )
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert "R07" in decision.rule_ids

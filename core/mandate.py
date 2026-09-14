@@ -14,6 +14,10 @@ def check(action: Action, mandate: Mandate) -> Decision:
             rule_ids.append("R05")
             reasons.append(f"Corridor {action.corridor} is not in the allowed corridors.")
 
+        if action.purpose not in mandate.allowed_purposes:
+            rule_ids.append("R07")
+            reasons.append(f"Purpose {action.purpose} is not in the allowed purposes.")
+
         if action.amount is not None and action.amount > mandate.per_txn_limit:
             rule_ids.append("R08")
             reasons.append(
