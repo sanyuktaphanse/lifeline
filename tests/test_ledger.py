@@ -1,3 +1,6 @@
+from datetime import timedelta
+
+from contracts.schemas import LedgerEntry
 from core.ledger import GENESIS_PREV_HASH, HashChainLedger, _hash_of
 
 
@@ -35,3 +38,12 @@ def test_recomputing_the_forged_hash_only_moves_the_break_downstream():
     ledger.entries[1].hash = _hash_of(ledger.entries[1])
 
     assert ledger.verify() == 3
+
+
+def test_entries_are_the_contract_ledger_entry_with_a_utc_ts():
+    ledger = HashChainLedger()
+
+    entry = ledger.append("student_001", "decision", {"rule_ids": []})
+
+    assert type(entry) is LedgerEntry
+    assert entry.ts.utcoffset() == timedelta(0)

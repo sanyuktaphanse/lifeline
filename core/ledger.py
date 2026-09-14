@@ -3,26 +3,18 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import BaseModel, Field
+
+from contracts.schemas import LedgerEntry
 
 GENESIS_PREV_HASH = "0" * 64
-
-
-class LedgerEntry(BaseModel):
-    seq: int
-    timestamp: AwareDatetime
-    actor: str
-    kind: str
-    payload: dict[str, Any]
-    prev_hash: str
-    hash: str = ""
 
 
 def _hash_of(entry: LedgerEntry) -> str:
     content = json.dumps(
         {
             "seq": entry.seq,
-            "timestamp": entry.timestamp.isoformat(),
+            "ts": entry.ts.isoformat(),
             "actor": entry.actor,
             "kind": entry.kind,
             "payload": entry.payload,
@@ -42,11 +34,12 @@ class HashChainLedger(BaseModel):
     def append(self, actor: str, kind: str, payload: dict[str, Any]) -> LedgerEntry:
         entry = LedgerEntry(
             seq=len(self.entries) + 1,
-            timestamp=datetime.now(timezone.utc),
+            ts=datetime.now(timezone.utc),
             actor=actor,
             kind=kind,
             payload=payload,
             prev_hash=self.entries[-1].hash if self.entries else GENESIS_PREV_HASH,
+            hash="",
         )
         entry.hash = _hash_of(entry)
         self.entries.append(entry)
