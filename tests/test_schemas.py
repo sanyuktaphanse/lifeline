@@ -218,3 +218,21 @@ def test_agent_reply_validates_with_only_the_required_parts():
     assert reply.decision is None
     assert reply.receipt is None
     assert (reply.provider, reply.model) == (None, None)
+
+
+def test_confirmation_request_rejects_an_expiry_that_is_not_positive():
+    with pytest.raises(ValidationError) as excinfo:
+        ConfirmationRequest(
+            action=_rent_action(),
+            confirmation_token="a" * 64,
+            warning_key="warn.transfer.irreversible",
+            routes=[Route(**_route_fields())],
+            expires_in_seconds=0,
+        )
+    assert [error["loc"] for error in excinfo.value.errors()] == [("expires_in_seconds",)]
+
+
+def test_agent_reply_rejects_a_ledger_seq_below_one():
+    with pytest.raises(ValidationError) as excinfo:
+        AgentReply(text="Done.", lang="en", ledger_seqs=[1, 0])
+    assert [error["loc"] for error in excinfo.value.errors()] == [("ledger_seqs", 1)]

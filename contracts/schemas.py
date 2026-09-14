@@ -212,7 +212,7 @@ class ConfirmationRequest(BaseModel):
     confirmation_token: str
     warning_key: str
     routes: list[Route]
-    expires_in_seconds: int = 300
+    expires_in_seconds: int = Field(default=300, gt=0)
 
 
 class AgentReply(BaseModel):
@@ -221,6 +221,6 @@ class AgentReply(BaseModel):
     confirmation: ConfirmationRequest | None = None
     decision: Decision | None = None
     receipt: Receipt | None = None
-    ledger_seqs: list[int]
+    ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
