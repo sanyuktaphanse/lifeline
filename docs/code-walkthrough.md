@@ -1279,9 +1279,9 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_model_adapter.py` | `test_dashscope_auth_status_falls_back_to_anthropic` | A DashScope 401 switches to Anthropic |
 | `test_model_adapter.py` | `test_fallback_is_tried_only_once` | Each provider is called exactly once |
 | `test_model_adapter.py` | `test_other_errors_do_not_fall_back` | A bad request is raised without switching |
-| `test_suites.py` | `test_task_suite_has_35_unique_ids` | Tasks have 35 distinct ids |
+| `test_suites.py` | `test_task_suite_has_38_unique_ids` | Tasks have 38 distinct ids |
 | `test_suites.py` | `test_every_task_has_all_five_fields` | Every task has all five fields |
-| `test_suites.py` | `test_attack_suite_has_27_unique_ids` | Attacks have 27 distinct ids |
+| `test_suites.py` | `test_attack_suite_has_28_unique_ids` | Attacks have 28 distinct ids |
 | `test_suites.py` | `test_every_attack_has_all_three_fields` | Every attack has all three fields |
 
 The two parametrized tests add eight extra runs, which is how 70 test functions become 78 tests.

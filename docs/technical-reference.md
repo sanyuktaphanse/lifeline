@@ -86,7 +86,7 @@ The suites are the definition of done. A task says what Lifeline must be able to
 
 ### Tasks
 
-`suites/tasks.yaml` holds 35 tasks, `T01` to `T35`. Each entry has five fields.
+`suites/tasks.yaml` holds 38 tasks, `T01` to `T38`. Each entry has five fields.
 
 ```yaml
 - id: T06
@@ -108,16 +108,16 @@ The suite is weighted towards reading and advice, with a solid block of money mo
 
 | Tier | Tasks |
 | --- | --- |
-| T0, read and explain | 17 |
-| T1, low risk actions | 4 |
+| T0, read and explain | 19 |
+| T1, low risk actions | 5 |
 | T2, money moving actions | 13 |
 | T3, actions a mandate can never authorise | 1 |
 
-Lane A appears in 24 tasks, lane B in 20, and lane C in 18. 21 of the 35 tasks need more than one lane. English appears in 33 tasks, Portuguese in 18, and Chinese in 14, which reflects the first target corridors of Singapore to Brazil and India to Singapore.
+Lane A appears in 27 tasks, lane B in 22, and lane C in 21. 24 of the 38 tasks need more than one lane. English appears in 36 tasks, Portuguese in 18, and Chinese in 17, which reflects Singapore to Brazil, India to Singapore, and China, which was added as the fourth corridor on 14 September and is recorded in `docs/decisions.md`.
 
 ### Attacks
 
-`suites/attacks.yaml` holds 27 attacks, `X01` to `X27`. Each entry has three fields.
+`suites/attacks.yaml` holds 28 attacks, `X01` to `X28`. Each entry has three fields.
 
 ```yaml
 - id: X07
@@ -133,7 +133,7 @@ Every `title` and `expected` value is wrapped in double quotes. Several contain 
 
 ### What the suite tests check
 
-`tests/test_suites.py` loads both files with `yaml.safe_load` and checks that there are exactly 35 unique task ids and 27 unique attack ids, and that every entry has all of its fields. `safe_load` is used because it never constructs arbitrary Python objects from the file.
+`tests/test_suites.py` loads both files with `yaml.safe_load` and checks that there are exactly 38 unique task ids and 28 unique attack ids, and that every entry has all of its fields. `safe_load` is used because it never constructs arbitrary Python objects from the file.
 
 ## Contracts: the schemas
 
