@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the state of `main` at commit `e8201df` on 14 September 2026. At that commit there are 72 tests, all passing locally and in CI.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the code on `main` at commit `26e29ae`, the last code change, made on 14 September 2026. At that commit there are 78 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -29,6 +29,7 @@ A request starts in the user's own turn. The model reads it and may answer with 
 flowchart LR
   U[User turn] --> MA[ModelAdapter.complete]
   MA -->|Message with tool_calls| AG[Agent loop]
+  AG -->|tool result with tool_call_id| MA
   AG -->|Action| ME[MandateEngine.check]
   ME -->|allowed| RT[Router and Rail]
   ME -->|refused, with rule ids| AG
@@ -46,10 +47,10 @@ Not every box exists yet. This table shows what is implemented.
 | Tiers | `core/tiers.py` | Implemented |
 | Mandate engine | `core/mandate.py` | Implemented as `DeterministicMandateEngine` |
 | Ledger | `core/ledger.py` | Implemented as `HashChainLedger`, in memory only |
-| Model adapter | `core/model_adapter.py` | Implemented as `ProviderModelAdapter` |
+| Model adapter | `core/model_adapter.py` | Implemented as `ProviderModelAdapter`, including multi step tool conversations |
 | Fake model adapter | `core/fake_adapter.py` | Implemented for tests |
 | Task and attack suites | `suites/` | Written, not yet executed by a harness |
-| Agent loop, Router, Rail, Anchor, Council, Translator | none yet | Interfaces only |
+| Agent loop, Router, Rail, Anchor, Council, Translator | none yet | Interfaces only; the agent loop exists only as a scripted loop inside a test |
 
 ## The rules that shape the code
 
@@ -60,7 +61,7 @@ The project `CLAUDE.md` sets eight rules. Six of them show up directly in the co
 | Every action that moves money passes `MandateEngine.check` first | `core/mandate.py`, the only implementation of `MandateEngine` |
 | The mandate engine is plain Python and makes no model calls | `core/mandate.py` imports nothing but the standard library and the contracts |
 | Instructions come only from the user's own turn | Rule R01 in the engine, the `Source` enum, and the tool message check on `Message` |
-| Never hardcode a fee, a limit, or a rule without a source | Every constant in `core/model_adapter.py` carries a `# Source:` comment |
+| Never hardcode a fee, a limit, or a rule without a source | Every constant and format rule in `core/model_adapter.py` carries a `# Source:` comment |
 | Secrets live only in `.env` | The adapter reads keys from the environment; `.env` is in `.gitignore`; `.env.example` lists names with no values |
 | Write tests before code | Every change was made by writing the test, watching it fail, then writing the code |
 
@@ -178,23 +179,44 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | `PrecheckResult` | What a provider is likely to ask for and what could trigger a review |
 | `LedgerEntry` | One link in the hash chained ledger |
 | `ToolCall` | One tool call requested by the model: id, name, and arguments |
-| `Message` | One turn in a conversation, with role, text, language, source, tool calls, provider, and model |
+| `Message` | One turn in a conversation; see the field table below |
 
 `Route` carries `fee_source_url` and `rate_source` so that every figure shown to the student can cite where it came from, which is rule four applied to data.
 
+### Message fields
+
+| Field | Type | Used for |
+| --- | --- | --- |
+| `role` | `Role` | Who is speaking: user, assistant, system, or tool |
+| `text` | text | The words of the turn |
+| `lang` | text, default `en` | The language of the turn |
+| `source` | `Source`, default `user_turn` | Where the text came from |
+| `tool_calls` | list of `ToolCall`, default empty | Tools the model asked to run, on assistant messages |
+| `tool_call_id` | text, optional | The call a tool message answers; required when the role is tool |
+| `provider` | text, optional | Which provider produced an assistant message |
+| `model` | text, optional | Which model produced an assistant message |
+| `provider_content` | list of dictionaries, optional | The provider's raw reply blocks, kept so they can be sent back unchanged |
+
+`provider` and `model` let the ledger store which model produced every answer. `provider_content` exists because of how Claude continues a tool loop, which is explained under [multi step tool conversations](#multi-step-tool-conversations).
+
 ### The tool message rule
 
-A `Message` with role `tool` must carry source `tool_result`. A model validator enforces this.
+A `Message` with role `tool` must carry source `tool_result` and must name the call it answers. A model validator enforces both.
 
 ```python
 @model_validator(mode="after")
-def _tool_messages_carry_tool_result_source(self) -> "Message":
-    if self.role is Role.TOOL and self.source is not Source.TOOL_RESULT:
-        raise ValueError("A tool message must carry source tool_result.")
+def _tool_messages_answer_one_call_as_data(self) -> "Message":
+    if self.role is Role.TOOL:
+        if self.source is not Source.TOOL_RESULT:
+            raise ValueError("A tool message must carry source tool_result.")
+        if not self.tool_call_id:
+            raise ValueError(
+                "A tool message must carry the tool_call_id of the call it answers."
+            )
     return self
 ```
 
-Tool output is data, never an instruction. Marking it at the type level means any code that later builds an `Action` from a tool message will carry `source=tool_result`, and the mandate engine refuses that under R01. The model cannot forget the label, because a mislabelled tool message cannot be created at all.
+Tool output is data, never an instruction. Marking it at the type level means any code that later builds an `Action` from a tool message will carry `source=tool_result`, and the mandate engine refuses that under R01. The model cannot forget the label, because a mislabelled tool message cannot be created at all. Requiring `tool_call_id` means every result can be matched to exactly one call, which both providers need when the conversation continues.
 
 ## Tiers
 
@@ -339,7 +361,16 @@ Two tests show why this matters. Editing the payload of entry 2 makes `verify` r
 
 ### The rest of the interface
 
-`head()` returns the hash of the last entry, or the genesis value when the ledger is empty. `append` uses `head()` as the new entry's `prev_hash`. `entries()` returns a copy of the list, so a caller cannot add, remove, or reorder entries through the returned value.
+`head()` returns the hash of the last entry, or the genesis value when the ledger is empty. `append` uses `head()` as the new entry's `prev_hash`.
+
+`entries()` returns deep copies of the entries.
+
+```python
+def entries(self) -> list[LedgerEntry]:
+    return [entry.model_copy(deep=True) for entry in self._entries]
+```
+
+A plain copy of the list would still hold the same entry objects, so a caller could change a stored payload through it. `model_copy(deep=True)` copies each entry and everything inside it, so editing a returned entry changes only the copy and the chain stays intact. A test edits the payload and hash of a returned entry and confirms that `verify` still passes and the stored entry is unchanged.
 
 `LedgerEntry` lives in the contracts and has a single definition used by the ledger. Its time field is named `ts`. Field names are part of the hashed content, so renaming a field changes every hash. The rename from `timestamp` to `ts` was safe only because nothing had been stored yet.
 
@@ -364,10 +395,10 @@ An empty value counts as unset, so a `.env` copied straight from `.env.example` 
 
 1. The adapter picks the primary provider.
 2. It checks that the provider's key variable is set. If not, it raises `MissingApiKey`, which names the variable and says to add it to `.env`.
-3. It converts each `Message` into the provider's format. For Anthropic, system messages go into the separate `system` field.
+3. It converts the whole conversation into the provider's format, including earlier assistant turns with tool calls and tool results, as described below. For Anthropic, system messages go into the separate `system` field.
 4. It calls the provider's SDK, passing the key explicitly.
 5. It sorts any failure into one of the error classes below.
-6. It turns the reply into a `Message` with the text, any tool calls, and the provider and model that answered.
+6. It turns the reply into a `Message` with the text, any tool calls, the provider and model that answered, and for Anthropic the raw reply blocks in `provider_content`.
 7. If step 2 or step 5 reported the provider unavailable, it logs a warning and runs the same steps once on the fallback provider.
 
 ### Errors and what they cause
@@ -388,7 +419,7 @@ An empty value counts as unset, so a `.env` copied straight from `.env.example` 
 
 DashScope reports HTTP errors as a response with a status code instead of raising. That is why the adapter checks `status_code` after the call, as well as catching exceptions.
 
-### Tool calls
+### Tool definitions and tool calls
 
 Tools are passed in Anthropic's shape, `name`, `description`, and `input_schema`. For DashScope they are converted to its function shape.
 
@@ -406,6 +437,36 @@ def _dashscope_tool(tool: dict[str, Any]) -> dict[str, Any]:
 
 Replies come back differently too. Anthropic returns `tool_use` blocks whose `input` is already a dictionary. DashScope returns `tool_calls` whose `arguments` is a JSON string, and the DashScope SDK itself warns that the model does not always produce valid JSON. The adapter parses that string and raises `ModelAdapterError` when it is not a valid JSON object, instead of passing a broken call on or silently dropping it. Both providers end up as the same `ToolCall(id, name, arguments)` inside `Message.tool_calls`.
 
+### Multi step tool conversations
+
+A tool loop has four kinds of turn: the user's request, an assistant turn with tool calls, one tool result per call, and the next assistant turn. The adapter can send that whole conversation to either provider and continue it.
+
+```mermaid
+sequenceDiagram
+  participant App as Lifeline
+  participant Model as Provider
+  App->>Model: user message
+  Model-->>App: assistant message with tool_calls
+  Note over App: runs each tool
+  App->>Model: user, assistant with tool_calls, tool result with tool_call_id
+  Model-->>App: next assistant message
+```
+
+Each provider needs a different shape.
+
+| Turn | Anthropic | DashScope |
+| --- | --- | --- |
+| User message | `{"role": "user", "content": text}` | `{"role": "user", "content": text}` |
+| Assistant turn that Anthropic produced | The stored `provider_content` blocks, unchanged | Rebuilt as below |
+| Assistant turn with tool calls from anywhere else | A `tool_use` block per call, after a text block if there is text | `{"role": "assistant", "content": text or None, "tool_calls": [...]}` with JSON text arguments |
+| Tool result | A `tool_result` block with `tool_use_id`, inside a user turn | `{"role": "tool", "content": text, "tool_call_id": id}` |
+| Several tool results in a row | One user turn holding every `tool_result` block | One `tool` message each |
+
+Two details matter most.
+
+1. `claude-opus-5` reasons before it answers, and its reply includes reasoning blocks with a signature. The Claude API guidance says that when a conversation continues on the same model, an assistant turn must go back exactly as it was received, reasoning blocks included, and that dropping or editing them breaks the turn. So every Anthropic reply is stored in `provider_content` with the SDK's `to_dict()`, which keeps only the fields the API actually sent, and it is sent back unchanged on the next call. Assistant turns from any other source are rebuilt from their text and tool calls.
+2. Anthropic has no tool role, and its guidance is that all tool results for one assistant turn go back in a single user message. The adapter therefore groups consecutive tool results into one user turn. DashScope has a real tool role, and its own converter in the SDK package shows that each result is a separate `tool` message whose `tool_call_id` is mandatory.
+
 ### Output limits
 
 | Provider | `max_tokens` | Source |
@@ -415,7 +476,7 @@ Replies come back differently too. Anthropic returns `tool_use` blocks whose `in
 
 ### The fake adapter
 
-`core/fake_adapter.py` holds `FakeModelAdapter`, which returns scripted replies in order and raises when it runs out. It records every call it receives. Its replies carry `provider="fake"` and `model="fake"`. Any test of code that uses a model can use the fake and run without a network or a key.
+`core/fake_adapter.py` holds `FakeModelAdapter`, which returns scripted replies in order and raises when it runs out. It records every call it receives, so a test can check exactly which conversation was sent at each step. A plain string becomes an assistant reply with `provider="fake"` and `model="fake"`, and a full `Message` is returned as it is, which is how a test scripts a tool call. Any test of code that uses a model can use the fake and run without a network or a key.
 
 ### Dependencies
 
@@ -429,7 +490,7 @@ The SDK packages are pinned to releases older than the ten day freshness window,
 
 ## Decisions of 14 September
 
-Four decisions reshaped the adapter in commit `785cc9a`.
+Four decisions reshaped the adapter in commit `785cc9a`, and a follow up in commit `26e29ae` completed the tool loop.
 
 ### One fallback only
 
@@ -447,6 +508,10 @@ The earlier code recognised a missing Anthropic key by matching the text of a `T
 
 `ANTHROPIC_MODEL` and `DASHSCOPE_MODEL` are listed in `.env.example` with no values, following the rule that the example file carries names only. DashScope calls send `max_tokens` 2048, with a comment citing the decision as its source.
 
+### Follow up: the multi step tool loop and ledger copies
+
+Commit `26e29ae` added `tool_call_id` to `Message`, required on every tool message, and taught the adapter to send a full tool conversation to both providers, as described under [multi step tool conversations](#multi-step-tool-conversations). It also added `provider_content`, which was not in the original request but is needed for the loop to work against the real Claude API, because an assistant turn must go back with its reasoning blocks unchanged. In the same commit, `entries()` on the ledger began returning deep copies. Tests cover a scripted two step loop through the fake adapter, a full round trip on each provider, an assistant turn from DashScope rebuilt for Anthropic with two results grouped into one user turn, a tool message without an id, and a returned ledger entry that is edited without affecting `verify`.
+
 ## Testing and CI
 
 Every change was written test first. The test was run and seen to fail before the code existed, then the code was written until it passed. A test that has never failed might be passing for the wrong reason, so the red run is part of the method, not a formality.
@@ -454,18 +519,18 @@ Every change was written test first. The test was run and seen to fail before th
 | Test file | Tests | Covers |
 | --- | --- | --- |
 | `tests/test_mandate.py` | 24 | Every rule R01 to R11, schema rejection of bad actions, tier coverage |
-| `tests/test_model_adapter.py` | 16 | Provider selection, fallback, key check, tool calls, refusal, the fake adapter |
+| `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
+| `tests/test_schemas.py` | 11 | Route and Receipt statuses, new tiers, standing mandates, tool messages and their ids, roles |
 | `tests/test_interfaces.py` | 10 | The frozen members of all eight interfaces, and the engine class matching the wrapper |
-| `tests/test_schemas.py` | 10 | Route and Receipt statuses, new tiers, standing mandates, tool messages, roles |
-| `tests/test_ledger.py` | 8 | Chaining, head, entries copy, tamper detection, the contract entry type |
+| `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
-| Total | 72 | |
+| Total | 78 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
 ### How the model tests avoid the network
 
-The adapter tests replace the two SDK entry points, `anthropic.Anthropic` and `dashscope.Generation.call`, with small fakes. An automatic fixture replaces both with a function that fails the test on contact, so any test that reaches a real SDK by mistake fails instead of calling a provider. The DashScope fakes build their replies with the SDK's own `GenerationResponse` and `DashScopeAPIResponse` classes, so the adapter is tested against the real response shape. The keys used in tests are placeholder strings that are not real keys.
+The adapter tests replace the two SDK entry points, `anthropic.Anthropic` and `dashscope.Generation.call`, with small fakes. An automatic fixture replaces both with a function that fails the test on contact, so any test that reaches a real SDK by mistake fails instead of calling a provider. The Anthropic fakes reply with the SDK's own block classes, `TextBlock`, `ToolUseBlock`, and `ThinkingBlock`, and the DashScope fakes build their replies with the SDK's `GenerationResponse` and `DashScopeAPIResponse` classes, so the adapter is tested against the real response shapes. A fake can return a different reply on each call, which is how the round trip tests script two steps and then check the exact second request. The keys used in tests are placeholder strings that are not real keys.
 
 ### Continuous integration
 
@@ -475,31 +540,36 @@ The adapter tests replace the two SDK entry points, `anthropic.Anthropic` and `d
 
 ## Commit history
 
-All times are local time on 14 September 2026.
+All times are local time.
 
-| Commit | Time | Message |
+| Commit | Date and time | Message |
 | --- | --- | --- |
-| `76855d6` | 19:47 | Hash chained ledger with verify |
-| `c63cda6` | 20:19 | README, requirements, CI and PR template |
-| `66960a8` | 20:24 | README, requirements, CI and PR template |
-| `2a65e90` | 20:28 | Journal for 14 September |
-| `737dc40` | 22:57 | Task suite v1 |
-| `76a5ceb` | 22:59 | Attack suite v1 |
-| `b112a06` | 23:08 | Contracts: remaining schemas |
-| `c012c25` | 23:14 | Contracts: remaining schemas |
-| `1479d4b` | 23:17 | Contracts: interfaces frozen for lanes B and C |
-| `d7b50da` | 23:26 | Model adapter with fallback |
-| `785cc9a` | 23:36 | Adapter: tool calls in Message, explicit fallback only, key check |
-| `e8201df` | 23:37 | Ledger implements the Ledger interface |
+| `76855d6` | 14 Sep 19:47 | Hash chained ledger with verify |
+| `c63cda6` | 14 Sep 20:19 | README, requirements, CI and PR template |
+| `66960a8` | 14 Sep 20:24 | README, requirements, CI and PR template |
+| `2a65e90` | 14 Sep 20:28 | Journal for 14 September |
+| `737dc40` | 14 Sep 22:57 | Task suite v1 |
+| `76a5ceb` | 14 Sep 22:59 | Attack suite v1 |
+| `b112a06` | 14 Sep 23:08 | Contracts: remaining schemas |
+| `c012c25` | 14 Sep 23:14 | Contracts: remaining schemas |
+| `1479d4b` | 14 Sep 23:17 | Contracts: interfaces frozen for lanes B and C |
+| `d7b50da` | 14 Sep 23:26 | Model adapter with fallback |
+| `785cc9a` | 14 Sep 23:36 | Adapter: tool calls in Message, explicit fallback only, key check |
+| `e8201df` | 14 Sep 23:37 | Ledger implements the Ledger interface |
+| `34dfb59` | 14 Sep 23:49 | Technical reference |
+| `26e29ae` | 14 Sep 23:58 | Adapter multi step tool loop; ledger returns copies |
+| `e264873` | 15 Sep 00:08 | Journal for 14 September evening |
+| `2fbd82f` | 15 Sep 00:08 | Code walkthrough |
 
-Two messages appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
+The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
 ## Open items
 
-1. Tool results cannot yet be sent back to a model. The adapter returns tool calls, but Anthropic needs each tool result to name the id of the call it answers, and `Message` has no field for that id yet. Adding a `tool_call_id` to `Message` is the next step for a working tool loop.
-2. `entries()` returns a new list that still holds the same entry objects, so a caller could edit an entry through it. `verify` would detect the edit, but returning copies of the entries would prevent it.
-3. Lanes B and C need to know that the `Ledger` interface changed in `e8201df`: `entries` and `head` are methods, and `head` returns the hash.
-4. The ledger lives in memory only. Attack `X22`, a tampered ledger file, needs the ledger to be saved and loaded.
-5. A refusal from the model is an error and does not switch providers. Revisit this if a refusal on one provider should be retried on the other.
-6. `Anchor`, `Router`, `Rail`, `Council`, and `Translator` have interfaces but no implementations.
-7. The task and attack suites are validated for structure but are not yet run by a harness that scores each scenario.
+1. No round trip has been run against the real provider APIs. Every provider test uses stand ins built from the SDK classes. One short real two step tool run on each provider, with keys in `.env`, would confirm the formats.
+2. When DashScope makes a tool call and the conversation then moves to Anthropic, for example after a fallback in the middle of a loop, that assistant turn reaches Anthropic with no reasoning blocks. Whether `claude-opus-5` accepts such a turn can only be confirmed with a real call.
+3. A failed tool is sent back as ordinary text. There is no way yet to mark a tool result as an error, which Anthropic supports with `is_error`.
+4. Lanes B and C need to know about two contract changes: the `Ledger` interface changed in `e8201df`, and `Message` gained `tool_call_id` and `provider_content` in `26e29ae`.
+5. The ledger lives in memory only. Attack `X22`, a tampered ledger file, needs the ledger to be saved and loaded.
+6. A refusal from the model is an error and does not switch providers. Revisit this if a refusal on one provider should be retried on the other.
+7. `Anchor`, `Router`, `Rail`, `Council`, and `Translator` have interfaces but no implementations, and the agent loop exists only inside a test.
+8. The task and attack suites are validated for structure but are not yet run by a harness that scores each scenario.
