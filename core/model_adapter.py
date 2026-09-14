@@ -44,6 +44,56 @@ def _setting(env: Mapping[str, str], name: str, default: str) -> str:
     return env.get(name) or default
 
 
+def _anthropic_assistant_content(message: Message) -> str | list[dict[str, Any]]:
+    # Source: claude-api skill model migration guide, an Anthropic assistant turn goes
+    # back exactly as received so its thinking blocks stay valid for the next turn.
+    if message.provider == "anthropic" and message.provider_content is not None:
+        return list(message.provider_content)
+    if not message.tool_calls:
+        return message.text
+    blocks: list[dict[str, Any]] = []
+    if message.text:
+        blocks.append({"type": "text", "text": message.text})
+    blocks.extend(
+        {"type": "tool_use", "id": call.id, "name": call.name, "input": call.arguments}
+        for call in message.tool_calls
+    )
+    return blocks
+
+
+def _anthropic_messages(messages: Sequence[Message]) -> list[dict[str, Any]]:
+    turns: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role is Role.SYSTEM:
+            continue
+        if message.role is Role.ASSISTANT:
+            turns.append(
+                {"role": "assistant", "content": _anthropic_assistant_content(message)}
+            )
+            continue
+        if message.role is Role.TOOL:
+            block = {
+                "type": "tool_result",
+                "tool_use_id": message.tool_call_id,
+                "content": message.text,
+            }
+            previous = turns[-1] if turns else None
+            # Source: claude-api skill, every tool result for one assistant turn goes
+            # back in a single user message.
+            if (
+                previous is not None
+                and previous["role"] == "user"
+                and isinstance(previous["content"], list)
+                and previous["content"][-1]["type"] == "tool_result"
+            ):
+                previous["content"].append(block)
+            else:
+                turns.append({"role": "user", "content": [block]})
+            continue
+        turns.append({"role": "user", "content": message.text})
+    return turns
+
+
 def _call_anthropic(
     model: str,
     api_key: str,
@@ -54,11 +104,7 @@ def _call_anthropic(
     request: dict[str, Any] = {
         "model": model,
         "max_tokens": ANTHROPIC_MAX_TOKENS,
-        "messages": [
-            {"role": m.role.value, "content": m.text}
-            for m in messages
-            if m.role is not Role.SYSTEM
-        ],
+        "messages": _anthropic_messages(messages),
     }
     if system:
         request["system"] = system
@@ -86,6 +132,7 @@ def _call_anthropic(
         ],
         provider="anthropic",
         model=model,
+        provider_content=[block.to_dict() for block in response.content],
     )
 
 
@@ -98,6 +145,30 @@ def _dashscope_tool(tool: dict[str, Any]) -> dict[str, Any]:
             "parameters": tool.get("input_schema", {}),
         },
     }
+
+
+def _dashscope_message(message: Message) -> dict[str, Any]:
+    # Source: dashscope 1.27.3 acli/providers/adapter.py, tool results are tool messages
+    # correlated by tool_call_id and assistant turns keep their tool_calls.
+    if message.role is Role.TOOL:
+        return {"role": "tool", "content": message.text, "tool_call_id": message.tool_call_id}
+    if message.role is Role.ASSISTANT and message.tool_calls:
+        return {
+            "role": "assistant",
+            "content": message.text or None,
+            "tool_calls": [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(call.arguments, ensure_ascii=False),
+                    },
+                }
+                for call in message.tool_calls
+            ],
+        }
+    return {"role": message.role.value, "content": message.text}
 
 
 def _dashscope_tool_call(call: Mapping[str, Any]) -> ToolCall:
@@ -124,7 +195,7 @@ def _call_dashscope(
     request: dict[str, Any] = {
         "model": model,
         "api_key": api_key,
-        "messages": [{"role": m.role.value, "content": m.text} for m in messages],
+        "messages": [_dashscope_message(m) for m in messages],
         "result_format": "message",
         "max_tokens": DASHSCOPE_MAX_TOKENS,
     }

@@ -54,7 +54,7 @@ class HashChainLedger(Ledger):
         return None
 
     def entries(self) -> list[LedgerEntry]:
-        return list(self._entries)
+        return [entry.model_copy(deep=True) for entry in self._entries]
 
     def head(self) -> str:
         return self._entries[-1].hash if self._entries else GENESIS_PREV_HASH

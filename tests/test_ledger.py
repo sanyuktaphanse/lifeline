@@ -45,6 +45,19 @@ def test_entries_returns_a_copy_of_the_list():
     assert ledger.entries() is not ledger.entries()
 
 
+def test_mutating_a_returned_entry_does_not_change_the_chain():
+    ledger = HashChainLedger()
+    ledger.append("student_001", "transfer", {"amount": "1200"})
+    ledger.append("student_001", "decision", {"rule_ids": []})
+
+    returned = ledger.entries()[0]
+    returned.payload["amount"] = "9999"
+    returned.hash = "f" * 64
+
+    assert ledger.verify() is None
+    assert ledger.entries()[0].payload["amount"] == "1200"
+
+
 def test_editing_the_second_entry_breaks_the_chain_at_two():
     ledger = HashChainLedger()
     ledger.append("student_001", "decision", {"rule_ids": []})

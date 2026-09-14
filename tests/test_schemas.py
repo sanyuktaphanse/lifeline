@@ -111,16 +111,24 @@ def test_standing_mandates_default_to_empty():
 
 
 def test_tool_result_message_carries_source_tool_result():
-    message = Message(role="tool", text='{"fee": "8.40"}', source="tool_result")
+    message = Message(
+        role="tool", text='{"fee": "8.40"}', source="tool_result", tool_call_id="toolu_01"
+    )
 
     assert message.role is Role.TOOL
     assert message.source is Source.TOOL_RESULT
+    assert message.tool_call_id == "toolu_01"
     assert message.tool_calls == []
 
 
 def test_tool_message_without_tool_result_source_is_rejected():
-    with pytest.raises(ValidationError):
-        Message(role="tool", text='{"fee": "8.40"}')
+    with pytest.raises(ValidationError, match="source tool_result"):
+        Message(role="tool", text='{"fee": "8.40"}', tool_call_id="toolu_01")
+
+
+def test_tool_message_without_tool_call_id_is_rejected():
+    with pytest.raises(ValidationError, match="tool_call_id"):
+        Message(role="tool", text='{"fee": "8.40"}', source="tool_result")
 
 
 def test_message_rejects_an_unknown_role():

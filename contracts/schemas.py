@@ -190,11 +190,18 @@ class Message(BaseModel):
     lang: str = "en"
     source: Source = Source.USER_TURN
     tool_calls: list[ToolCall] = Field(default_factory=list)
+    tool_call_id: str | None = None
     provider: str | None = None
     model: str | None = None
+    provider_content: list[dict[str, Any]] | None = None
 
     @model_validator(mode="after")
-    def _tool_messages_carry_tool_result_source(self) -> "Message":
-        if self.role is Role.TOOL and self.source is not Source.TOOL_RESULT:
-            raise ValueError("A tool message must carry source tool_result.")
+    def _tool_messages_answer_one_call_as_data(self) -> "Message":
+        if self.role is Role.TOOL:
+            if self.source is not Source.TOOL_RESULT:
+                raise ValueError("A tool message must carry source tool_result.")
+            if not self.tool_call_id:
+                raise ValueError(
+                    "A tool message must carry the tool_call_id of the call it answers."
+                )
         return self
