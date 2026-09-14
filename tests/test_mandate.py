@@ -101,3 +101,20 @@ def test_transfer_breaking_two_rules_reports_both():
     assert "R06" in decision.rule_ids
     assert "R08" in decision.rule_ids
     assert len(decision.reasons) == 2
+
+
+def test_transfer_in_wrong_currency_is_denied():
+    action = Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0005-test",
+        amount=Decimal("1200"),
+        currency="USD",
+        corridor="SG>BR",
+        payee_id="landlord_sp",
+        purpose="rent",
+    )
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert "R04" in decision.rule_ids

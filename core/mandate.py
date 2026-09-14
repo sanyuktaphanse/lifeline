@@ -6,6 +6,13 @@ def check(action: Action, mandate: Mandate) -> Decision:
     rule_ids: list[str] = []
 
     if action.type is ActionType.TRANSFER:
+        if action.currency != mandate.currency:
+            rule_ids.append("R04")
+            reasons.append(
+                f"Currency {action.currency} does not match the mandate currency "
+                f"{mandate.currency}."
+            )
+
         if action.payee_id not in mandate.allowed_payees:
             rule_ids.append("R06")
             reasons.append(f"Payee {action.payee_id} is not in the allowed payees.")
