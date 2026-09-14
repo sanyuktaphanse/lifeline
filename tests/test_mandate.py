@@ -82,3 +82,22 @@ def test_transfer_with_disallowed_purpose_is_denied():
 
     assert decision.allowed is False
     assert "R07" in decision.rule_ids
+
+
+def test_transfer_breaking_two_rules_reports_both():
+    action = Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0007-test",
+        amount=Decimal("1600"),
+        currency="SGD",
+        corridor="SG>BR",
+        payee_id="stranger_42",
+        purpose="rent",
+    )
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert "R06" in decision.rule_ids
+    assert "R08" in decision.rule_ids
+    assert len(decision.reasons) == 2
