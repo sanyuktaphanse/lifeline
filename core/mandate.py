@@ -29,6 +29,15 @@ def check(
     rule_ids: list[str] = []
 
     if action.type is ActionType.TRANSFER:
+        if any(past.idempotency_key == action.idempotency_key for past in history):
+            return Decision(
+                allowed=False,
+                reasons=[
+                    f"Idempotency key {action.idempotency_key} was already executed."
+                ],
+                rule_ids=["R10"],
+            )
+
         if action.currency != mandate.currency:
             rule_ids.append("R04")
             reasons.append(

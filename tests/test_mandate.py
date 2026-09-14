@@ -141,6 +141,16 @@ def test_transfer_within_mandate_is_allowed():
     assert decision.rule_ids == []
 
 
+def test_replayed_idempotency_key_is_refused_on_its_own():
+    history = [_executed_today("txn-0200-done", "1400")]
+    action = _executed_today("txn-0200-done", "1400")
+
+    decision = check(action, _mandate(), history)
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R10"]
+
+
 def test_requested_at_defaults_to_an_aware_utc_timestamp():
     before = datetime.now(timezone.utc)
     action = Action(type=ActionType.READ_BALANCE, idempotency_key="txn-0008-test")
