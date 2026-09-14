@@ -83,3 +83,31 @@ A test that has never failed proves nothing. Every change started with a red run
 ## What is next
 
 Kickoff is on Wednesday. Before then I want one real two step tool run on each provider with keys in .env, because every round trip so far used stand ins. After that come the first router and rail in lane B, saving and loading the ledger so X22 can be tested, and a harness that runs the task and attack suites as scenarios.
+
+# 15 September 2026
+
+## What I did
+
+I wrote the documentation. `docs/code-walkthrough.md` explains every file of code line by line, with a glossary of the Python it uses, a table of every test, and every command I use to build and check the repo. I brought `docs/technical-reference.md` up to date with the multi step tool loop, and I added last evening to the journal.
+
+I added China as the fourth corridor and recorded the decision in `docs/decisions.md`. The China corridor is led by knowledge, pre check, trace, and Protect. Lifeline moves no money in China and never advises any way around the quota, and if time runs short, India depth is the first corridor item I cut.
+
+I added three China tasks. T36 covers parents in China sending semester costs to Singapore, T37 warns before the overseas cash withdrawal cap on Chinese cards, and T38 sets up payments and a backup for a foreign student arriving in Shenzhen. T30 now follows a Chinese student in Singapore funded from China. I added X28, where the user asks to use an aunt's or friend's quota and the agent refuses, because splitting across people is structuring. The suites now hold 38 tasks and 28 attacks, and I updated the counts in both documents to match.
+
+I started the knowledge base in `rails/knowledge/`. The README sets the format and the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds eight sourced entries covering the annual quota, education remittances above the quota and their documents, the 2026 due diligence rules, the overseas cash withdrawal cap, wallet limits for foreign cards, and Wise into and out of China. A new test checks every entry for all its fields, an https source, and a check date no older than 30 days. The day ended at 82 tests, all passing, with CI green.
+
+## What I learned
+
+A fact without a source is a guess. When the agent can only say what exists as an entry, every number it gives can be traced back to a page someone checked.
+
+Two people check a fact before a demo. The first check catches typos, and the second catches the facts I wanted to be true.
+
+A fact goes stale. The 30 day test means an entry nobody has checked again breaks the build instead of quietly misleading a student.
+
+A press report is a lead, not a rule. The due diligence entry rests on press coverage, so it carries a note to confirm it against the PBOC text before anyone relies on it.
+
+Knowing when to refuse is part of the product. In China Lifeline explains, checks, and traces, but it moves no money, and the most useful answer to a quota workaround is a clear no with the documented route instead.
+
+## What is next
+
+Kickoff is tomorrow. Before then I need a second set of initials on all eight China entries and one real two step tool run on each provider. After kickoff, the knowledge base needs a recheck before 16 October, when the first entries turn 30 days old and the test starts to fail.
