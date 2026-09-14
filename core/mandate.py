@@ -2,7 +2,8 @@ from collections.abc import Sequence
 from datetime import date, timezone
 from decimal import Decimal
 
-from contracts.schemas import Action, ActionType, Decision, Mandate
+from contracts.schemas import Action, ActionType, Decision, Mandate, Tier
+from core.tiers import TIERS
 
 
 def _utc_date(action: Action) -> date:
@@ -25,8 +26,26 @@ def _spent_on(day: date, history: Sequence[Action]) -> Decimal:
 def check(
     action: Action, mandate: Mandate, history: Sequence[Action] = ()
 ) -> Decision:
+    tier = TIERS[action.type]
     reasons: list[str] = []
     rule_ids: list[str] = []
+
+    if tier is Tier.T3:
+        rule_ids.append("R02")
+        reasons.append(
+            f"Action {action.type.value} is tier T3 and a mandate cannot authorise it. "
+            "The user has to approve it directly."
+        )
+
+    if tier is not Tier.T0 and not (
+        mandate.valid_from <= action.requested_at <= mandate.valid_until
+    ):
+        rule_ids.append("R03")
+        reasons.append(
+            f"The mandate is valid from {mandate.valid_from} until "
+            f"{mandate.valid_until} and this action was requested at "
+            f"{action.requested_at}."
+        )
 
     if action.type is ActionType.TRANSFER:
         if any(past.idempotency_key == action.idempotency_key for past in history):
@@ -36,6 +55,7 @@ def check(
                     f"Idempotency key {action.idempotency_key} was already executed."
                 ],
                 rule_ids=["R10"],
+                tier=tier,
             )
 
         if action.currency != mandate.currency:
@@ -73,4 +93,6 @@ def check(
                     f"limit {mandate.daily_limit}."
                 )
 
-    return Decision(allowed=not rule_ids, reasons=reasons, rule_ids=rule_ids)
+    return Decision(
+        allowed=not rule_ids, reasons=reasons, rule_ids=rule_ids, tier=tier
+    )

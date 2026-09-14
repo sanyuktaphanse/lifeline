@@ -4,11 +4,13 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from contracts.schemas import Action, ActionType, Mandate
+from contracts.schemas import Action, ActionType, Mandate, Tier
 from core.mandate import check
+from core.tiers import TIERS
 
 
-def _mandate() -> Mandate:
+def _mandate(valid_from: datetime | None = None, valid_until: datetime | None = None) -> Mandate:
+    now = datetime.now(timezone.utc)
     return Mandate(
         user_id="student_001",
         currency="SGD",
@@ -17,7 +19,13 @@ def _mandate() -> Mandate:
         allowed_payees={"landlord_sp"},
         allowed_corridors={"SG>BR"},
         allowed_purposes={"rent"},
+        valid_from=valid_from or now - timedelta(days=30),
+        valid_until=valid_until or now + timedelta(days=30),
     )
+
+
+def _expired_mandate() -> Mandate:
+    return _mandate(valid_until=datetime.now(timezone.utc) - timedelta(days=1))
 
 
 def test_transfer_over_per_txn_limit_is_denied():
@@ -189,6 +197,40 @@ def test_check_accepts_prior_history_without_changing_the_verdict():
     )
 
     assert check(action, mandate, [earlier]) == check(action, mandate)
+
+
+def test_every_action_type_has_a_tier():
+    assert set(TIERS) == set(ActionType)
+
+
+def test_change_limit_is_refused_as_tier_three():
+    action = Action(type=ActionType.CHANGE_LIMIT, idempotency_key="txn-0300-test")
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R02"]
+    assert decision.tier is Tier.T3
+
+
+def test_read_balance_is_allowed_under_an_expired_mandate():
+    action = Action(type=ActionType.READ_BALANCE, idempotency_key="txn-0301-test")
+
+    decision = check(action, _expired_mandate())
+
+    assert decision.allowed is True
+    assert decision.rule_ids == []
+    assert decision.tier is Tier.T0
+
+
+def test_transfer_under_an_expired_mandate_is_refused():
+    action = _executed_today("txn-0302-test", "1200")
+
+    decision = check(action, _expired_mandate())
+
+    assert decision.allowed is False
+    assert "R03" in decision.rule_ids
+    assert decision.tier is Tier.T2
 
 
 def _executed_today(key: str, amount: str) -> Action:
