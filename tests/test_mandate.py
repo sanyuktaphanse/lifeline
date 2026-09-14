@@ -118,3 +118,20 @@ def test_transfer_in_wrong_currency_is_denied():
 
     assert decision.allowed is False
     assert "R04" in decision.rule_ids
+
+
+def test_transfer_within_mandate_is_allowed():
+    action = Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0006-test",
+        amount=Decimal("1200"),
+        currency="SGD",
+        corridor="SG>BR",
+        payee_id="landlord_sp",
+        purpose="rent",
+    )
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is True
+    assert decision.rule_ids == []
