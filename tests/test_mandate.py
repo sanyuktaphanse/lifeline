@@ -175,6 +175,35 @@ def test_requested_at_defaults_to_an_aware_utc_timestamp():
         )
 
 
+def _transfer_fields(**overrides) -> dict:
+    fields = {
+        "type": ActionType.TRANSFER,
+        "idempotency_key": "txn-0600-test",
+        "amount": Decimal("1200"),
+        "currency": "SGD",
+        "corridor": "SG>BR",
+        "payee_id": "landlord_sp",
+        "purpose": "rent",
+    }
+    fields.update(overrides)
+    return fields
+
+
+def test_negative_amount_is_rejected_by_the_schema():
+    with pytest.raises(ValidationError):
+        Action(**_transfer_fields(amount=Decimal("-5")))
+
+
+def test_corridor_written_as_prose_is_rejected_by_the_schema():
+    with pytest.raises(ValidationError):
+        Action(**_transfer_fields(corridor="Singapore to Brazil"))
+
+
+def test_short_idempotency_key_is_rejected_by_the_schema():
+    with pytest.raises(ValidationError):
+        Action(**_transfer_fields(idempotency_key="txn-1"))
+
+
 def test_check_accepts_prior_history_without_changing_the_verdict():
     mandate = _mandate()
     earlier = Action(
