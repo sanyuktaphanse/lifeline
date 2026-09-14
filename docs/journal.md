@@ -43,3 +43,43 @@ The engine is plain Python with no model calls, so the same action and the same 
 ## What is next
 
 Next I build the suites, the interfaces, and the model adapter, and kickoff is on Wednesday.
+
+# 14 September 2026, evening
+
+## What I did
+
+I wrote the two suites that define done for Lifeline. `suites/tasks.yaml` holds 35 tasks, T01 to T35, and each one says which lanes it needs, which tier it touches, and which languages it must work in. `suites/attacks.yaml` holds 27 attacks, X01 to X27, and each one says what a correct refusal looks like. A test checks that every id is unique and every field is present.
+
+I finished the contracts. `contracts/schemas.py` now has Route, Receipt, TraceResult, PrecheckResult, LedgerEntry, Message, StandingMandate, and ToolCall, and the new action types trace_transfer and precheck sit at tier T0. I moved the ledger onto the contract LedgerEntry so there is only one definition, and renamed its time field to ts.
+
+I froze the interfaces in `contracts/interfaces.py`: MandateEngine, Ledger, Anchor, Router, Rail, Council, ModelAdapter, and Translator. The mandate engine became the class DeterministicMandateEngine, and the old check function stayed as a thin wrapper so nothing that called it had to change. A test pins the exact members of every interface, so nobody can change one by accident.
+
+I built the model adapter. ProviderModelAdapter reads MODEL_PROVIDER and FALLBACK_MODEL_PROVIDER, calls Anthropic or DashScope, and switches once to the fallback when the primary has a connection error, an auth error, or no key. Every reply records the provider and the model that answered. FakeModelAdapter returns scripted replies so tests never touch the network.
+
+Then I made four decisions. I turned off Anthropic's internal refusal fallback so our own switch is the only one. I added tool calls to Message and a tool role that must carry source tool_result. I replaced error text matching with an explicit check that the API key is set. I capped DashScope replies at 2048 tokens.
+
+I made HashChainLedger implement the Ledger interface with head() and entries(), and then made entries() return deep copies so nobody can edit the chain through them. I added tool_call_id so a full multi step tool conversation can go to both providers and come back. I wrote `docs/technical-reference.md` to explain the design. The evening ended at 78 tests, all passing, with CI green on every push.
+
+## What I learned
+
+A suite is a promise. Writing each attack with the exact rule that must fire, like R11 for a replayed token, ties the red team list straight to the engine.
+
+A contract only holds if a test holds it still. The interface test fails the moment anyone adds or removes a method, and that is what lets lanes B and C build without waiting for me.
+
+Money is Decimal and time carries a time zone. A float cannot hold most decimal fractions exactly, and the daily limit needs a clear UTC day.
+
+A fallback belongs in one place. With one fallback inside the provider and another of ours, I could not say which model had answered. Now every reply says so, and the ledger can store it.
+
+Matching error text is fragile. A plain check that the key exists says what is wrong and how to fix it, and it does not break when an SDK changes its wording.
+
+Tool output is data. Because the tool role must carry source tool_result, a tool result can never pass as an instruction, and the mandate engine refuses anything that comes from one under R01.
+
+A model that thinks needs its own words back. When Claude continues a tool loop, its assistant turn has to go back exactly as it came, reasoning blocks included, so the adapter keeps the raw content in provider_content.
+
+New releases wait ten days. I pinned anthropic 1.3.0 and dashscope 1.27.3 instead of releases that were only a few days old.
+
+A test that has never failed proves nothing. Every change started with a red run.
+
+## What is next
+
+Kickoff is on Wednesday. Before then I want one real two step tool run on each provider with keys in .env, because every round trip so far used stand ins. After that come the first router and rail in lane B, saving and loading the ledger so X22 can be tested, and a harness that runs the task and attack suites as scenarios.
