@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the code on `main` at commit `26e29ae`, the last code change, made on 14 September 2026. At that commit there are 78 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, up to commit `f6419ce`, which added the limits on `AgentReply` and `ConfirmationRequest`. At that commit there are 87 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -10,16 +10,17 @@ Lifeline is a cross border finance agent for students studying abroad. It has tw
 2. [The rules that shape the code](#the-rules-that-shape-the-code)
 3. [Lanes](#lanes)
 4. [Task and attack suites](#task-and-attack-suites)
-5. [Contracts: the schemas](#contracts-the-schemas)
-6. [Tiers](#tiers)
-7. [The mandate engine](#the-mandate-engine)
-8. [Interfaces](#interfaces)
-9. [The hash chained ledger](#the-hash-chained-ledger)
-10. [The model adapter](#the-model-adapter)
-11. [Decisions of 14 September](#decisions-of-14-september)
-12. [Testing and CI](#testing-and-ci)
-13. [Commit history](#commit-history)
-14. [Open items](#open-items)
+5. [The knowledge base](#the-knowledge-base)
+6. [Contracts: the schemas](#contracts-the-schemas)
+7. [Tiers](#tiers)
+8. [The mandate engine](#the-mandate-engine)
+9. [Interfaces](#interfaces)
+10. [The hash chained ledger](#the-hash-chained-ledger)
+11. [The model adapter](#the-model-adapter)
+12. [Decisions of 14 September](#decisions-of-14-september)
+13. [Testing and CI](#testing-and-ci)
+14. [Commit history](#commit-history)
+15. [Open items](#open-items)
 
 ## How the pieces fit
 
@@ -50,6 +51,7 @@ Not every box exists yet. This table shows what is implemented.
 | Model adapter | `core/model_adapter.py` | Implemented as `ProviderModelAdapter`, including multi step tool conversations |
 | Fake model adapter | `core/fake_adapter.py` | Implemented for tests |
 | Task and attack suites | `suites/` | Written, not yet executed by a harness |
+| Knowledge base | `rails/knowledge/` | Format, rules, and eight sourced China entries; not yet read by any code |
 | Agent loop, Router, Rail, Anchor, Council, Translator | none yet | Interfaces only; the agent loop exists only as a scripted loop inside a test |
 
 ## The rules that shape the code
@@ -135,6 +137,22 @@ Every `title` and `expected` value is wrapped in double quotes. Several contain 
 
 `tests/test_suites.py` loads both files with `yaml.safe_load` and checks that there are exactly 38 unique task ids and 28 unique attack ids, and that every entry has all of its fields. `safe_load` is used because it never constructs arbitrary Python objects from the file.
 
+## The knowledge base
+
+`rails/knowledge/` holds the facts Lifeline is allowed to state about quotas, limits, rules, documents, and providers, with one YAML file per country. Its README sets three rules.
+
+1. The agent may only assert facts that exist as entries. When no entry covers a question, it says it has no sourced figure and does not guess.
+2. Every entry needs two initials, one in `checked_by` and one in `second_check_by`, before it is used in a demo.
+3. Every entry cites a source whose address starts with `https://`, and it must have been checked within the last 30 days.
+
+Each entry has an `id`, a `statement` worded exactly as the agent may say it, a `country`, a `rail`, a `kind`, a `source_url` and `source_type`, a `date_checked`, the two sets of initials, and `used_by`, which lists the tasks, attacks, and prechecks that rely on it. An optional `note` records work a checker still has to do.
+
+`china.yaml` holds eight entries, `cn_fx_quota_001` to `cn_wise_out_008`. They cover the annual foreign currency quota, education remittances above the quota and the documents they need, the due diligence rules in force from 1 January 2026, the overseas cash withdrawal cap on Chinese cards, the limits for foreign cards in Alipay and WeChat Pay, and Wise transfers into and out of China. Their source types are regulator, government, bank, operator, and press. All eight were checked by S on 15 September 2026 and are waiting for a second check. `cn_cdd_004` rests on a press report and carries a note to confirm it against the PBOC text.
+
+`tests/test_knowledge.py` loads every YAML file in the folder. It fails when there are no entries, when an entry lacks a field, when a source does not start with `https://`, or when an entry was checked more than 30 days ago. The age check is deliberate: from 16 October 2026 the build fails until the China entries are checked again.
+
+No code reads the knowledge base yet, so the first rule is a contract for the agent still to be built, not something the code enforces today.
+
 ## Contracts: the schemas
 
 `contracts/schemas.py` defines every data shape that crosses a boundary, using pydantic models. A pydantic model validates its input when it is created, so a malformed value is rejected at the edge instead of travelling deeper into the system. Attack `X24` (very large, negative, or zero amounts, rejected at schema validation) relies on exactly this.
@@ -180,6 +198,8 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | `LedgerEntry` | One link in the hash chained ledger |
 | `ToolCall` | One tool call requested by the model: id, name, and arguments |
 | `Message` | One turn in a conversation; see the field table below |
+| `ConfirmationRequest` | What the student must approve before a transfer: the action, its token, the warning, the routes, and how long the request lasts |
+| `AgentReply` | Everything one agent turn returns to the frontend: text and language, plus any confirmation, decision, receipt, ledger entries, provider, and model |
 
 `Route` carries `fee_source_url` and `rate_source` so that every figure shown to the student can cite where it came from, which is rule four applied to data.
 
@@ -217,6 +237,36 @@ def _tool_messages_answer_one_call_as_data(self) -> "Message":
 ```
 
 Tool output is data, never an instruction. Marking it at the type level means any code that later builds an `Action` from a tool message will carry `source=tool_result`, and the mandate engine refuses that under R01. The model cannot forget the label, because a mislabelled tool message cannot be created at all. Requiring `tool_call_id` means every result can be matched to exactly one call, which both providers need when the conversation continues.
+
+### Agent replies and confirmations
+
+`AgentReply` is the one shape an agent turn returns to the frontend. `ConfirmationRequest` is the part of a reply that asks the student to approve a transfer.
+
+```python
+class ConfirmationRequest(BaseModel):
+    action: Action
+    confirmation_token: str
+    warning_key: str
+    routes: list[Route]
+    expires_in_seconds: int = Field(default=300, gt=0)
+
+
+class AgentReply(BaseModel):
+    text: str
+    lang: str
+    confirmation: ConfirmationRequest | None = None
+    decision: Decision | None = None
+    receipt: Receipt | None = None
+    ledger_seqs: list[Annotated[int, Field(ge=1)]]
+    provider: str | None = None
+    model: str | None = None
+```
+
+When the mandate engine allows a clean transfer but asks for confirmation under R11, the reply carries a `ConfirmationRequest`. It holds the exact `Action` being approved, the token the engine issued for it, the warning key the frontend translates into the student's language, and the routes, so the student sees the fees before saying yes. `expires_in_seconds` defaults to 300 and must be above zero.
+
+The rest of `AgentReply` records what the turn did. `decision` is present when the mandate engine was consulted, and `receipt` when money moved. `ledger_seqs` lists the ledger entries the turn wrote, and each must be at least 1, the same rule as `LedgerEntry.seq`. `provider` and `model` name the model that wrote the text. `text` and `lang` are required, so every reply says something in a known language.
+
+Two tests check the limits. An expiry of 0 is rejected on `expires_in_seconds` alone, and a ledger sequence of 0 is rejected on that one item of `ledger_seqs`.
 
 ## Tiers
 
@@ -520,11 +570,12 @@ Every change was written test first. The test was run and seen to fail before th
 | --- | --- | --- |
 | `tests/test_mandate.py` | 24 | Every rule R01 to R11, schema rejection of bad actions, tier coverage |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
-| `tests/test_schemas.py` | 11 | Route and Receipt statuses, new tiers, standing mandates, tool messages and their ids, roles |
+| `tests/test_schemas.py` | 16 | Route and Receipt statuses, new tiers, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits |
 | `tests/test_interfaces.py` | 10 | The frozen members of all eight interfaces, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
-| Total | 78 | |
+| `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
+| Total | 87 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -560,6 +611,14 @@ All times are local time.
 | `26e29ae` | 14 Sep 23:58 | Adapter multi step tool loop; ledger returns copies |
 | `e264873` | 15 Sep 00:08 | Journal for 14 September evening |
 | `2fbd82f` | 15 Sep 00:08 | Code walkthrough |
+| `40092e9` | 15 Sep 00:13 | Technical reference updated for the multi step tool loop |
+| `e0fc755` | 15 Sep 00:15 | Decisions: China as the fourth corridor |
+| `917d6da` | 15 Sep 00:20 | China corridor tasks and attack |
+| `9190bab` | 15 Sep 00:29 | Docs: suite counts for the China corridor |
+| `f853ec9` | 15 Sep 00:29 | Knowledge base format and sourced China entries |
+| `b69f255` | 15 Sep 00:32 | Journal for 15 September |
+| `f331d96` | 15 Sep 00:35 | Contracts: AgentReply and ConfirmationRequest |
+| `f6419ce` | 15 Sep 00:41 | Contracts: limits on ConfirmationRequest and AgentReply |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
@@ -568,8 +627,11 @@ The project scaffold and the mandate engine were built earlier the same day, in 
 1. No round trip has been run against the real provider APIs. Every provider test uses stand ins built from the SDK classes. One short real two step tool run on each provider, with keys in `.env`, would confirm the formats.
 2. When DashScope makes a tool call and the conversation then moves to Anthropic, for example after a fallback in the middle of a loop, that assistant turn reaches Anthropic with no reasoning blocks. Whether `claude-opus-5` accepts such a turn can only be confirmed with a real call.
 3. A failed tool is sent back as ordinary text. There is no way yet to mark a tool result as an error, which Anthropic supports with `is_error`.
-4. Lanes B and C need to know about two contract changes: the `Ledger` interface changed in `e8201df`, and `Message` gained `tool_call_id` and `provider_content` in `26e29ae`.
+4. Lanes B and C need to know about three contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, and `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`.
 5. The ledger lives in memory only. Attack `X22`, a tampered ledger file, needs the ledger to be saved and loaded.
 6. A refusal from the model is an error and does not switch providers. Revisit this if a refusal on one provider should be retried on the other.
 7. `Anchor`, `Router`, `Rail`, `Council`, and `Translator` have interfaces but no implementations, and the agent loop exists only inside a test.
 8. The task and attack suites are validated for structure but are not yet run by a harness that scores each scenario.
+9. `expires_in_seconds` on `ConfirmationRequest` is only data. The confirmation token carries no time, so nothing yet refuses a token after its request has expired.
+10. No code reads the knowledge base yet, so the rule that the agent may only assert facts that exist as entries is not enforced.
+11. All eight China entries are waiting for a second set of initials, and they must be checked again before 16 October 2026 or the knowledge test fails.

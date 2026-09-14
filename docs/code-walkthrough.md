@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository at commit `26e29ae`, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 15 September 2026, up to commit `f6419ce`, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -16,8 +16,9 @@ Every Python excerpt below is copied exactly from the file it names. Read the fi
 8. The model adapter, `core/model_adapter.py`
 9. The tests
 10. The suites
-11. Configuration files
-12. Commands used to build and check the repo
+11. The knowledge base, `rails/knowledge/`
+12. Configuration files
+13. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -29,13 +30,13 @@ A type hint says what kind of value a name holds, such as `amount: Decimal`. Pyt
 
 ### Annotated
 
-`Annotated[str, Field(pattern=...)]` attaches extra rules to a type. The type stays `str`, and pydantic reads the attached `Field` to add a check. `CurrencyCode = Annotated[...]` gives that combination a name so it can be reused.
+`Annotated[str, Field(pattern=...)]` attaches extra rules to a type. The type stays `str`, and pydantic reads the attached `Field` to add a check. `CurrencyCode = Annotated[...]` gives that combination a name so it can be reused. An `Annotated` type can also sit inside a list, as in `list[Annotated[int, Field(ge=1)]]`, which puts the rule on every item of the list.
 
 ### pydantic BaseModel
 
 A class that inherits from `pydantic.BaseModel` becomes a data model. Each annotated class attribute becomes a field. Creating an object such as `Route(rail="wise", ...)` checks every field against its type and rules, converts compatible input (the text `"1200"` becomes `Decimal("1200")`, the text `"up"` becomes `RouteStatus.UP`), and raises `ValidationError` for anything that does not fit.
 
-1. `Field(gt=0)`, `Field(ge=0)`, `Field(le=100)`, `Field(min_length=8)`, and `Field(pattern=...)` add limits: greater than, greater or equal, less or equal, minimum length, and a regular expression.
+1. `Field(gt=0)`, `Field(ge=0)`, `Field(le=100)`, `Field(min_length=8)`, and `Field(pattern=...)` add limits: greater than, greater or equal, less or equal, minimum length, and a regular expression. `Field(default=300, gt=0)` sets a default and a limit at the same time.
 2. `Field(default_factory=list)` gives each new object its own fresh empty list. A plain `= []` default is avoided because Python would share one list between objects in ordinary classes, and a factory makes the intent explicit.
 3. `AwareDatetime` accepts only datetimes that carry a time zone.
 4. `@model_validator(mode="after")` runs a method after every field has been validated, so it can check rules that involve more than one field.
@@ -336,6 +337,30 @@ A `ToolCall` is one request from the model to run a tool, with an id, the tool n
 4. `provider_content` keeps the provider's raw reply blocks so they can be sent back exactly as received.
 
 The validator runs after all fields are set. A tool message must be marked as a tool result, because tool output is data, and it must name the call it answers. Raising `ValueError` inside a validator makes pydantic turn it into a `ValidationError`. The return type is written as the string `"Message"` because the class is not fully defined yet at that point in the file.
+
+```python
+class ConfirmationRequest(BaseModel):
+    action: Action
+    confirmation_token: str
+    warning_key: str
+    routes: list[Route]
+    expires_in_seconds: int = Field(default=300, gt=0)
+
+
+class AgentReply(BaseModel):
+    text: str
+    lang: str
+    confirmation: ConfirmationRequest | None = None
+    decision: Decision | None = None
+    receipt: Receipt | None = None
+    ledger_seqs: list[Annotated[int, Field(ge=1)]]
+    provider: str | None = None
+    model: str | None = None
+```
+
+`ConfirmationRequest` is what the student sees before a transfer goes ahead: the `Action` being approved, the token the mandate engine issued for it, the warning key, and the routes with their fees. `Field(default=300, gt=0)` gives `expires_in_seconds` a default of 300 and rejects zero or any negative number.
+
+`AgentReply` is everything one agent turn sends to the frontend. Its optional parts default to `None`, so a simple answer needs only `text`, `lang`, and `ledger_seqs`. `list[Annotated[int, Field(ge=1)]]` applies the limit to each item, so `[1, 0]` fails on the second item alone, and `ledger_seqs` follows the same rule as `LedgerEntry.seq`, which also starts at 1. Both classes come after `Message` because every model they refer to is defined above them.
 
 ## The tier table, `core/tiers.py`
 
@@ -1122,7 +1147,7 @@ The constructor loads `.env` only when no environment is passed in, which is how
 
 ## The tests
 
-There are 78 tests. Each was written before the code it checks and was seen to fail first.
+There are 87 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -1248,6 +1273,11 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_schemas.py` | `test_tool_message_without_tool_call_id_is_rejected` | A tool message must name the call it answers |
 | `test_schemas.py` | `test_message_rejects_an_unknown_role` | Only the four roles are allowed |
 | `test_schemas.py` | `test_assistant_message_carries_tool_calls` | Tool calls are parsed into `ToolCall` objects |
+| `test_schemas.py` | `test_confirmation_request_validates_with_a_default_expiry` | A confirmation validates and expires after 300 seconds by default |
+| `test_schemas.py` | `test_agent_reply_validates_with_every_part` | A reply with a confirmation, decision, receipt, ledger entries, provider, and model validates |
+| `test_schemas.py` | `test_agent_reply_validates_with_only_the_required_parts` | A reply needs only text, language, and ledger entries |
+| `test_schemas.py` | `test_confirmation_request_rejects_an_expiry_that_is_not_positive` | An expiry of zero fails on `expires_in_seconds` only |
+| `test_schemas.py` | `test_agent_reply_rejects_a_ledger_seq_below_one` | A ledger sequence of 0 fails on that item only |
 | `test_interfaces.py` | `test_interface_declares_exactly_its_frozen_members` | Runs for all eight interfaces; none can change silently |
 | `test_interfaces.py` | `test_deterministic_engine_implements_the_mandate_engine` | The engine is a complete `MandateEngine` |
 | `test_interfaces.py` | `test_engine_and_check_wrapper_give_the_same_decision` | The class and the wrapper agree, token included |
@@ -1283,8 +1313,12 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_suites.py` | `test_every_task_has_all_five_fields` | Every task has all five fields |
 | `test_suites.py` | `test_attack_suite_has_28_unique_ids` | Attacks have 28 distinct ids |
 | `test_suites.py` | `test_every_attack_has_all_three_fields` | Every attack has all three fields |
+| `test_knowledge.py` | `test_knowledge_base_has_entries` | The folder is not empty, so the other checks cannot pass on nothing |
+| `test_knowledge.py` | `test_every_entry_has_all_fields` | Every entry has all eleven fields |
+| `test_knowledge.py` | `test_every_source_url_uses_https` | Every source address starts with `https://` |
+| `test_knowledge.py` | `test_no_entry_is_older_than_30_days` | Every entry was checked in the last 30 days |
 
-The two parametrized tests add eight extra runs, which is how 70 test functions become 78 tests.
+The two parametrized tests add eight extra runs, which is how 79 test functions become 87 tests.
 
 ## The suites
 
@@ -1312,7 +1346,55 @@ def load(path):
         return yaml.safe_load(handle)
 ```
 
-`with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, and numbers, and never creates arbitrary Python objects from the file.
+`with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, numbers, and dates, and never creates arbitrary Python objects from the file.
+
+## The knowledge base, `rails/knowledge/`
+
+`rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds the first eight entries. This is one of them:
+
+```yaml
+- id: cn_fx_quota_001
+  statement: "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting."
+  country: CN
+  rail: bank_fx
+  kind: quota
+  source_url: "https://www.webull.com/news/13974173100655616"
+  source_type: press
+  date_checked: 2026-09-15
+  checked_by: "S"
+  second_check_by: ""
+  used_by: [T36, X28]
+```
+
+`statement` is worded exactly as the agent may say it. `country`, `rail`, and `kind` sort the fact by place, channel, and type. `source_url` and `source_type` say where the fact comes from and what kind of source that is. `date_checked` is unquoted, so YAML reads it as a date rather than as text. `checked_by` holds the initials of the first checker, and `second_check_by` is empty until a second person checks the entry, which means this entry may not appear in a demo yet. `used_by` is a list that ties the fact to the tasks and attacks that depend on it, so when a source changes it is clear which scenarios must be checked again. One entry, `cn_cdd_004`, also has a `note` recording that it still has to be confirmed against the PBOC text.
+
+`tests/test_knowledge.py` reads every file in the folder with this helper:
+
+```python
+def load_entries() -> list[tuple[str, dict]]:
+    entries = []
+    for path in sorted(KNOWLEDGE_DIR.glob("*.yaml")):
+        with path.open(encoding="utf-8") as handle:
+            for entry in yaml.safe_load(handle) or []:
+                entries.append((path.name, entry))
+    return entries
+```
+
+`glob("*.yaml")` finds every file whose name ends in `.yaml`, and `sorted` fixes their order so failures always appear in the same sequence. `yaml.safe_load` returns `None` for an empty file, so `or []` turns that into an empty list. Each entry is kept together with its file name, so a failure can say exactly which file and entry is wrong. The return type `list[tuple[str, dict]]` means a list of pairs, each holding a file name and an entry.
+
+The test that keeps facts fresh reads:
+
+```python
+def test_no_entry_is_older_than_30_days():
+    today = date.today()
+    for file_name, entry in load_entries():
+        checked = date.fromisoformat(str(entry["date_checked"]))
+        assert today - checked <= MAX_AGE, (
+            f"{file_name} {entry['id']} was last checked on {checked}"
+        )
+```
+
+YAML turns an unquoted `2026-09-15` into a `date` object, but a quoted one stays text. `str()` followed by `date.fromisoformat` accepts both, so the test does not depend on how the date was written. Subtracting one date from another gives a `timedelta`, which is compared with `MAX_AGE`, a `timedelta` of 30 days. The text after the comma in an `assert` is the message pytest shows when the check fails. A separate test, `test_knowledge_base_has_entries`, runs `assert load_entries()`; an empty list counts as false, so the other three tests cannot pass on an empty folder.
 
 ## Configuration files
 
