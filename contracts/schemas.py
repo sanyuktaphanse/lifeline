@@ -1,8 +1,9 @@
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
@@ -18,6 +19,9 @@ class ActionType(str, Enum):
 class Action(BaseModel):
     type: ActionType
     idempotency_key: str = Field(min_length=8)
+    requested_at: AwareDatetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     amount: PositiveAmount | None = None
     currency: CurrencyCode | None = None
     corridor: Corridor | None = None

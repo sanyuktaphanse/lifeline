@@ -1,7 +1,30 @@
+from collections.abc import Sequence
+from datetime import date, timezone
+from decimal import Decimal
+
 from contracts.schemas import Action, ActionType, Decision, Mandate
 
 
-def check(action: Action, mandate: Mandate) -> Decision:
+def _utc_date(action: Action) -> date:
+    return action.requested_at.astimezone(timezone.utc).date()
+
+
+def _spent_on(day: date, history: Sequence[Action]) -> Decimal:
+    return sum(
+        (
+            past.amount
+            for past in history
+            if past.type is ActionType.TRANSFER
+            and past.amount is not None
+            and _utc_date(past) == day
+        ),
+        Decimal(0),
+    )
+
+
+def check(
+    action: Action, mandate: Mandate, history: Sequence[Action] = ()
+) -> Decision:
     reasons: list[str] = []
     rule_ids: list[str] = []
 
@@ -31,5 +54,14 @@ def check(action: Action, mandate: Mandate) -> Decision:
                 f"Amount {action.amount} is above the per transaction limit "
                 f"{mandate.per_txn_limit}."
             )
+
+        if action.amount is not None:
+            running_total = _spent_on(_utc_date(action), history) + action.amount
+            if running_total > mandate.daily_limit:
+                rule_ids.append("R09")
+                reasons.append(
+                    f"Running total {running_total} for today is above the daily "
+                    f"limit {mandate.daily_limit}."
+                )
 
     return Decision(allowed=not rule_ids, reasons=reasons, rule_ids=rule_ids)
