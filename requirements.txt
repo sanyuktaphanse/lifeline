@@ -1,3 +1,7 @@
 pydantic
 pytest
 pyyaml
+# Pinned to releases older than the 10 day freshness window as of 14 September 2026.
+anthropic==1.3.0
+dashscope==1.27.3
+python-dotenv==1.2.3
