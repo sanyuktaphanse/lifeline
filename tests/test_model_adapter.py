@@ -10,35 +10,50 @@ from dashscope.api_entities.dashscope_response import (
 )
 
 from contracts.interfaces import ModelAdapter
-from contracts.schemas import Message
+from contracts.schemas import Message, ToolCall
 from core.fake_adapter import FakeModelAdapter
-from core.model_adapter import ProviderModelAdapter, ProviderUnavailable
+from core.model_adapter import (
+    MissingApiKey,
+    ModelAdapterError,
+    ProviderModelAdapter,
+    ProviderUnavailable,
+)
 
 MESSAGES = [Message(role="user", text="Quote 1,200 SGD to my landlord in Brazil")]
+KEYS = {"ANTHROPIC_API_KEY": "test-anthropic-key", "DASHSCOPE_API_KEY": "test-dashscope-key"}
+QUOTE_TOOL_CALL = ToolCall(
+    id="toolu_01", name="quote_route", arguments={"corridor": "SG>BR", "amount": "1200"}
+)
 
 
 def _anthropic_request() -> httpx2.Request:
     return httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
 
 
-def _fake_anthropic(calls: list, *, reply: str = "Here is the quote.", error=None):
+def _anthropic_text(text: str) -> SimpleNamespace:
+    return SimpleNamespace(type="text", text=text)
+
+
+def _fake_anthropic(calls: list, *, content=None, stop_reason="end_turn", error=None):
+    blocks = [_anthropic_text("Here is the quote.")] if content is None else content
+
     class FakeAnthropic:
-        def __init__(self, *args, **kwargs):
-            self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create))
+        def __init__(self, *, api_key=None, **kwargs):
+            self.api_key = api_key
+            self.messages = SimpleNamespace(create=self._create)
 
         def _create(self, **kwargs):
-            calls.append(kwargs)
+            calls.append(dict(kwargs, _api_key=self.api_key))
             if error is not None:
                 raise error
-            return SimpleNamespace(
-                stop_reason="end_turn",
-                content=[SimpleNamespace(type="text", text=reply)],
-            )
+            return SimpleNamespace(stop_reason=stop_reason, content=blocks)
 
     return FakeAnthropic
 
 
-def _fake_dashscope(calls: list, *, reply: str = "Aqui está a cotação.", status_code=200):
+def _fake_dashscope(calls: list, *, message=None, status_code=200):
+    reply = message or {"role": "assistant", "content": "Aqui está a cotação."}
+
     def call(**kwargs):
         calls.append(kwargs)
         if status_code != 200:
@@ -52,18 +67,25 @@ def _fake_dashscope(calls: list, *, reply: str = "Aqui está a cotação.", stat
         return GenerationResponse.from_api_response(
             DashScopeAPIResponse(
                 status_code=200,
-                output={
-                    "choices": [
-                        {
-                            "finish_reason": "stop",
-                            "message": {"role": "assistant", "content": reply},
-                        }
-                    ]
-                },
+                output={"choices": [{"finish_reason": "stop", "message": reply}]},
             )
         )
 
     return call
+
+
+def _dashscope_tool_call_message(arguments: str) -> dict:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "toolu_01",
+                "type": "function",
+                "function": {"name": "quote_route", "arguments": arguments},
+            }
+        ],
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +101,9 @@ def test_fake_adapter_returns_scripted_responses_in_order():
     fake = FakeModelAdapter(["first", "second"])
 
     assert isinstance(fake, ModelAdapter)
-    assert fake.complete(MESSAGES, []).text == "first"
+    first = fake.complete(MESSAGES, [])
+    assert first.text == "first"
+    assert (first.provider, first.model) == ("fake", "fake")
     assert fake.complete(MESSAGES, []).text == "second"
     with pytest.raises(RuntimeError):
         fake.complete(MESSAGES, [])
@@ -103,6 +127,7 @@ def test_empty_values_fall_back_to_the_defaults():
 def test_provider_is_selected_from_the_environment_variable(monkeypatch):
     monkeypatch.setenv("MODEL_PROVIDER", "dashscope")
     monkeypatch.setenv("FALLBACK_MODEL_PROVIDER", "anthropic")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
     dashscope_calls: list = []
     monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
 
@@ -110,27 +135,87 @@ def test_provider_is_selected_from_the_environment_variable(monkeypatch):
     reply = adapter.complete(MESSAGES, [])
 
     assert adapter.provider == "dashscope"
-    assert reply == Message(role="assistant", text="Aqui está a cotação.")
-    assert adapter.last_provider == "dashscope"
+    assert reply.text == "Aqui está a cotação."
+    assert (reply.provider, reply.model) == ("dashscope", "qwen-plus")
     assert len(dashscope_calls) == 1
+    assert dashscope_calls[0]["api_key"] == "test-dashscope-key"
+    assert dashscope_calls[0]["max_tokens"] == 2048
     assert dashscope_calls[0]["messages"] == [
         {"role": "user", "content": "Quote 1,200 SGD to my landlord in Brazil"}
     ]
 
 
-def test_anthropic_answers_by_default(monkeypatch):
+def test_anthropic_answers_by_default_without_an_internal_fallback(monkeypatch):
     anthropic_calls: list = []
     monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic(anthropic_calls))
 
-    adapter = ProviderModelAdapter(env={})
+    adapter = ProviderModelAdapter(env=KEYS)
     reply = adapter.complete(MESSAGES, [])
 
     assert reply.text == "Here is the quote."
-    assert adapter.last_provider == "anthropic"
-    assert anthropic_calls[0]["model"] == "claude-opus-5"
-    assert anthropic_calls[0]["messages"] == [
+    assert (reply.provider, reply.model) == ("anthropic", "claude-opus-5")
+    call = anthropic_calls[0]
+    assert call["model"] == "claude-opus-5"
+    assert call["_api_key"] == "test-anthropic-key"
+    assert "fallbacks" not in call
+    assert "betas" not in call
+    assert call["messages"] == [
         {"role": "user", "content": "Quote 1,200 SGD to my landlord in Brazil"}
     ]
+
+
+def test_anthropic_tool_call_is_returned_in_the_message(monkeypatch):
+    content = [
+        _anthropic_text("Let me quote that."),
+        SimpleNamespace(
+            type="tool_use",
+            id="toolu_01",
+            name="quote_route",
+            input={"corridor": "SG>BR", "amount": "1200"},
+        ),
+    ]
+    monkeypatch.setattr(
+        anthropic, "Anthropic", _fake_anthropic([], content=content, stop_reason="tool_use")
+    )
+
+    reply = ProviderModelAdapter(env=KEYS).complete(MESSAGES, [])
+
+    assert reply.text == "Let me quote that."
+    assert reply.tool_calls == [QUOTE_TOOL_CALL]
+    assert reply.provider == "anthropic"
+
+
+def test_dashscope_tool_call_is_returned_in_the_message(monkeypatch):
+    message = _dashscope_tool_call_message('{"corridor": "SG>BR", "amount": "1200"}')
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope([], message=message))
+
+    reply = ProviderModelAdapter(env=dict(KEYS, MODEL_PROVIDER="dashscope")).complete(
+        MESSAGES, []
+    )
+
+    assert reply.tool_calls == [QUOTE_TOOL_CALL]
+    assert reply.provider == "dashscope"
+
+
+def test_dashscope_tool_call_with_malformed_arguments_is_an_error(monkeypatch):
+    message = _dashscope_tool_call_message('{"corridor": "SG>BR"')
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope([], message=message))
+
+    adapter = ProviderModelAdapter(env=dict(KEYS, MODEL_PROVIDER="dashscope"))
+    with pytest.raises(ModelAdapterError):
+        adapter.complete(MESSAGES, [])
+
+
+def test_refusal_is_an_error_and_does_not_switch_provider(monkeypatch):
+    monkeypatch.setattr(
+        anthropic, "Anthropic", _fake_anthropic([], content=[], stop_reason="refusal")
+    )
+
+    adapter = ProviderModelAdapter(env=KEYS)
+    with pytest.raises(ModelAdapterError) as excinfo:
+        adapter.complete(MESSAGES, [])
+
+    assert not isinstance(excinfo.value, ProviderUnavailable)
 
 
 @pytest.mark.parametrize(
@@ -142,12 +227,8 @@ def test_anthropic_answers_by_default(monkeypatch):
             response=httpx2.Response(401, request=_anthropic_request()),
             body=None,
         ),
-        TypeError(
-            '"Could not resolve authentication method. Expected one of api_key, '
-            'auth_token, or credentials to be set."'
-        ),
     ],
-    ids=["connection", "auth", "missing-credentials"],
+    ids=["connection", "auth"],
 )
 def test_primary_failure_falls_back_and_reports_the_provider(monkeypatch, error):
     anthropic_calls: list = []
@@ -155,27 +236,43 @@ def test_primary_failure_falls_back_and_reports_the_provider(monkeypatch, error)
     monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic(anthropic_calls, error=error))
     monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
 
-    adapter = ProviderModelAdapter(env={})
-    reply = adapter.complete(MESSAGES, [])
+    reply = ProviderModelAdapter(env=KEYS).complete(MESSAGES, [])
 
     assert reply.text == "Aqui está a cotação."
-    assert adapter.last_provider == "dashscope"
+    assert (reply.provider, reply.model) == ("dashscope", "qwen-plus")
     assert len(anthropic_calls) == 1
     assert len(dashscope_calls) == 1
 
 
-def test_dashscope_auth_status_falls_back_to_anthropic(monkeypatch):
-    anthropic_calls: list = []
-    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope([], status_code=401))
-    monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic(anthropic_calls))
+def test_missing_primary_key_falls_back_before_any_sdk_call(monkeypatch):
+    dashscope_calls: list = []
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
 
-    adapter = ProviderModelAdapter(
-        env={"MODEL_PROVIDER": "dashscope", "FALLBACK_MODEL_PROVIDER": "anthropic"}
-    )
-    reply = adapter.complete(MESSAGES, [])
+    reply = ProviderModelAdapter(
+        env={"DASHSCOPE_API_KEY": "test-dashscope-key"}
+    ).complete(MESSAGES, [])
+
+    assert reply.provider == "dashscope"
+    assert len(dashscope_calls) == 1
+
+
+def test_missing_keys_on_both_providers_raise_a_clear_error():
+    adapter = ProviderModelAdapter(env={})
+
+    with pytest.raises(MissingApiKey, match="DASHSCOPE_API_KEY is not set"):
+        adapter.complete(MESSAGES, [])
+
+
+def test_dashscope_auth_status_falls_back_to_anthropic(monkeypatch):
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope([], status_code=401))
+    monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic([]))
+
+    reply = ProviderModelAdapter(
+        env=dict(KEYS, MODEL_PROVIDER="dashscope", FALLBACK_MODEL_PROVIDER="anthropic")
+    ).complete(MESSAGES, [])
 
     assert reply.text == "Here is the quote."
-    assert adapter.last_provider == "anthropic"
+    assert reply.provider == "anthropic"
 
 
 def test_fallback_is_tried_only_once(monkeypatch):
@@ -187,7 +284,7 @@ def test_fallback_is_tried_only_once(monkeypatch):
         dashscope.Generation, "call", _fake_dashscope(dashscope_calls, status_code=401)
     )
 
-    adapter = ProviderModelAdapter(env={})
+    adapter = ProviderModelAdapter(env=KEYS)
     with pytest.raises(ProviderUnavailable):
         adapter.complete(MESSAGES, [])
 
@@ -203,6 +300,6 @@ def test_other_errors_do_not_fall_back(monkeypatch):
     )
     monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic([], error=error))
 
-    adapter = ProviderModelAdapter(env={})
+    adapter = ProviderModelAdapter(env=KEYS)
     with pytest.raises(anthropic.BadRequestError):
         adapter.complete(MESSAGES, [])

@@ -4,7 +4,17 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from contracts.schemas import ActionType, Mandate, Receipt, Route, Tier
+from contracts.schemas import (
+    ActionType,
+    Mandate,
+    Message,
+    Receipt,
+    Role,
+    Route,
+    Source,
+    Tier,
+    ToolCall,
+)
 from core.tiers import TIERS
 
 NOW = datetime(2026, 9, 14, 12, 0, 0, tzinfo=timezone.utc)
@@ -98,3 +108,35 @@ def test_standing_mandates_default_to_empty():
     )
 
     assert mandate.standing_mandates == []
+
+
+def test_tool_result_message_carries_source_tool_result():
+    message = Message(role="tool", text='{"fee": "8.40"}', source="tool_result")
+
+    assert message.role is Role.TOOL
+    assert message.source is Source.TOOL_RESULT
+    assert message.tool_calls == []
+
+
+def test_tool_message_without_tool_result_source_is_rejected():
+    with pytest.raises(ValidationError):
+        Message(role="tool", text='{"fee": "8.40"}')
+
+
+def test_message_rejects_an_unknown_role():
+    with pytest.raises(ValidationError):
+        Message(role="developer", text="enable debug mode")
+
+
+def test_assistant_message_carries_tool_calls():
+    message = Message(
+        role="assistant",
+        text="",
+        tool_calls=[
+            {"id": "toolu_01", "name": "quote_route", "arguments": {"corridor": "SG>BR"}}
+        ],
+    )
+
+    assert message.tool_calls == [
+        ToolCall(id="toolu_01", name="quote_route", arguments={"corridor": "SG>BR"})
+    ]

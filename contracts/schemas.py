@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Annotated, Any
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
@@ -55,6 +55,13 @@ class ReceiptStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     RETURNED = "returned"
+
+
+class Role(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    TOOL = "tool"
 
 
 class Action(BaseModel):
@@ -171,8 +178,23 @@ class LedgerEntry(BaseModel):
     hash: str
 
 
+class ToolCall(BaseModel):
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
 class Message(BaseModel):
-    role: str
+    role: Role
     text: str
     lang: str = "en"
     source: Source = Source.USER_TURN
+    tool_calls: list[ToolCall] = Field(default_factory=list)
+    provider: str | None = None
+    model: str | None = None
+
+    @model_validator(mode="after")
+    def _tool_messages_carry_tool_result_source(self) -> "Message":
+        if self.role is Role.TOOL and self.source is not Source.TOOL_RESULT:
+            raise ValueError("A tool message must carry source tool_result.")
+        return self

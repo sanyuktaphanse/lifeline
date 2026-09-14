@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from contracts.interfaces import ModelAdapter
-from contracts.schemas import Message
+from contracts.schemas import Message, Role
 
 
 class FakeModelAdapter(ModelAdapter):
@@ -19,4 +19,4 @@ class FakeModelAdapter(ModelAdapter):
         response = self._responses.pop(0)
         if isinstance(response, Message):
             return response
-        return Message(role="assistant", text=response)
+        return Message(role=Role.ASSISTANT, text=response, provider="fake", model="fake")
