@@ -1,13 +1,15 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import AwareDatetime, BaseModel, Field
 
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]
+NonNegativeAmount = Annotated[Decimal, Field(ge=0)]
+Hours = Annotated[float, Field(ge=0)]
 
 
 class Source(str, Enum):
@@ -34,6 +36,25 @@ class ActionType(str, Enum):
     CHANGE_LIMIT = "change_limit"
     CHANGE_MANDATE = "change_mandate"
     EXPORT_CREDENTIALS = "export_credentials"
+    TRACE_TRANSFER = "trace_transfer"
+    PRECHECK = "precheck"
+
+
+class RouteStatus(str, Enum):
+    UP = "up"
+    DEGRADED = "degraded"
+    DOWN = "down"
+    SIMULATED = "simulated"
+
+
+class ReceiptStatus(str, Enum):
+    CREATED = "created"
+    FUNDED = "funded"
+    IN_TRANSIT = "in_transit"
+    HELD_FOR_REVIEW = "held_for_review"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    RETURNED = "returned"
 
 
 class Action(BaseModel):
@@ -51,6 +72,21 @@ class Action(BaseModel):
     confirmation_token: str | None = None
 
 
+class StandingMandate(BaseModel):
+    id: str
+    payee_id: str
+    amount: PositiveAmount
+    tolerance_pct: Annotated[Decimal, Field(ge=0, le=100)]
+    schedule: str
+    corridor: Corridor
+    purpose: str
+    notice_hours: int = Field(ge=0)
+    cancel_window_hours: int = Field(ge=0)
+    confirmed_at: AwareDatetime
+    confirmation_token: str
+    active: bool
+
+
 class Mandate(BaseModel):
     user_id: str
     currency: CurrencyCode
@@ -61,6 +97,7 @@ class Mandate(BaseModel):
     allowed_purposes: set[str]
     valid_from: AwareDatetime
     valid_until: AwareDatetime
+    standing_mandates: list[StandingMandate] = Field(default_factory=list)
 
 
 class Decision(BaseModel):
@@ -71,3 +108,71 @@ class Decision(BaseModel):
     requires_confirmation: bool = False
     warning_key: str | None = None
     confirmation_token: str | None = None
+
+
+class Route(BaseModel):
+    rail: str
+    corridor: Corridor
+    amount: PositiveAmount
+    currency_from: CurrencyCode
+    currency_to: CurrencyCode
+    fee: NonNegativeAmount
+    spread_cost: NonNegativeAmount
+    tax_lines: list[dict[str, Any]]
+    arrival_hours: Hours
+    status: RouteStatus
+    simulated: bool
+    limit_ok: bool
+    blocked_reason: str | None = None
+    rule_id: str | None = None
+    fee_source_url: str | None = None
+    rate_source: str | None = None
+    quoted_at: AwareDatetime
+
+
+class Receipt(BaseModel):
+    receipt_id: str
+    rail: str
+    amount: PositiveAmount
+    currency: CurrencyCode
+    status: ReceiptStatus
+    stage_entered_at: AwareDatetime
+    mandate_ref: str
+    simulated: bool
+    executed_at: AwareDatetime
+
+
+class TraceResult(BaseModel):
+    receipt_id: str
+    status: ReceiptStatus
+    stage_entered_at: AwareDatetime
+    typical_duration_hours: Hours
+    typical_duration_source: str
+    next_steps: list[str]
+    warnings: list[str]
+
+
+class PrecheckResult(BaseModel):
+    provider: str
+    action_kind: str
+    documents_likely: list[str]
+    review_triggers: list[str]
+    ready: bool | None = None
+    rule_ids: list[str]
+
+
+class LedgerEntry(BaseModel):
+    seq: int = Field(ge=1)
+    ts: AwareDatetime
+    actor: str
+    kind: str
+    payload: dict[str, Any]
+    prev_hash: str
+    hash: str
+
+
+class Message(BaseModel):
+    role: str
+    text: str
+    lang: str = "en"
+    source: Source = Source.USER_TURN
