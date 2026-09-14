@@ -39,6 +39,7 @@ class Action(BaseModel):
     corridor: Corridor | None = None
     payee_id: str | None = None
     purpose: str | None = None
+    confirmation_token: str | None = None
 
 
 class Mandate(BaseModel):
@@ -58,3 +59,6 @@ class Decision(BaseModel):
     reasons: list[str]
     rule_ids: list[str]
     tier: Tier
+    requires_confirmation: bool = False
+    warning_key: str | None = None
+    confirmation_token: str | None = None

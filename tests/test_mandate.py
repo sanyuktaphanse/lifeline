@@ -233,7 +233,9 @@ def test_transfer_under_an_expired_mandate_is_refused():
     assert decision.tier is Tier.T2
 
 
-def _executed_today(key: str, amount: str) -> Action:
+def _executed_today(
+    key: str, amount: str, confirmation_token: str | None = None
+) -> Action:
     return Action(
         type=ActionType.TRANSFER,
         idempotency_key=key,
@@ -242,7 +244,40 @@ def _executed_today(key: str, amount: str) -> Action:
         corridor="SG>BR",
         payee_id="landlord_sp",
         purpose="rent",
+        confirmation_token=confirmation_token,
     )
+
+
+def test_transfer_without_a_token_is_allowed_but_needs_confirmation():
+    action = _executed_today("txn-0400-test", "1200")
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is True
+    assert decision.requires_confirmation is True
+    assert decision.tier is Tier.T2
+    assert decision.warning_key == "warn.transfer.irreversible"
+    assert decision.confirmation_token
+
+
+def test_transfer_carrying_its_own_token_needs_no_further_confirmation():
+    mandate = _mandate()
+    token = check(_executed_today("txn-0401-test", "1200"), mandate).confirmation_token
+
+    decision = check(_executed_today("txn-0401-test", "1200", token), mandate)
+
+    assert decision.allowed is True
+    assert decision.requires_confirmation is False
+
+
+def test_token_issued_for_one_amount_is_refused_on_another():
+    mandate = _mandate()
+    token = check(_executed_today("txn-0402-test", "1200"), mandate).confirmation_token
+
+    decision = check(_executed_today("txn-0402-test", "1300", token), mandate)
+
+    assert decision.allowed is False
+    assert "R11" in decision.rule_ids
 
 
 def test_transfer_over_daily_limit_with_history_is_denied():
