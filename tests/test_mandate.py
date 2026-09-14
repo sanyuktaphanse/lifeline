@@ -48,3 +48,20 @@ def test_transfer_to_unknown_payee_is_denied():
 
     assert decision.allowed is False
     assert "R06" in decision.rule_ids
+
+
+def test_transfer_on_disallowed_corridor_is_denied():
+    action = Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0003-test",
+        amount=Decimal("1200"),
+        currency="SGD",
+        corridor="SG>IN",
+        payee_id="landlord_sp",
+        purpose="rent",
+    )
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert "R05" in decision.rule_ids
