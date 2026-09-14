@@ -205,3 +205,22 @@ class Message(BaseModel):
                     "A tool message must carry the tool_call_id of the call it answers."
                 )
         return self
+
+
+class ConfirmationRequest(BaseModel):
+    action: Action
+    confirmation_token: str
+    warning_key: str
+    routes: list[Route]
+    expires_in_seconds: int = 300
+
+
+class AgentReply(BaseModel):
+    text: str
+    lang: str
+    confirmation: ConfirmationRequest | None = None
+    decision: Decision | None = None
+    receipt: Receipt | None = None
+    ledger_seqs: list[int]
+    provider: str | None = None
+    model: str | None = None

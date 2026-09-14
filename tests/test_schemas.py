@@ -5,7 +5,11 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schemas import (
+    Action,
     ActionType,
+    AgentReply,
+    ConfirmationRequest,
+    Decision,
     Mandate,
     Message,
     Receipt,
@@ -148,3 +152,69 @@ def test_assistant_message_carries_tool_calls():
     assert message.tool_calls == [
         ToolCall(id="toolu_01", name="quote_route", arguments={"corridor": "SG>BR"})
     ]
+
+
+def _rent_action() -> Action:
+    return Action(
+        type=ActionType.TRANSFER,
+        idempotency_key="txn-0900-test",
+        amount=Decimal("1200"),
+        currency="SGD",
+        corridor="SG>BR",
+        payee_id="landlord_sp",
+        purpose="rent",
+        requested_at=NOW,
+    )
+
+
+def _confirmation() -> ConfirmationRequest:
+    return ConfirmationRequest(
+        action=_rent_action(),
+        confirmation_token="a" * 64,
+        warning_key="warn.transfer.irreversible",
+        routes=[Route(**_route_fields())],
+    )
+
+
+def test_confirmation_request_validates_with_a_default_expiry():
+    confirmation = _confirmation()
+
+    assert confirmation.action.amount == Decimal("1200")
+    assert confirmation.routes[0].rail == "wise"
+    assert confirmation.expires_in_seconds == 300
+
+
+def test_agent_reply_validates_with_every_part():
+    reply = AgentReply(
+        text="Confirm to send 1,200 SGD to your landlord over Wise.",
+        lang="en",
+        confirmation=_confirmation(),
+        decision=Decision(
+            allowed=True,
+            reasons=[],
+            rule_ids=[],
+            tier=Tier.T2,
+            requires_confirmation=True,
+            warning_key="warn.transfer.irreversible",
+            confirmation_token="a" * 64,
+        ),
+        receipt=Receipt(**_receipt_fields()),
+        ledger_seqs=[1, 2],
+        provider="anthropic",
+        model="claude-opus-5",
+    )
+
+    assert reply.confirmation.confirmation_token == "a" * 64
+    assert reply.decision.requires_confirmation is True
+    assert reply.receipt.status.value == "in_transit"
+    assert reply.ledger_seqs == [1, 2]
+    assert (reply.provider, reply.model) == ("anthropic", "claude-opus-5")
+
+
+def test_agent_reply_validates_with_only_the_required_parts():
+    reply = AgentReply(text="O seu saldo é 2.300 SGD.", lang="pt", ledger_seqs=[])
+
+    assert reply.confirmation is None
+    assert reply.decision is None
+    assert reply.receipt is None
+    assert (reply.provider, reply.model) == (None, None)
