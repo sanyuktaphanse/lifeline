@@ -144,7 +144,7 @@
   tier: T2
   langs: [en]
 - id: T30
-  title: "Full first week flow in Chinese: plan, first rent, first allowance, ledger verified"
+  title: "Full first week flow for a Chinese student in Singapore funded from China: plan, first rent, first allowance, ledger verified"
   lane: [A, B, C]
   tier: T2
   langs: [zh]
@@ -173,3 +173,18 @@
   lane: [A]
   tier: T0
   langs: [en, pt, zh]
+- id: T36
+  title: "My parents in China want to send my semester's costs to Singapore, what will the bank ask for and when should they start"
+  lane: [A, B, C]
+  tier: T0
+  langs: [zh, en]
+- id: T37
+  title: "Warn me before I reach the overseas cash withdrawal cap on my Chinese cards and explain the two year consequence"
+  lane: [A, C]
+  tier: T0
+  langs: [zh, en]
+- id: T38
+  title: "I am a foreign student arriving in Shenzhen, set up my payments and my backup"
+  lane: [A, B, C]
+  tier: T1
+  langs: [en, zh]
