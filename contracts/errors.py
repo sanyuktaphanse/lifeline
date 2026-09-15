@@ -1,0 +1,2 @@
+class RailError(Exception):
+    pass

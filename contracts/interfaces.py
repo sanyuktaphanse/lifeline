@@ -6,6 +6,7 @@ from typing import Any
 from contracts.schemas import (
     Action,
     Decision,
+    FreezeResult,
     LedgerEntry,
     Mandate,
     Message,
@@ -71,14 +72,18 @@ class Rail(ABC):
 
     @abstractmethod
     def execute(
-        self, route: Route, mandate_ref: str, confirmation_token: str
+        self,
+        route: Route,
+        mandate_ref: str,
+        idempotency_key: str,
+        confirmation_token: str,
     ) -> Receipt: ...
 
     @abstractmethod
     def status(self, receipt_id: str) -> TraceResult: ...
 
     @abstractmethod
-    def freeze(self, instrument_id: str) -> bool: ...
+    def freeze(self, instrument_id: str) -> FreezeResult: ...
 
 
 class Council(ABC):

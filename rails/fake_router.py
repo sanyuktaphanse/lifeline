@@ -9,9 +9,11 @@ from contracts.schemas import PrecheckResult, Route, RouteStatus
 # fee, rate, or rule. Source: this file. Real quotes must come from a real rail.
 FIXTURE_SOURCE = "fixture"
 WISE_FEE = Decimal("5.60")
-WISE_SPREAD_PCT = Decimal("0.4")
+BANK_WIRE_FEE = Decimal("25")
+BANK_WIRE_SPREAD_PCT = Decimal("2.5")
 UPI_PAYNOW_PURPOSES = frozenset({"allowance", "family_support"})
-UPI_PAYNOW_PURPOSE_RULE = "RT01"
+# Fake: written in the knowledge base id style, but no such entry exists in rails/knowledge/.
+FAKE_UPI_PAYNOW_PURPOSE_RULE = "in_upi_paynow_purpose_001"
 CENT = Decimal("0.01")
 
 
@@ -26,18 +28,37 @@ class FakeRouter(Router):
                     "wise",
                     corridor,
                     amount,
+                    "SGD",
                     "BRL",
                     quoted_at,
                     fee=WISE_FEE,
-                    spread_cost=(amount * WISE_SPREAD_PCT / 100).quantize(CENT),
                     arrival_hours=24,
                     simulated=False,
                 ),
                 self._route(
-                    "sim_pix", corridor, amount, "BRL", quoted_at, arrival_hours=1, simulated=True
+                    "sim_pix",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "BRL",
+                    quoted_at,
+                    arrival_hours=1,
+                    simulated=True,
+                ),
+                self._route(
+                    "bank_wire",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "BRL",
+                    quoted_at,
+                    fee=BANK_WIRE_FEE,
+                    spread_cost=(amount * BANK_WIRE_SPREAD_PCT / 100).quantize(CENT),
+                    arrival_hours=72,
+                    simulated=False,
                 ),
             ]
-        if corridor == "SG>IN":
+        if corridor == "IN>SG":
             blocked = purpose not in UPI_PAYNOW_PURPOSES
             return [
                 self._route(
@@ -45,6 +66,7 @@ class FakeRouter(Router):
                     corridor,
                     amount,
                     "INR",
+                    "SGD",
                     quoted_at,
                     arrival_hours=1,
                     simulated=True,
@@ -53,7 +75,7 @@ class FakeRouter(Router):
                         if blocked
                         else None
                     ),
-                    rule_id=UPI_PAYNOW_PURPOSE_RULE if blocked else None,
+                    rule_id=FAKE_UPI_PAYNOW_PURPOSE_RULE if blocked else None,
                 )
             ]
         return []
@@ -62,7 +84,14 @@ class FakeRouter(Router):
         self, action_kind: str, provider: str, user_context: dict[str, Any]
     ) -> PrecheckResult:
         if action_kind != "enable_pix":
-            raise ValueError(f"FakeRouter has no scripted precheck for {action_kind!r}.")
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=[],
+                ready=None,
+                rule_ids=[],
+            )
         return PrecheckResult(
             provider=provider,
             action_kind=action_kind,
@@ -77,6 +106,7 @@ class FakeRouter(Router):
         rail: str,
         corridor: str,
         amount: Decimal,
+        currency_from: str,
         currency_to: str,
         quoted_at: datetime,
         *,
@@ -91,7 +121,7 @@ class FakeRouter(Router):
             rail=rail,
             corridor=corridor,
             amount=amount,
-            currency_from="SGD",
+            currency_from=currency_from,
             currency_to=currency_to,
             fee=fee,
             spread_cost=spread_cost,

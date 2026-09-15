@@ -10,6 +10,7 @@ from contracts.schemas import (
     AgentReply,
     ConfirmationRequest,
     Decision,
+    FreezeResult,
     Mandate,
     Message,
     Receipt,
@@ -53,6 +54,7 @@ def _receipt_fields(**overrides) -> dict:
         "status": "in_transit",
         "stage_entered_at": NOW,
         "mandate_ref": "mandate-student_001",
+        "idempotency_key": "txn-0900-test",
         "simulated": False,
         "executed_at": NOW,
     }
@@ -91,6 +93,23 @@ def test_receipt_accepts_every_known_status():
 
 def test_receipt_rejects_an_unknown_status():
     _assert_rejected_on_status(Receipt, _receipt_fields(status="lost"))
+
+
+def test_receipt_rejects_a_short_idempotency_key():
+    with pytest.raises(ValidationError) as excinfo:
+        Receipt(**_receipt_fields(idempotency_key="txn-1"))
+    assert [error["loc"] for error in excinfo.value.errors()] == [("idempotency_key",)]
+
+
+def test_freeze_result_accepts_every_known_status():
+    for status in ("done", "not_supported", "failed"):
+        result = FreezeResult(status=status)
+        assert result.status.value == status
+        assert (result.deep_link, result.reason) == (None, None)
+
+
+def test_freeze_result_rejects_an_unknown_status():
+    _assert_rejected_on_status(FreezeResult, {"status": "pending"})
 
 
 def test_trace_transfer_and_precheck_are_tier_zero():

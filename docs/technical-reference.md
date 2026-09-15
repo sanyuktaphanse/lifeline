@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, up to commit `f6419ce`, which added the limits on `AgentReply` and `ConfirmationRequest`. At that commit there are 87 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, including the fake router and fake rail and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, and `RailError`. At that point there are 123 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -17,10 +17,11 @@ Lifeline is a cross border finance agent for students studying abroad. It has tw
 9. [Interfaces](#interfaces)
 10. [The hash chained ledger](#the-hash-chained-ledger)
 11. [The model adapter](#the-model-adapter)
-12. [Decisions of 14 September](#decisions-of-14-september)
-13. [Testing and CI](#testing-and-ci)
-14. [Commit history](#commit-history)
-15. [Open items](#open-items)
+12. [The fake router and fake rail](#the-fake-router-and-fake-rail)
+13. [Decisions of 14 September](#decisions-of-14-september)
+14. [Testing and CI](#testing-and-ci)
+15. [Commit history](#commit-history)
+16. [Open items](#open-items)
 
 ## How the pieces fit
 
@@ -52,7 +53,10 @@ Not every box exists yet. This table shows what is implemented.
 | Fake model adapter | `core/fake_adapter.py` | Implemented for tests |
 | Task and attack suites | `suites/` | Written, not yet executed by a harness |
 | Knowledge base | `rails/knowledge/` | Format, rules, and eight sourced China entries; not yet read by any code |
-| Agent loop, Router, Rail, Anchor, Council, Translator | none yet | Interfaces only; the agent loop exists only as a scripted loop inside a test |
+| Fake router | `rails/fake_router.py` | Implemented for tests and the agent loop, with fixture routes |
+| Fake rail | `rails/fake_rail.py` | Implemented for tests and the agent loop, with scripted receipts, traces, and freezes |
+| Rail errors | `contracts/errors.py` | `RailError`, shared by every rail |
+| Agent loop, Anchor, Council, Translator, real routers and rails | none yet | Interfaces only; the agent loop exists only as a scripted loop inside a test |
 
 ## The rules that shape the code
 
@@ -181,6 +185,7 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | `ActionType` | `transfer`, `read_balance`, `set_reminder`, `add_payee`, `freeze_card`, `change_limit`, `change_mandate`, `export_credentials`, `trace_transfer`, `precheck` |
 | `RouteStatus` | `up`, `degraded`, `down`, `simulated` |
 | `ReceiptStatus` | `created`, `funded`, `in_transit`, `held_for_review`, `completed`, `failed`, `returned` |
+| `FreezeStatus` | `done`, `not_supported`, `failed` |
 | `Role` | `user`, `assistant`, `system`, `tool` |
 
 ### Models
@@ -192,9 +197,10 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | `StandingMandate` | A recurring payment such as monthly rent, with tolerance, schedule, notice and cancel windows |
 | `Decision` | The mandate engine's verdict, with every reason and rule id |
 | `Route` | One way to move money: fees, spread, taxes, arrival time, status, and where the fee figure came from |
-| `Receipt` | The record of an executed transfer and its current stage |
+| `Receipt` | The record of an executed transfer, its current stage, and the mandate reference and idempotency key it was paid under |
 | `TraceResult` | Where a transfer is, how long that stage usually takes, and what to do next |
 | `PrecheckResult` | What a provider is likely to ask for and what could trigger a review |
+| `FreezeResult` | How a card freeze ended, with a deep link when the student must freeze the card in the issuer's app and a reason when it could not be done |
 | `LedgerEntry` | One link in the hash chained ledger |
 | `ToolCall` | One tool call requested by the model: id, name, and arguments |
 | `Message` | One turn in a conversation; see the field table below |
@@ -345,13 +351,13 @@ The engine is a class that implements the `MandateEngine` interface. A module le
 | `MandateEngine` | `check(action, mandate, history) -> Decision`, `confirmation_token_for(action, mandate) -> str` | `DeterministicMandateEngine` |
 | `Ledger` | `append(actor, kind, payload) -> LedgerEntry`, `verify() -> int or None`, `entries() -> list[LedgerEntry]`, `head() -> str` | `HashChainLedger` |
 | `Anchor` | `anchor(head_hash, seq, user_hash) -> str`, `verify(head_hash) -> bool` | Not yet |
-| `Router` | `quote(corridor, amount, purpose, urgency) -> list[Route]`, `precheck(action_kind, provider, user_context) -> PrecheckResult` | Not yet |
-| `Rail` | `name`, `simulated`, `execute(route, mandate_ref, confirmation_token) -> Receipt`, `status(receipt_id) -> TraceResult`, `freeze(instrument_id) -> bool` | Not yet |
+| `Router` | `quote(corridor, amount, purpose, urgency) -> list[Route]`, `precheck(action_kind, provider, user_context) -> PrecheckResult` | `FakeRouter` only |
+| `Rail` | `name`, `simulated`, `execute(route, mandate_ref, idempotency_key, confirmation_token) -> Receipt`, `status(receipt_id) -> TraceResult`, `freeze(instrument_id) -> FreezeResult` | `FakeRail` only |
 | `Council` | `deliberate(question, context) -> dict` | Not yet |
 | `ModelAdapter` | `complete(messages, tools) -> Message` | `ProviderModelAdapter`, `FakeModelAdapter` |
 | `Translator` | `explain(text, source_lang, target_lang) -> str` | Not yet |
 
-`tests/test_interfaces.py` checks that each interface declares exactly its listed members, no more and no fewer, and that none of them can be instantiated directly. Adding or removing a method breaks that test, which is what keeps the interfaces frozen. The `Ledger` interface was changed once on purpose, in commit `e8201df`, when `entries` and `head` became methods and `head` began returning the hash itself.
+`tests/test_interfaces.py` checks that each interface declares exactly its listed members, no more and no fewer, and that none of them can be instantiated directly. Adding or removing a method breaks that test, which is what keeps the interfaces frozen. The `Ledger` interface was changed once on purpose, in commit `e8201df`, when `entries` and `head` became methods and `head` began returning the hash itself. The `Rail` interface was changed on purpose on 15 September, when `execute` gained `idempotency_key` and `freeze` began returning a `FreezeResult`. Because the member check sees only names, a second test pins those two signatures.
 
 ## The hash chained ledger
 
@@ -538,6 +544,46 @@ The SDK packages are pinned to releases older than the ten day freshness window,
 | `dashscope` | 1.27.3 | 1.27.5, three days old | Newest release outside the window |
 | `python-dotenv` | 1.2.3 | 1.2.3, 29 days old | Already outside the window |
 
+## The fake router and fake rail
+
+`rails/fake_router.py` and `rails/fake_rail.py` implement `Router` and `Rail` with fixed answers, so the agent loop and its tests can run without a real provider. Every figure in them is a fixture, not a published fee, rate, or rule. The comment above the figures names the file itself as their source, and every route carries `rate_source="fixture"`.
+
+### Routes
+
+| Corridor | Rail | Currencies | Fee | Spread | Arrival | Simulated |
+| --- | --- | --- | --- | --- | --- | --- |
+| SG>BR | `wise` | SGD to BRL | 5.60 | 0 | 24 hours | No |
+| SG>BR | `sim_pix` | SGD to BRL | 0 | 0 | 1 hour | Yes |
+| SG>BR | `bank_wire` | SGD to BRL | 25 | 2.5 percent of the amount | 72 hours | No |
+| IN>SG | `upi_paynow` | INR to SGD | 0 | 0 | 1 hour | Yes |
+
+Every route is up and within limits. The spread is a cost in the sending currency, rounded to the cent, so 1,200 SGD over the bank wire carries 30.00 SGD of spread next to Wise's none. The UPI to PayNow route carries only `allowance` and `family_support`. For any other purpose it is still returned, so the student can see it, but it carries a blocked reason and the rule id `in_upi_paynow_purpose_001`. That id is written in the knowledge base style and is marked fake in the code, because no entry with that id exists yet. Any other corridor, SG>IN included, returns no routes.
+
+`precheck` returns a fixed result for `enable_pix`, listing a passport and a CPF number and one review trigger. Any other kind returns a result with `ready` left unknown and empty lists, which says the router knows nothing about it instead of raising.
+
+### Execute and idempotency
+
+`execute` takes the route, the mandate reference, the idempotency key, and the confirmation token. The key identifies one payment and the mandate reference identifies the permission it was paid under, so one standing rent mandate can pay every month under a new key each time. The receipt records both. Repeating a key returns the first receipt unchanged, so a retried request cannot pay twice. Receipts are numbered from `fake-0001` and always come back completed and simulated.
+
+The key `txn-fail-once` raises `RailError` the first time it is seen and succeeds after that. A failed attempt stores no receipt. This is how task T12, a rail that fails on execute without charging twice, can be scripted. Only the idempotency key is matched, never the mandate reference.
+
+`status` returns the trace given for that receipt id when the rail was created, and raises `RailError` for any other id. Receipts and traces come back as copies, as the ledger's entries do.
+
+### Freeze
+
+`freeze` returns a `FreezeResult` whose status is `done`, `not_supported`, or `failed`. The instrument id is written as the issuer, a colon, and the card, such as `wise:card_01`. Wise returns `done`. Revolut returns `not_supported` with a deep link and a reason, so the agent can send the student to freeze the card in the app, as task T15 describes. The deep link is a placeholder on the reserved `example.invalid` domain, which never resolves. An unknown issuer, or an id without a colon, returns `failed` with a reason instead of raising, because a freeze that cannot happen is something the agent must explain.
+
+### Decisions of 15 September
+
+Six decisions shaped the fakes and the contracts under them.
+
+1. `Rail.freeze` returns a `FreezeResult` instead of a bool, so the agent can tell a card the issuer will not let it freeze from a freeze that went wrong.
+2. `Rail.execute` takes `idempotency_key` as its own parameter, and `Receipt` records it next to `mandate_ref`. Idempotency rests on the key, and the scripted failure is matched against the key.
+3. `RailError` lives in `contracts/errors.py`, so the agent loop can catch it without importing any particular rail.
+4. Rule ids from the router use the knowledge base style. An unscripted precheck returns an empty result instead of raising.
+5. The India route runs from India to Singapore, INR to SGD, which is the direction of tasks T18 and T19.
+6. Wise shows no spread, and a bank wire route with a 2.5 percent spread stands next to it, so a comparison shows where a traditional transfer hides its cost.
+
 ## Decisions of 14 September
 
 Four decisions reshaped the adapter in commit `785cc9a`, and a follow up in commit `26e29ae` completed the tool loop.
@@ -570,12 +616,14 @@ Every change was written test first. The test was run and seen to fail before th
 | --- | --- | --- |
 | `tests/test_mandate.py` | 24 | Every rule R01 to R11, schema rejection of bad actions, tier coverage |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
-| `tests/test_schemas.py` | 16 | Route and Receipt statuses, new tiers, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits |
-| `tests/test_interfaces.py` | 10 | The frozen members of all eight interfaces, and the engine class matching the wrapper |
+| `tests/test_schemas.py` | 19 | Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits |
+| `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
+| `tests/test_fake_rail.py` | 16 | Receipts carrying both references, idempotency on the key, the scripted failure, traces, copies, and all three freeze results |
+| `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 87 | |
+| Total | 123 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -619,6 +667,8 @@ All times are local time.
 | `b69f255` | 15 Sep 00:32 | Journal for 15 September |
 | `f331d96` | 15 Sep 00:35 | Contracts: AgentReply and ConfirmationRequest |
 | `f6419ce` | 15 Sep 00:41 | Contracts: limits on ConfirmationRequest and AgentReply |
+| `6fa90a0` | 15 Sep 00:45 | Docs: AgentReply, ConfirmationRequest and knowledge base |
+| `f2e4cf6` | 15 Sep 16:57 | Fake router and fake rail for the agent loop |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
@@ -627,11 +677,15 @@ The project scaffold and the mandate engine were built earlier the same day, in 
 1. No round trip has been run against the real provider APIs. Every provider test uses stand ins built from the SDK classes. One short real two step tool run on each provider, with keys in `.env`, would confirm the formats.
 2. When DashScope makes a tool call and the conversation then moves to Anthropic, for example after a fallback in the middle of a loop, that assistant turn reaches Anthropic with no reasoning blocks. Whether `claude-opus-5` accepts such a turn can only be confirmed with a real call.
 3. A failed tool is sent back as ordinary text. There is no way yet to mark a tool result as an error, which Anthropic supports with `is_error`.
-4. Lanes B and C need to know about three contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, and `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`.
+4. Lanes B and C need to know about four contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`, and on 15 September `Rail.execute` gained `idempotency_key`, `Rail.freeze` began returning `FreezeResult`, `Receipt` gained `idempotency_key`, and `RailError` moved to `contracts/errors.py`.
 5. The ledger lives in memory only. Attack `X22`, a tampered ledger file, needs the ledger to be saved and loaded.
 6. A refusal from the model is an error and does not switch providers. Revisit this if a refusal on one provider should be retried on the other.
-7. `Anchor`, `Router`, `Rail`, `Council`, and `Translator` have interfaces but no implementations, and the agent loop exists only inside a test.
+7. `Anchor`, `Council`, and `Translator` have interfaces but no implementations, `Router` and `Rail` have only fakes, and the agent loop exists only inside a test.
 8. The task and attack suites are validated for structure but are not yet run by a harness that scores each scenario.
 9. `expires_in_seconds` on `ConfirmationRequest` is only data. The confirmation token carries no time, so nothing yet refuses a token after its request has expired.
 10. No code reads the knowledge base yet, so the rule that the agent may only assert facts that exist as entries is not enforced.
 11. All eight China entries are waiting for a second set of initials, and they must be checked again before 16 October 2026 or the knowledge test fails.
+12. The Revolut deep link in the fake rail is a placeholder on `example.invalid`. The real link needs a source before a demo.
+13. The rule id `in_upi_paynow_purpose_001` has no entry in the knowledge base, and there is no India file yet. The purpose limit on UPI to PayNow needs a sourced entry before a real router cites it.
+14. The fees, spreads, and arrival times in the fake router are fixtures. A real router must take them from the provider or from a sourced entry.
+15. The fake rail returns the first receipt when a key is repeated with a different route or amount. A real rail should refuse that as a conflict. The mandate engine already refuses a replayed action under R10 before it reaches a rail.

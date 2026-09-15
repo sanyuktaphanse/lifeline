@@ -14,7 +14,7 @@ from contracts.interfaces import (
     Router,
     Translator,
 )
-from contracts.schemas import Action, ActionType, Mandate
+from contracts.schemas import Action, ActionType, FreezeResult, Mandate
 from core.mandate import DeterministicMandateEngine, check, confirmation_token_for
 
 FROZEN_INTERFACES = {
@@ -62,6 +62,19 @@ def test_interface_declares_exactly_its_frozen_members(interface):
     assert set(interface.__abstractmethods__) == FROZEN_INTERFACES[interface]
     with pytest.raises(TypeError):
         interface()
+
+
+def test_rail_execute_takes_an_idempotency_key_and_freeze_returns_a_result():
+    parameters = list(inspect.signature(Rail.execute).parameters)
+
+    assert parameters == [
+        "self",
+        "route",
+        "mandate_ref",
+        "idempotency_key",
+        "confirmation_token",
+    ]
+    assert inspect.signature(Rail.freeze).return_annotation is FreezeResult
 
 
 def test_deterministic_engine_implements_the_mandate_engine():

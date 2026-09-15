@@ -1,17 +1,22 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
 
+from contracts.errors import RailError
 from contracts.interfaces import Rail
-from contracts.schemas import Receipt, ReceiptStatus, Route, TraceResult
+from contracts.schemas import (
+    FreezeResult,
+    FreezeStatus,
+    Receipt,
+    ReceiptStatus,
+    Route,
+    TraceResult,
+)
 
-# The Rail interface has no idempotency key argument, so mandate_ref plays that role.
 FAIL_ONCE_KEY = "txn-fail-once"
 # Fixture: which issuers let the fake rail freeze a card. Not a claim about the real issuers.
 FREEZE_SUPPORTED = {"wise": True, "revolut": False}
-
-
-class RailError(Exception):
-    pass
+# Placeholder until the real Revolut deep link is sourced. The .invalid domain never resolves.
+REVOLUT_FREEZE_DEEP_LINK = "https://example.invalid/revolut/freeze-card"
 
 
 class FakeRail(Rail):
@@ -31,12 +36,18 @@ class FakeRail(Rail):
     def simulated(self) -> bool:
         return True
 
-    def execute(self, route: Route, mandate_ref: str, confirmation_token: str) -> Receipt:
-        if mandate_ref in self._receipts:
-            return self._receipts[mandate_ref].model_copy(deep=True)
-        if mandate_ref == FAIL_ONCE_KEY and mandate_ref not in self._failed_once:
-            self._failed_once.add(mandate_ref)
-            raise RailError(f"Scripted failure for {mandate_ref}; nothing was charged.")
+    def execute(
+        self,
+        route: Route,
+        mandate_ref: str,
+        idempotency_key: str,
+        confirmation_token: str,
+    ) -> Receipt:
+        if idempotency_key in self._receipts:
+            return self._receipts[idempotency_key].model_copy(deep=True)
+        if idempotency_key == FAIL_ONCE_KEY and idempotency_key not in self._failed_once:
+            self._failed_once.add(idempotency_key)
+            raise RailError(f"Scripted failure for {idempotency_key}; nothing was charged.")
         now = datetime.now(timezone.utc)
         receipt = Receipt(
             receipt_id=f"fake-{len(self._receipts) + 1:04d}",
@@ -46,10 +57,11 @@ class FakeRail(Rail):
             status=ReceiptStatus.COMPLETED,
             stage_entered_at=now,
             mandate_ref=mandate_ref,
+            idempotency_key=idempotency_key,
             simulated=True,
             executed_at=now,
         )
-        self._receipts[mandate_ref] = receipt
+        self._receipts[idempotency_key] = receipt
         return receipt.model_copy(deep=True)
 
     def status(self, receipt_id: str) -> TraceResult:
@@ -58,11 +70,20 @@ class FakeRail(Rail):
             raise RailError(f"No scripted trace for receipt {receipt_id}.")
         return trace.model_copy(deep=True)
 
-    def freeze(self, instrument_id: str) -> bool:
+    def freeze(self, instrument_id: str) -> FreezeResult:
         issuer, separator, _ = instrument_id.partition(":")
         if not separator or issuer not in FREEZE_SUPPORTED:
-            raise RailError(
-                f"Unknown issuer in {instrument_id!r}; expected issuer:card, "
-                f"issuer one of {sorted(FREEZE_SUPPORTED)}."
+            return FreezeResult(
+                status=FreezeStatus.FAILED,
+                reason=(
+                    f"Unknown issuer in {instrument_id!r}; expected issuer:card, "
+                    f"issuer one of {sorted(FREEZE_SUPPORTED)}."
+                ),
             )
-        return FREEZE_SUPPORTED[issuer]
+        if FREEZE_SUPPORTED[issuer]:
+            return FreezeResult(status=FreezeStatus.DONE)
+        return FreezeResult(
+            status=FreezeStatus.NOT_SUPPORTED,
+            deep_link=REVOLUT_FREEZE_DEEP_LINK,
+            reason="This issuer does not let Lifeline freeze the card; freeze it in the issuer's app.",
+        )

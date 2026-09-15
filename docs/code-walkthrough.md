@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 15 September 2026, up to commit `f6419ce`, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 15 September 2026, including the fake router, the fake rail, and the contract changes that came with them, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -11,14 +11,17 @@ Every Python excerpt below is copied exactly from the file it names. Read the fi
 3. The tier table, `core/tiers.py`
 4. The mandate engine, `core/mandate.py`
 5. The interfaces, `contracts/interfaces.py`
-6. The ledger, `core/ledger.py`
-7. The fake model adapter, `core/fake_adapter.py`
-8. The model adapter, `core/model_adapter.py`
-9. The tests
-10. The suites
-11. The knowledge base, `rails/knowledge/`
-12. Configuration files
-13. Commands used to build and check the repo
+6. The rail errors, `contracts/errors.py`
+7. The ledger, `core/ledger.py`
+8. The fake model adapter, `core/fake_adapter.py`
+9. The model adapter, `core/model_adapter.py`
+10. The fake router, `rails/fake_router.py`
+11. The fake rail, `rails/fake_rail.py`
+12. The tests
+13. The suites
+14. The knowledge base, `rails/knowledge/`
+15. Configuration files
+16. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -161,6 +164,12 @@ class ReceiptStatus(str, Enum):
     RETURNED = "returned"
 
 
+class FreezeStatus(str, Enum):
+    DONE = "done"
+    NOT_SUPPORTED = "not_supported"
+    FAILED = "failed"
+
+
 class Role(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -168,7 +177,7 @@ class Role(str, Enum):
     TOOL = "tool"
 ```
 
-Each enum is a closed vocabulary. Because every status field is typed with one of these enums, a value such as `"maintenance"` or `"lost"` fails validation instead of being stored. `Role` lists who can speak in a conversation: the student, the model, the operator, and a tool.
+Each enum is a closed vocabulary. Because every status field is typed with one of these enums, a value such as `"maintenance"` or `"lost"` fails validation instead of being stored. `FreezeStatus` says whether a card freeze was done, is not supported by the issuer, or failed. `Role` lists who can speak in a conversation: the student, the model, the operator, and a tool.
 
 ```python
 class Action(BaseModel):
@@ -261,6 +270,7 @@ class Receipt(BaseModel):
     status: ReceiptStatus
     stage_entered_at: AwareDatetime
     mandate_ref: str
+    idempotency_key: str = Field(min_length=8)
     simulated: bool
     executed_at: AwareDatetime
 
@@ -282,9 +292,15 @@ class PrecheckResult(BaseModel):
     review_triggers: list[str]
     ready: bool | None = None
     rule_ids: list[str]
+
+
+class FreezeResult(BaseModel):
+    status: FreezeStatus
+    deep_link: str | None = None
+    reason: str | None = None
 ```
 
-These four models belong to lane B. A `Route` is one way to move money, including its fee, the hidden cost of the exchange rate spread, and tax lines such as IOF on a Brazilian transfer. `fee_source_url` and `rate_source` exist so that every figure can cite where it came from. `simulated` is true when the route is not a real rail, so the student is always told. A `Receipt` records an executed transfer and the stage it is in. A `TraceResult` answers "where is my money", and `typical_duration_source` cites where the typical duration came from. A `PrecheckResult` lists what a provider is likely to ask for before an action, such as opening Pix on a foreign account. `ready` is optional because the answer is sometimes unknown.
+These five models belong to lane B. A `Route` is one way to move money, including its fee, the hidden cost of the exchange rate spread, and tax lines such as IOF on a Brazilian transfer. `fee_source_url` and `rate_source` exist so that every figure can cite where it came from. `simulated` is true when the route is not a real rail, so the student is always told. A `Receipt` records an executed transfer and the stage it is in. It carries both `mandate_ref`, the permission the payment was made under, and `idempotency_key`, the one payment itself, with the same minimum length of eight as on `Action`. A `TraceResult` answers "where is my money", and `typical_duration_source` cites where the typical duration came from. A `PrecheckResult` lists what a provider is likely to ask for before an action, such as opening Pix on a foreign account. `ready` is optional because the answer is sometimes unknown. A `FreezeResult` says how a card freeze ended. `deep_link` is filled when the student must freeze the card in the issuer's app, and `reason` explains why a freeze was not done.
 
 ```python
 class LedgerEntry(BaseModel):
@@ -621,6 +637,7 @@ from typing import Any
 from contracts.schemas import (
     Action,
     Decision,
+    FreezeResult,
     LedgerEntry,
     Mandate,
     Message,
@@ -692,17 +709,21 @@ class Rail(ABC):
 
     @abstractmethod
     def execute(
-        self, route: Route, mandate_ref: str, confirmation_token: str
+        self,
+        route: Route,
+        mandate_ref: str,
+        idempotency_key: str,
+        confirmation_token: str,
     ) -> Receipt: ...
 
     @abstractmethod
     def status(self, receipt_id: str) -> TraceResult: ...
 
     @abstractmethod
-    def freeze(self, instrument_id: str) -> bool: ...
+    def freeze(self, instrument_id: str) -> FreezeResult: ...
 ```
 
-A `Rail` is one payment provider. `name` and `simulated` are abstract properties, read as `rail.name` without brackets. `execute` requires a mandate reference and a confirmation token, so a rail cannot be called without evidence that the mandate engine approved the payment.
+A `Rail` is one payment provider. `name` and `simulated` are abstract properties, read as `rail.name` without brackets. `execute` requires a mandate reference and a confirmation token, so a rail cannot be called without evidence that the mandate engine approved the payment. It also takes an idempotency key, which names the one payment, while the mandate reference names the permission it was paid under. `freeze` returns a `FreezeResult`, so the agent can tell a card the issuer will not let it freeze from a freeze that failed.
 
 ```python
 class Council(ABC):
@@ -723,6 +744,15 @@ class Translator(ABC):
 ```
 
 A `Council` will review large or unusual transfers and explain its view. A `ModelAdapter` takes a conversation and tool definitions and returns the next message. A `Translator` explains a message from one language in another, as in task T04.
+
+## The rail errors, `contracts/errors.py`
+
+```python
+class RailError(Exception):
+    pass
+```
+
+A rail raises `RailError` when it cannot do what it was asked, such as a payment the provider rejected or a receipt it does not know. The class inherits everything from `Exception`, and `pass` means its body adds nothing. It lives in the contracts, next to the interfaces, so the agent loop can catch it without importing any particular rail.
 
 ## The ledger, `core/ledger.py`
 
@@ -1145,9 +1175,267 @@ The constructor loads `.env` only when no environment is passed in, which is how
 
 `_ask` reads the key at call time and checks it before any SDK object exists, then calls the provider function from the registry. `[2]` picks the third item of the settings tuple, the key variable.
 
+## The fake router, `rails/fake_router.py`
+
+```python
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any
+
+from contracts.interfaces import Router
+from contracts.schemas import PrecheckResult, Route, RouteStatus
+
+# Every value below is a fixture for tests and the agent loop, not a published
+# fee, rate, or rule. Source: this file. Real quotes must come from a real rail.
+FIXTURE_SOURCE = "fixture"
+WISE_FEE = Decimal("5.60")
+BANK_WIRE_FEE = Decimal("25")
+BANK_WIRE_SPREAD_PCT = Decimal("2.5")
+UPI_PAYNOW_PURPOSES = frozenset({"allowance", "family_support"})
+# Fake: written in the knowledge base id style, but no such entry exists in rails/knowledge/.
+FAKE_UPI_PAYNOW_PURPOSE_RULE = "in_upi_paynow_purpose_001"
+CENT = Decimal("0.01")
+```
+
+The constants hold every figure the fake uses, and the comment above them names this file as their source, which is how the rule that no fee is hardcoded without a source applies to a fixture. `BANK_WIRE_SPREAD_PCT` is a percentage, so 2.5 means 2.5 percent. `frozenset` is a set that cannot be changed after it is made, which suits a fixed list of purposes. The rule id carries `FAKE` in its constant name and a comment, so nobody mistakes it for a sourced entry. `CENT` is the step that money is rounded to.
+
+```python
+class FakeRouter(Router):
+    def quote(
+        self, corridor: str, amount: Decimal, purpose: str, urgency: str
+    ) -> list[Route]:
+        quoted_at = datetime.now(timezone.utc)
+        if corridor == "SG>BR":
+            return [
+                self._route(
+                    "wise",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "BRL",
+                    quoted_at,
+                    fee=WISE_FEE,
+                    arrival_hours=24,
+                    simulated=False,
+                ),
+                self._route(
+                    "sim_pix",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "BRL",
+                    quoted_at,
+                    arrival_hours=1,
+                    simulated=True,
+                ),
+                self._route(
+                    "bank_wire",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "BRL",
+                    quoted_at,
+                    fee=BANK_WIRE_FEE,
+                    spread_cost=(amount * BANK_WIRE_SPREAD_PCT / 100).quantize(CENT),
+                    arrival_hours=72,
+                    simulated=False,
+                ),
+            ]
+        if corridor == "IN>SG":
+            blocked = purpose not in UPI_PAYNOW_PURPOSES
+            return [
+                self._route(
+                    "upi_paynow",
+                    corridor,
+                    amount,
+                    "INR",
+                    "SGD",
+                    quoted_at,
+                    arrival_hours=1,
+                    simulated=True,
+                    blocked_reason=(
+                        f"UPI to PayNow only carries allowance or family_support, not {purpose!r}."
+                        if blocked
+                        else None
+                    ),
+                    rule_id=FAKE_UPI_PAYNOW_PURPOSE_RULE if blocked else None,
+                )
+            ]
+        return []
+```
+
+`quote` takes one time and stamps it on every route it returns, so all routes in one answer share a quote time. Brazil gets three routes, and only the bank wire has a spread. It is the amount times the percentage divided by 100, and `quantize(CENT)` rounds it to two decimal places, so 1,200 SGD gives 30.00. The India route is built whatever the purpose, and `blocked` decides whether it carries a reason and a rule id, so the student still sees the route and learns why it cannot be used. `{purpose!r}` puts the purpose in quotes, so an empty purpose shows as `''` instead of vanishing from the sentence. Any other corridor returns an empty list. `urgency` is part of the interface and is not used by the fake.
+
+```python
+    def precheck(
+        self, action_kind: str, provider: str, user_context: dict[str, Any]
+    ) -> PrecheckResult:
+        if action_kind != "enable_pix":
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=[],
+                ready=None,
+                rule_ids=[],
+            )
+        return PrecheckResult(
+            provider=provider,
+            action_kind=action_kind,
+            documents_likely=["passport", "CPF number"],
+            review_triggers=["first Pix key registered on a foreign passport"],
+            ready=None,
+            rule_ids=[],
+        )
+
+    @staticmethod
+    def _route(
+        rail: str,
+        corridor: str,
+        amount: Decimal,
+        currency_from: str,
+        currency_to: str,
+        quoted_at: datetime,
+        *,
+        arrival_hours: float,
+        simulated: bool,
+        fee: Decimal = Decimal("0"),
+        spread_cost: Decimal = Decimal("0"),
+        blocked_reason: str | None = None,
+        rule_id: str | None = None,
+    ) -> Route:
+        return Route(
+            rail=rail,
+            corridor=corridor,
+            amount=amount,
+            currency_from=currency_from,
+            currency_to=currency_to,
+            fee=fee,
+            spread_cost=spread_cost,
+            tax_lines=[],
+            arrival_hours=arrival_hours,
+            status=RouteStatus.UP,
+            simulated=simulated,
+            limit_ok=True,
+            blocked_reason=blocked_reason,
+            rule_id=rule_id,
+            rate_source=FIXTURE_SOURCE,
+            quoted_at=quoted_at,
+        )
+```
+
+`precheck` answers any kind other than `enable_pix` with empty lists and `ready` left as `None`, meaning unknown, and answers `enable_pix` with fixed documents and one review trigger. Each call builds a new result, so a caller who edits one cannot change the next. `_route` is a `staticmethod`, a function kept on the class that needs no `self`. The bare `*` makes every parameter after it keyword only, so a call must write `fee=` or `arrival_hours=`, and two numbers cannot be swapped by position. Fee and spread default to zero. Every route is up and within limits, and every one names `fixture` as its rate source.
+
+## The fake rail, `rails/fake_rail.py`
+
+```python
+from collections.abc import Mapping
+from datetime import datetime, timezone
+
+from contracts.errors import RailError
+from contracts.interfaces import Rail
+from contracts.schemas import (
+    FreezeResult,
+    FreezeStatus,
+    Receipt,
+    ReceiptStatus,
+    Route,
+    TraceResult,
+)
+
+FAIL_ONCE_KEY = "txn-fail-once"
+# Fixture: which issuers let the fake rail freeze a card. Not a claim about the real issuers.
+FREEZE_SUPPORTED = {"wise": True, "revolut": False}
+# Placeholder until the real Revolut deep link is sourced. The .invalid domain never resolves.
+REVOLUT_FREEZE_DEEP_LINK = "https://example.invalid/revolut/freeze-card"
+```
+
+`FAIL_ONCE_KEY` is the idempotency key that fails once. `FREEZE_SUPPORTED` maps each issuer the fake knows to whether it can freeze a card there. The deep link uses `example.invalid`, a domain reserved so that it can never resolve, which keeps the placeholder harmless if it ever reaches a screen by mistake.
+
+```python
+class FakeRail(Rail):
+    def __init__(self, traces: Mapping[str, TraceResult] | None = None) -> None:
+        self._traces = {
+            receipt_id: trace.model_copy(deep=True)
+            for receipt_id, trace in (traces or {}).items()
+        }
+        self._receipts: dict[str, Receipt] = {}
+        self._failed_once: set[str] = set()
+
+    @property
+    def name(self) -> str:
+        return "fake"
+
+    @property
+    def simulated(self) -> bool:
+        return True
+```
+
+The constructor copies any scripted traces, keyed by receipt id, so a test that edits its own trace afterwards changes nothing inside the rail. `traces or {}` uses an empty dictionary when no traces are given. `_receipts` maps each idempotency key to its receipt, and `_failed_once` remembers which keys have already failed. Both properties return fixed values: this rail is named `fake` and is always simulated.
+
+```python
+    def execute(
+        self,
+        route: Route,
+        mandate_ref: str,
+        idempotency_key: str,
+        confirmation_token: str,
+    ) -> Receipt:
+        if idempotency_key in self._receipts:
+            return self._receipts[idempotency_key].model_copy(deep=True)
+        if idempotency_key == FAIL_ONCE_KEY and idempotency_key not in self._failed_once:
+            self._failed_once.add(idempotency_key)
+            raise RailError(f"Scripted failure for {idempotency_key}; nothing was charged.")
+        now = datetime.now(timezone.utc)
+        receipt = Receipt(
+            receipt_id=f"fake-{len(self._receipts) + 1:04d}",
+            rail=route.rail,
+            amount=route.amount,
+            currency=route.currency_from,
+            status=ReceiptStatus.COMPLETED,
+            stage_entered_at=now,
+            mandate_ref=mandate_ref,
+            idempotency_key=idempotency_key,
+            simulated=True,
+            executed_at=now,
+        )
+        self._receipts[idempotency_key] = receipt
+        return receipt.model_copy(deep=True)
+```
+
+The order of the checks matters. A key that has already paid returns its stored receipt first, so a retry never pays twice. Next, the fail once key raises `RailError` the first time and is remembered, so the retry goes through. Only then is a new receipt made, numbered from the count of receipts so far. `:04d` pads the number with zeros to four digits, giving `fake-0001`. A failed attempt stores nothing, so it does not use up a number. The receipt records both the mandate reference and the key, and every return is a deep copy.
+
+```python
+    def status(self, receipt_id: str) -> TraceResult:
+        trace = self._traces.get(receipt_id)
+        if trace is None:
+            raise RailError(f"No scripted trace for receipt {receipt_id}.")
+        return trace.model_copy(deep=True)
+
+    def freeze(self, instrument_id: str) -> FreezeResult:
+        issuer, separator, _ = instrument_id.partition(":")
+        if not separator or issuer not in FREEZE_SUPPORTED:
+            return FreezeResult(
+                status=FreezeStatus.FAILED,
+                reason=(
+                    f"Unknown issuer in {instrument_id!r}; expected issuer:card, "
+                    f"issuer one of {sorted(FREEZE_SUPPORTED)}."
+                ),
+            )
+        if FREEZE_SUPPORTED[issuer]:
+            return FreezeResult(status=FreezeStatus.DONE)
+        return FreezeResult(
+            status=FreezeStatus.NOT_SUPPORTED,
+            deep_link=REVOLUT_FREEZE_DEEP_LINK,
+            reason="This issuer does not let Lifeline freeze the card; freeze it in the issuer's app.",
+        )
+```
+
+`status` returns a copy of the scripted trace, or raises `RailError` naming the receipt. `partition(":")` splits the instrument id at the first colon into three parts: the text before it, the colon itself, and the text after it. When there is no colon the middle part is empty, which is how an id such as `card_01` is caught. `_` is the usual name for a value that is not used. An unknown issuer returns `failed` with a reason instead of raising, because a freeze that cannot happen is an answer the agent has to explain, not a crash. Wise returns `done`, and Revolut returns `not_supported` with the deep link and a reason.
+
 ## The tests
 
-There are 87 tests. Each was written before the code it checks and was seen to fail first.
+There are 123 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -1266,6 +1554,9 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_schemas.py` | `test_route_rejects_an_unknown_status` | An unknown route status fails on `status` only |
 | `test_schemas.py` | `test_receipt_accepts_every_known_status` | All seven receipt statuses are valid |
 | `test_schemas.py` | `test_receipt_rejects_an_unknown_status` | An unknown receipt status fails on `status` only |
+| `test_schemas.py` | `test_receipt_rejects_a_short_idempotency_key` | A receipt key under eight characters fails on `idempotency_key` only |
+| `test_schemas.py` | `test_freeze_result_accepts_every_known_status` | All three freeze statuses are valid, with no link or reason by default |
+| `test_schemas.py` | `test_freeze_result_rejects_an_unknown_status` | An unknown freeze status fails on `status` only |
 | `test_schemas.py` | `test_trace_transfer_and_precheck_are_tier_zero` | The two new action types are T0 |
 | `test_schemas.py` | `test_standing_mandates_default_to_empty` | A mandate starts with no standing mandates |
 | `test_schemas.py` | `test_tool_result_message_carries_source_tool_result` | A proper tool message is accepted |
@@ -1279,6 +1570,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_schemas.py` | `test_confirmation_request_rejects_an_expiry_that_is_not_positive` | An expiry of zero fails on `expires_in_seconds` only |
 | `test_schemas.py` | `test_agent_reply_rejects_a_ledger_seq_below_one` | A ledger sequence of 0 fails on that item only |
 | `test_interfaces.py` | `test_interface_declares_exactly_its_frozen_members` | Runs for all eight interfaces; none can change silently |
+| `test_interfaces.py` | `test_rail_execute_takes_an_idempotency_key_and_freeze_returns_a_result` | The two `Rail` signatures changed on 15 September stay as agreed |
 | `test_interfaces.py` | `test_deterministic_engine_implements_the_mandate_engine` | The engine is a complete `MandateEngine` |
 | `test_interfaces.py` | `test_engine_and_check_wrapper_give_the_same_decision` | The class and the wrapper agree, token included |
 | `test_ledger.py` | `test_hash_chain_ledger_implements_the_ledger_interface` | The ledger is a complete `Ledger` |
@@ -1317,8 +1609,34 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_knowledge.py` | `test_every_entry_has_all_fields` | Every entry has all eleven fields |
 | `test_knowledge.py` | `test_every_source_url_uses_https` | Every source address starts with `https://` |
 | `test_knowledge.py` | `test_no_entry_is_older_than_30_days` | Every entry was checked in the last 30 days |
+| `test_fake_router.py` | `test_fake_router_implements_the_router` | The fake is a complete `Router` |
+| `test_fake_router.py` | `test_sg_to_br_returns_wise_sim_pix_and_bank_wire` | Brazil gets three open routes from SGD to BRL, in that order |
+| `test_fake_router.py` | `test_wise_route_has_its_fee_and_no_spread` | Wise costs 5.60 with no spread and arrives in 24 hours |
+| `test_fake_router.py` | `test_sim_pix_route_is_simulated_and_arrives_in_an_hour` | The Pix route is marked simulated |
+| `test_fake_router.py` | `test_bank_wire_route_has_its_fee_spread_and_arrival` | The bank wire costs 25 plus 30.00 of spread on 1,200 and takes 72 hours |
+| `test_fake_router.py` | `test_bank_wire_spread_is_two_and_a_half_percent_of_the_amount` | The spread follows the amount: 12.50 on 500 |
+| `test_fake_router.py` | `test_in_to_sg_returns_one_open_upi_paynow_route` | Runs for allowance and family support; the INR to SGD route is open |
+| `test_fake_router.py` | `test_upi_paynow_is_blocked_with_reason_and_rule_for_other_purposes` | Runs for three other purposes; each is blocked with a reason and the fake rule id |
+| `test_fake_router.py` | `test_unknown_corridor_returns_no_routes` | Runs for SG>IN and SG>US; neither has routes |
+| `test_fake_router.py` | `test_precheck_returns_the_fixed_result_for_enable_pix` | Enabling Pix gets the same result whatever the context |
+| `test_fake_router.py` | `test_precheck_results_do_not_share_state` | Editing one result leaves the next unchanged |
+| `test_fake_router.py` | `test_precheck_for_an_unscripted_kind_returns_an_empty_result` | An unknown kind gets empty lists and an unknown `ready` |
+| `test_fake_rail.py` | `test_fake_rail_implements_the_rail` | The fake is a complete `Rail`, named `fake` and simulated |
+| `test_fake_rail.py` | `test_execute_returns_a_completed_receipt_carrying_both_references` | A receipt is completed and records the mandate reference and the key |
+| `test_fake_rail.py` | `test_execute_is_idempotent_on_the_idempotency_key` | A repeated key returns the first receipt, even for another amount |
+| `test_fake_rail.py` | `test_one_mandate_can_pay_again_under_a_new_idempotency_key` | One mandate pays twice under two keys |
+| `test_fake_rail.py` | `test_returned_receipts_do_not_share_state` | Editing a returned receipt leaves the stored one unchanged |
+| `test_fake_rail.py` | `test_fail_once_key_fails_the_first_time_then_succeeds_once` | The scripted failure raises once, then one receipt is kept |
+| `test_fake_rail.py` | `test_fail_once_is_matched_on_the_idempotency_key_not_the_mandate_ref` | A mandate reference of `txn-fail-once` does not trigger the failure |
+| `test_fake_rail.py` | `test_failure_leaves_no_receipt_behind` | A failed attempt stores nothing |
+| `test_fake_rail.py` | `test_status_returns_the_scripted_trace` | The trace given for `fake-0001` comes back for that receipt |
+| `test_fake_rail.py` | `test_status_results_do_not_share_state` | Editing a returned trace leaves the script unchanged |
+| `test_fake_rail.py` | `test_status_for_an_unscripted_receipt_raises` | An unknown receipt raises `RailError` naming it |
+| `test_fake_rail.py` | `test_freeze_is_done_for_wise` | Wise freezes the card |
+| `test_fake_rail.py` | `test_freeze_is_not_supported_for_revolut_and_offers_a_deep_link` | Revolut returns `not_supported` with the placeholder link and a reason |
+| `test_fake_rail.py` | `test_freeze_fails_with_a_reason_for_an_unknown_issuer` | Runs for three bad ids; each fails with a reason and no link |
 
-The two parametrized tests add eight extra runs, which is how 79 test functions become 87 tests.
+Six parametrized tests add fourteen extra runs, which is how 109 test functions become 123 tests.
 
 ## The suites
 

@@ -57,6 +57,12 @@ class ReceiptStatus(str, Enum):
     RETURNED = "returned"
 
 
+class FreezeStatus(str, Enum):
+    DONE = "done"
+    NOT_SUPPORTED = "not_supported"
+    FAILED = "failed"
+
+
 class Role(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -145,6 +151,7 @@ class Receipt(BaseModel):
     status: ReceiptStatus
     stage_entered_at: AwareDatetime
     mandate_ref: str
+    idempotency_key: str = Field(min_length=8)
     simulated: bool
     executed_at: AwareDatetime
 
@@ -166,6 +173,12 @@ class PrecheckResult(BaseModel):
     review_triggers: list[str]
     ready: bool | None = None
     rule_ids: list[str]
+
+
+class FreezeResult(BaseModel):
+    status: FreezeStatus
+    deep_link: str | None = None
+    reason: str | None = None
 
 
 class LedgerEntry(BaseModel):

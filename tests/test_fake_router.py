@@ -5,11 +5,15 @@ import pytest
 
 from contracts.interfaces import Router
 from contracts.schemas import PrecheckResult, RouteStatus
-from rails.fake_router import UPI_PAYNOW_PURPOSE_RULE, FakeRouter
+from rails.fake_router import FakeRouter
 
 
 def _quote(corridor: str, amount: str = "1200", purpose: str = "rent"):
     return FakeRouter().quote(corridor, Decimal(amount), purpose, "normal")
+
+
+def _by_rail(routes):
+    return {route.rail: route for route in routes}
 
 
 def test_fake_router_implements_the_router():
@@ -19,10 +23,10 @@ def test_fake_router_implements_the_router():
     assert not inspect.isabstract(FakeRouter)
 
 
-def test_sg_to_br_returns_wise_and_sim_pix():
+def test_sg_to_br_returns_wise_sim_pix_and_bank_wire():
     routes = _quote("SG>BR")
 
-    assert [route.rail for route in routes] == ["wise", "sim_pix"]
+    assert [route.rail for route in routes] == ["wise", "sim_pix", "bank_wire"]
     for route in routes:
         assert route.corridor == "SG>BR"
         assert route.amount == Decimal("1200")
@@ -35,38 +39,48 @@ def test_sg_to_br_returns_wise_and_sim_pix():
         assert route.quoted_at.tzinfo is not None
 
 
-def test_wise_route_carries_its_fee_spread_and_arrival():
-    wise = _quote("SG>BR")[0]
+def test_wise_route_has_its_fee_and_no_spread():
+    wise = _by_rail(_quote("SG>BR"))["wise"]
 
     assert wise.fee == Decimal("5.60")
-    assert wise.spread_cost == Decimal("4.80")
+    assert wise.spread_cost == Decimal("0")
     assert wise.arrival_hours == 24
     assert wise.simulated is False
 
 
-def test_wise_spread_is_four_tenths_of_a_percent_of_the_amount():
-    wise = _quote("SG>BR", amount="500")[0]
-
-    assert wise.spread_cost == Decimal("2.00")
-
-
 def test_sim_pix_route_is_simulated_and_arrives_in_an_hour():
-    sim_pix = _quote("SG>BR")[1]
+    sim_pix = _by_rail(_quote("SG>BR"))["sim_pix"]
 
     assert sim_pix.simulated is True
     assert sim_pix.arrival_hours == 1
 
 
+def test_bank_wire_route_has_its_fee_spread_and_arrival():
+    bank_wire = _by_rail(_quote("SG>BR"))["bank_wire"]
+
+    assert bank_wire.fee == Decimal("25")
+    assert bank_wire.spread_cost == Decimal("30.00")
+    assert bank_wire.arrival_hours == 72
+    assert bank_wire.simulated is False
+
+
+def test_bank_wire_spread_is_two_and_a_half_percent_of_the_amount():
+    bank_wire = _by_rail(_quote("SG>BR", amount="500"))["bank_wire"]
+
+    assert bank_wire.spread_cost == Decimal("12.50")
+
+
 @pytest.mark.parametrize("purpose", ["allowance", "family_support"])
-def test_sg_to_in_returns_one_open_upi_paynow_route(purpose):
-    routes = _quote("SG>IN", amount="300", purpose=purpose)
+def test_in_to_sg_returns_one_open_upi_paynow_route(purpose):
+    routes = _quote("IN>SG", amount="25000", purpose=purpose)
 
     assert len(routes) == 1
     route = routes[0]
     assert route.rail == "upi_paynow"
-    assert route.corridor == "SG>IN"
-    assert route.currency_from == "SGD"
-    assert route.currency_to == "INR"
+    assert route.corridor == "IN>SG"
+    assert route.amount == Decimal("25000")
+    assert route.currency_from == "INR"
+    assert route.currency_to == "SGD"
     assert route.simulated is True
     assert route.status is RouteStatus.UP
     assert route.blocked_reason is None
@@ -75,16 +89,17 @@ def test_sg_to_in_returns_one_open_upi_paynow_route(purpose):
 
 @pytest.mark.parametrize("purpose", ["rent", "tuition", ""])
 def test_upi_paynow_is_blocked_with_reason_and_rule_for_other_purposes(purpose):
-    route = _quote("SG>IN", amount="300", purpose=purpose)[0]
+    route = _quote("IN>SG", amount="25000", purpose=purpose)[0]
 
     assert route.rail == "upi_paynow"
     assert route.status is RouteStatus.UP
     assert route.blocked_reason
-    assert route.rule_id == UPI_PAYNOW_PURPOSE_RULE
+    assert route.rule_id == "in_upi_paynow_purpose_001"
 
 
-def test_unknown_corridor_returns_no_routes():
-    assert _quote("SG>US") == []
+@pytest.mark.parametrize("corridor", ["SG>IN", "SG>US"])
+def test_unknown_corridor_returns_no_routes(corridor):
+    assert _quote(corridor) == []
 
 
 def test_precheck_returns_the_fixed_result_for_enable_pix():
@@ -110,6 +125,14 @@ def test_precheck_results_do_not_share_state():
     assert "tampered" not in router.precheck("enable_pix", "sim_pix", {}).documents_likely
 
 
-def test_precheck_refuses_an_unscripted_action_kind():
-    with pytest.raises(ValueError, match="open_account"):
-        FakeRouter().precheck("open_account", "wise", {})
+def test_precheck_for_an_unscripted_kind_returns_an_empty_result():
+    result = FakeRouter().precheck("open_account", "wise", {})
+
+    assert result == PrecheckResult(
+        provider="wise",
+        action_kind="open_account",
+        documents_likely=[],
+        review_triggers=[],
+        ready=None,
+        rule_ids=[],
+    )
