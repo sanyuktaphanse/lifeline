@@ -77,7 +77,14 @@ class Rail(ABC):
         mandate_ref: str,
         idempotency_key: str,
         confirmation_token: str,
-    ) -> Receipt: ...
+    ) -> Receipt:
+        """Pay the route at most once for each idempotency key.
+
+        Reusing a key with the same route, amount, and mandate_ref returns the
+        original receipt. Reusing it with any difference raises RailError. The
+        quote time is not compared, so a fresh quote of the same route counts
+        as the same.
+        """
 
     @abstractmethod
     def status(self, receipt_id: str) -> TraceResult: ...

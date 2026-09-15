@@ -1,5 +1,5 @@
 import inspect
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -78,13 +78,45 @@ def test_execute_returns_a_completed_receipt_carrying_both_references():
     assert receipt.executed_at.tzinfo is not None
 
 
-def test_execute_is_idempotent_on_the_idempotency_key():
+def test_reusing_a_key_with_the_same_details_returns_the_original_receipt():
     rail = FakeRail()
 
     first = _execute(rail, "txn-0700-rent")
-    again = _execute(rail, "txn-0700-rent", amount="999")
+    again = _execute(rail, "txn-0700-rent")
 
     assert again == first
+
+
+def test_a_fresh_quote_of_the_same_route_counts_as_the_same_details():
+    rail = FakeRail()
+
+    first = rail.execute(_route(), MANDATE_REF, "txn-0700-rent", TOKEN)
+    requoted = _route().model_copy(
+        update={"quoted_at": first.executed_at + timedelta(minutes=5)}
+    )
+
+    assert rail.execute(requoted, MANDATE_REF, "txn-0700-rent", TOKEN) == first
+
+
+@pytest.mark.parametrize(
+    ("route_changes", "mandate_ref"),
+    [
+        ({"amount": Decimal("999")}, MANDATE_REF),
+        ({"rail": "bank_wire"}, MANDATE_REF),
+        ({"fee": Decimal("25")}, MANDATE_REF),
+        ({}, "mandate-rent-other"),
+    ],
+    ids=["amount", "rail", "fee", "mandate_ref"],
+)
+def test_reusing_a_key_with_any_difference_raises(route_changes, mandate_ref):
+    rail = FakeRail()
+    original = rail.execute(_route(), MANDATE_REF, "txn-0700-rent", TOKEN)
+    changed = _route().model_copy(update=route_changes)
+
+    with pytest.raises(RailError, match="txn-0700-rent"):
+        rail.execute(changed, mandate_ref, "txn-0700-rent", TOKEN)
+
+    assert rail.execute(_route(), MANDATE_REF, "txn-0700-rent", TOKEN) == original
 
 
 def test_one_mandate_can_pay_again_under_a_new_idempotency_key():
