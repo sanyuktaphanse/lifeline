@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Any
 
 from contracts.errors import RailError
 from contracts.interfaces import Rail
@@ -26,6 +27,7 @@ class FakeRail(Rail):
             for receipt_id, trace in (traces or {}).items()
         }
         self._receipts: dict[str, Receipt] = {}
+        self._requests: dict[str, tuple[dict[str, Any], str]] = {}
         self._failed_once: set[str] = set()
 
     @property
@@ -43,7 +45,13 @@ class FakeRail(Rail):
         idempotency_key: str,
         confirmation_token: str,
     ) -> Receipt:
+        request = (route.model_dump(exclude={"quoted_at"}), mandate_ref)
         if idempotency_key in self._receipts:
+            if self._requests[idempotency_key] != request:
+                raise RailError(
+                    f"Idempotency key {idempotency_key} was already used for a different "
+                    "route, amount, or mandate; nothing was charged."
+                )
             return self._receipts[idempotency_key].model_copy(deep=True)
         if idempotency_key == FAIL_ONCE_KEY and idempotency_key not in self._failed_once:
             self._failed_once.add(idempotency_key)
@@ -62,6 +70,7 @@ class FakeRail(Rail):
             executed_at=now,
         )
         self._receipts[idempotency_key] = receipt
+        self._requests[idempotency_key] = request
         return receipt.model_copy(deep=True)
 
     def status(self, receipt_id: str) -> TraceResult:
