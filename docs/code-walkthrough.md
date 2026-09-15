@@ -714,7 +714,14 @@ class Rail(ABC):
         mandate_ref: str,
         idempotency_key: str,
         confirmation_token: str,
-    ) -> Receipt: ...
+    ) -> Receipt:
+        """Pay the route at most once for each idempotency key.
+
+        Reusing a key with the same route, amount, and mandate_ref returns the
+        original receipt. Reusing it with any difference raises RailError. The
+        quote time is not compared, so a fresh quote of the same route counts
+        as the same.
+        """
 
     @abstractmethod
     def status(self, receipt_id: str) -> TraceResult: ...
@@ -723,7 +730,7 @@ class Rail(ABC):
     def freeze(self, instrument_id: str) -> FreezeResult: ...
 ```
 
-A `Rail` is one payment provider. `name` and `simulated` are abstract properties, read as `rail.name` without brackets. `execute` requires a mandate reference and a confirmation token, so a rail cannot be called without evidence that the mandate engine approved the payment. It also takes an idempotency key, which names the one payment, while the mandate reference names the permission it was paid under. `freeze` returns a `FreezeResult`, so the agent can tell a card the issuer will not let it freeze from a freeze that failed.
+A `Rail` is one payment provider. `name` and `simulated` are abstract properties, read as `rail.name` without brackets. `execute` requires a mandate reference and a confirmation token, so a rail cannot be called without evidence that the mandate engine approved the payment. It also takes an idempotency key, which names the one payment, while the mandate reference names the permission it was paid under. The docstring on `execute`, the text in triple quotes, states the rule every rail must follow when a key comes back. The same route, amount, and mandate reference return the original receipt, and any difference raises `RailError`. The quote time is left out, so a fresh quote of the same route still counts as the same. It is the only docstring in the interfaces, because a signature cannot express that rule. A docstring is enough for Python to accept the method body, so it needs no `...`. `freeze` returns a `FreezeResult`, so the agent can tell a card the issuer will not let it freeze from a freeze that failed.
 
 ```python
 class Council(ABC):
@@ -1331,6 +1338,7 @@ class FakeRouter(Router):
 ```python
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from typing import Any
 
 from contracts.errors import RailError
 from contracts.interfaces import Rail
@@ -1360,6 +1368,7 @@ class FakeRail(Rail):
             for receipt_id, trace in (traces or {}).items()
         }
         self._receipts: dict[str, Receipt] = {}
+        self._requests: dict[str, tuple[dict[str, Any], str]] = {}
         self._failed_once: set[str] = set()
 
     @property
@@ -1371,7 +1380,7 @@ class FakeRail(Rail):
         return True
 ```
 
-The constructor copies any scripted traces, keyed by receipt id, so a test that edits its own trace afterwards changes nothing inside the rail. `traces or {}` uses an empty dictionary when no traces are given. `_receipts` maps each idempotency key to its receipt, and `_failed_once` remembers which keys have already failed. Both properties return fixed values: this rail is named `fake` and is always simulated.
+The constructor copies any scripted traces, keyed by receipt id, so a test that edits its own trace afterwards changes nothing inside the rail. `traces or {}` uses an empty dictionary when no traces are given. `_receipts` maps each idempotency key to its receipt. `_requests` maps the same key to the details it was first paid with: the route as a dictionary and the mandate reference, held together in a tuple. `Any` types the values of that dictionary, because a route's fields hold text, amounts, numbers, and lists. `_failed_once` remembers which keys have already failed. Both properties return fixed values: this rail is named `fake` and is always simulated.
 
 ```python
     def execute(
@@ -1381,7 +1390,13 @@ The constructor copies any scripted traces, keyed by receipt id, so a test that 
         idempotency_key: str,
         confirmation_token: str,
     ) -> Receipt:
+        request = (route.model_dump(exclude={"quoted_at"}), mandate_ref)
         if idempotency_key in self._receipts:
+            if self._requests[idempotency_key] != request:
+                raise RailError(
+                    f"Idempotency key {idempotency_key} was already used for a different "
+                    "route, amount, or mandate; nothing was charged."
+                )
             return self._receipts[idempotency_key].model_copy(deep=True)
         if idempotency_key == FAIL_ONCE_KEY and idempotency_key not in self._failed_once:
             self._failed_once.add(idempotency_key)
@@ -1400,10 +1415,13 @@ The constructor copies any scripted traces, keyed by receipt id, so a test that 
             executed_at=now,
         )
         self._receipts[idempotency_key] = receipt
+        self._requests[idempotency_key] = request
         return receipt.model_copy(deep=True)
 ```
 
-The order of the checks matters. A key that has already paid returns its stored receipt first, so a retry never pays twice. Next, the fail once key raises `RailError` the first time and is remembered, so the retry goes through. Only then is a new receipt made, numbered from the count of receipts so far. `:04d` pads the number with zeros to four digits, giving `fake-0001`. A failed attempt stores nothing, so it does not use up a number. The receipt records both the mandate reference and the key, and every return is a deep copy.
+`request` gathers the details that define one payment. `model_dump(exclude={"quoted_at"})` turns the route into a dictionary of its fields without the quote time, so a fresh quote of the same route gives an equal dictionary, and the amount is compared as one of those fields. Two dictionaries are equal when they hold the same keys with equal values, and two tuples are equal when each of their items is.
+
+The order of the checks matters. A key that has already paid is checked first. When its stored details equal the new ones, the stored receipt comes back, so a retry never pays twice. When anything differs, `RailError` is raised and nothing is stored, because a different payment under an old key is a mistake to report, not a retry. Next, the fail once key raises `RailError` the first time and is remembered, so the retry goes through. Only then is a new receipt made, numbered from the count of receipts so far. `:04d` pads the number with zeros to four digits, giving `fake-0001`. A failed attempt stores nothing, so it does not use up a number. The receipt records both the mandate reference and the key, the receipt and its details are stored under the key together, and every return is a deep copy.
 
 ```python
     def status(self, receipt_id: str) -> TraceResult:
@@ -1435,7 +1453,7 @@ The order of the checks matters. A key that has already paid returns its stored 
 
 ## The tests
 
-There are 123 tests. Each was written before the code it checks and was seen to fail first.
+There are 128 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -1623,7 +1641,9 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_fake_router.py` | `test_precheck_for_an_unscripted_kind_returns_an_empty_result` | An unknown kind gets empty lists and an unknown `ready` |
 | `test_fake_rail.py` | `test_fake_rail_implements_the_rail` | The fake is a complete `Rail`, named `fake` and simulated |
 | `test_fake_rail.py` | `test_execute_returns_a_completed_receipt_carrying_both_references` | A receipt is completed and records the mandate reference and the key |
-| `test_fake_rail.py` | `test_execute_is_idempotent_on_the_idempotency_key` | A repeated key returns the first receipt, even for another amount |
+| `test_fake_rail.py` | `test_reusing_a_key_with_the_same_details_returns_the_original_receipt` | The same key, route, amount, and mandate reference return the first receipt |
+| `test_fake_rail.py` | `test_a_fresh_quote_of_the_same_route_counts_as_the_same_details` | A later quote time alone does not count as a difference |
+| `test_fake_rail.py` | `test_reusing_a_key_with_any_difference_raises` | Runs for a different amount, rail, fee, and mandate reference; each raises `RailError` and the first receipt stays |
 | `test_fake_rail.py` | `test_one_mandate_can_pay_again_under_a_new_idempotency_key` | One mandate pays twice under two keys |
 | `test_fake_rail.py` | `test_returned_receipts_do_not_share_state` | Editing a returned receipt leaves the stored one unchanged |
 | `test_fake_rail.py` | `test_fail_once_key_fails_the_first_time_then_succeeds_once` | The scripted failure raises once, then one receipt is kept |
@@ -1636,7 +1656,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_fake_rail.py` | `test_freeze_is_not_supported_for_revolut_and_offers_a_deep_link` | Revolut returns `not_supported` with the placeholder link and a reason |
 | `test_fake_rail.py` | `test_freeze_fails_with_a_reason_for_an_unknown_issuer` | Runs for three bad ids; each fails with a reason and no link |
 
-Six parametrized tests add fourteen extra runs, which is how 109 test functions become 123 tests.
+Seven parametrized tests add seventeen extra runs, which is how 111 test functions become 128 tests.
 
 ## The suites
 

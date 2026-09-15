@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, including the fake router and fake rail and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, and `RailError`. At that point there are 123 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, including the fake router and fake rail and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, and the rule for reusing an idempotency key. At that point there are 128 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -357,7 +357,7 @@ The engine is a class that implements the `MandateEngine` interface. A module le
 | `ModelAdapter` | `complete(messages, tools) -> Message` | `ProviderModelAdapter`, `FakeModelAdapter` |
 | `Translator` | `explain(text, source_lang, target_lang) -> str` | Not yet |
 
-`tests/test_interfaces.py` checks that each interface declares exactly its listed members, no more and no fewer, and that none of them can be instantiated directly. Adding or removing a method breaks that test, which is what keeps the interfaces frozen. The `Ledger` interface was changed once on purpose, in commit `e8201df`, when `entries` and `head` became methods and `head` began returning the hash itself. The `Rail` interface was changed on purpose on 15 September, when `execute` gained `idempotency_key` and `freeze` began returning a `FreezeResult`. Because the member check sees only names, a second test pins those two signatures.
+`tests/test_interfaces.py` checks that each interface declares exactly its listed members, no more and no fewer, and that none of them can be instantiated directly. Adding or removing a method breaks that test, which is what keeps the interfaces frozen. The `Ledger` interface was changed once on purpose, in commit `e8201df`, when `entries` and `head` became methods and `head` began returning the hash itself. The `Rail` interface was changed on purpose on 15 September, when `execute` gained `idempotency_key` and `freeze` began returning a `FreezeResult`. Because the member check sees only names, a second test pins those two signatures. The rule for reusing an idempotency key is written as a docstring on `Rail.execute`, the only docstring in the interfaces, because a signature cannot express it.
 
 ## The hash chained ledger
 
@@ -563,7 +563,11 @@ Every route is up and within limits. The spread is a cost in the sending currenc
 
 ### Execute and idempotency
 
-`execute` takes the route, the mandate reference, the idempotency key, and the confirmation token. The key identifies one payment and the mandate reference identifies the permission it was paid under, so one standing rent mandate can pay every month under a new key each time. The receipt records both. Repeating a key returns the first receipt unchanged, so a retried request cannot pay twice. Receipts are numbered from `fake-0001` and always come back completed and simulated.
+`execute` takes the route, the mandate reference, the idempotency key, and the confirmation token. The key identifies one payment and the mandate reference identifies the permission it was paid under, so one standing rent mandate can pay every month under a new key each time. The receipt records both.
+
+Reusing a key with the same route, amount, and mandate reference returns the first receipt unchanged, so a retried request cannot pay twice. Reusing it with any difference raises `RailError` and charges nothing, because a different payment under an old key is a mistake to report, not a retry. The quote time is not compared, so a fresh quote of the same route counts as the same. The confirmation token is not compared either. The rule is part of the `Rail` contract, written in the docstring of `Rail.execute`, so every real rail must follow it as well as the fake.
+
+Receipts are numbered from `fake-0001` and always come back completed and simulated.
 
 The key `txn-fail-once` raises `RailError` the first time it is seen and succeeds after that. A failed attempt stores no receipt. This is how task T12, a rail that fails on execute without charging twice, can be scripted. Only the idempotency key is matched, never the mandate reference.
 
@@ -575,7 +579,7 @@ The key `txn-fail-once` raises `RailError` the first time it is seen and succeed
 
 ### Decisions of 15 September
 
-Six decisions shaped the fakes and the contracts under them.
+Seven decisions shaped the fakes and the contracts under them.
 
 1. `Rail.freeze` returns a `FreezeResult` instead of a bool, so the agent can tell a card the issuer will not let it freeze from a freeze that went wrong.
 2. `Rail.execute` takes `idempotency_key` as its own parameter, and `Receipt` records it next to `mandate_ref`. Idempotency rests on the key, and the scripted failure is matched against the key.
@@ -583,6 +587,7 @@ Six decisions shaped the fakes and the contracts under them.
 4. Rule ids from the router use the knowledge base style. An unscripted precheck returns an empty result instead of raising.
 5. The India route runs from India to Singapore, INR to SGD, which is the direction of tasks T18 and T19.
 6. Wise shows no spread, and a bank wire route with a 2.5 percent spread stands next to it, so a comparison shows where a traditional transfer hides its cost.
+7. Reusing an idempotency key with the same route, amount, and mandate reference returns the original receipt, and reusing it with any difference raises `RailError`. The rule is written in the `Rail.execute` docstring, so it binds every rail and not only the fake.
 
 ## Decisions of 14 September
 
@@ -615,15 +620,15 @@ Every change was written test first. The test was run and seen to fail before th
 | Test file | Tests | Covers |
 | --- | --- | --- |
 | `tests/test_mandate.py` | 24 | Every rule R01 to R11, schema rejection of bad actions, tier coverage |
+| `tests/test_fake_rail.py` | 21 | Receipts carrying both references, a reused key with the same details and with each kind of difference, a fresh quote, the scripted failure, traces, copies, and all three freeze results |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
 | `tests/test_schemas.py` | 19 | Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits |
 | `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
-| `tests/test_fake_rail.py` | 16 | Receipts carrying both references, idempotency on the key, the scripted failure, traces, copies, and all three freeze results |
 | `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 123 | |
+| Total | 128 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -669,15 +674,19 @@ All times are local time.
 | `f6419ce` | 15 Sep 00:41 | Contracts: limits on ConfirmationRequest and AgentReply |
 | `6fa90a0` | 15 Sep 00:45 | Docs: AgentReply, ConfirmationRequest and knowledge base |
 | `f2e4cf6` | 15 Sep 16:57 | Fake router and fake rail for the agent loop |
+| `daa0754` | 15 Sep 17:35 | Fake rails: freeze result, explicit idempotency, IN>SG, honest spreads |
+| `97a6211` | 15 Sep 17:48 | Fake rail: reject a reused idempotency key with different details |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
+
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and the documentation that describes it are on the branch `lane-a/idempotency-contract`, in pull request 1.
 
 ## Open items
 
 1. No round trip has been run against the real provider APIs. Every provider test uses stand ins built from the SDK classes. One short real two step tool run on each provider, with keys in `.env`, would confirm the formats.
 2. When DashScope makes a tool call and the conversation then moves to Anthropic, for example after a fallback in the middle of a loop, that assistant turn reaches Anthropic with no reasoning blocks. Whether `claude-opus-5` accepts such a turn can only be confirmed with a real call.
 3. A failed tool is sent back as ordinary text. There is no way yet to mark a tool result as an error, which Anthropic supports with `is_error`.
-4. Lanes B and C need to know about four contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`, and on 15 September `Rail.execute` gained `idempotency_key`, `Rail.freeze` began returning `FreezeResult`, `Receipt` gained `idempotency_key`, and `RailError` moved to `contracts/errors.py`.
+4. Lanes B and C need to know about four contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`, and on 15 September `Rail.execute` gained `idempotency_key`, `Rail.freeze` began returning `FreezeResult`, `Receipt` gained `idempotency_key`, `RailError` moved to `contracts/errors.py`, and the `Rail.execute` docstring set the rule for reusing an idempotency key.
 5. The ledger lives in memory only. Attack `X22`, a tampered ledger file, needs the ledger to be saved and loaded.
 6. A refusal from the model is an error and does not switch providers. Revisit this if a refusal on one provider should be retried on the other.
 7. `Anchor`, `Council`, and `Translator` have interfaces but no implementations, `Router` and `Rail` have only fakes, and the agent loop exists only inside a test.
@@ -688,4 +697,4 @@ The project scaffold and the mandate engine were built earlier the same day, in 
 12. The Revolut deep link in the fake rail is a placeholder on `example.invalid`. The real link needs a source before a demo.
 13. The rule id `in_upi_paynow_purpose_001` has no entry in the knowledge base, and there is no India file yet. The purpose limit on UPI to PayNow needs a sourced entry before a real router cites it.
 14. The fees, spreads, and arrival times in the fake router are fixtures. A real router must take them from the provider or from a sourced entry.
-15. The fake rail returns the first receipt when a key is repeated with a different route or amount. A real rail should refuse that as a conflict. The mandate engine already refuses a replayed action under R10 before it reaches a rail.
+15. Closed. A reused idempotency key with a different route, amount, or mandate reference now raises `RailError` instead of returning the first receipt. The rule is written in the `Rail.execute` docstring, so real rails must follow it too.
