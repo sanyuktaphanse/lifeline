@@ -4,6 +4,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.READ_BALANCE: Tier.T0,
     ActionType.TRACE_TRANSFER: Tier.T0,
     ActionType.PRECHECK: Tier.T0,
+    ActionType.GET_QUOTE: Tier.T0,
     ActionType.SET_REMINDER: Tier.T1,
     ActionType.TRANSFER: Tier.T2,
     ActionType.ADD_PAYEE: Tier.T2,

@@ -12,6 +12,7 @@ from core.tiers import TIERS
 def _mandate(valid_from: datetime | None = None, valid_until: datetime | None = None) -> Mandate:
     now = datetime.now(timezone.utc)
     return Mandate(
+        id="mandate-student_001-v1",
         user_id="student_001",
         currency="SGD",
         per_txn_limit=Decimal("1500"),

@@ -38,6 +38,7 @@ class ActionType(str, Enum):
     EXPORT_CREDENTIALS = "export_credentials"
     TRACE_TRANSFER = "trace_transfer"
     PRECHECK = "precheck"
+    GET_QUOTE = "get_quote"
 
 
 class RouteStatus(str, Enum):
@@ -101,6 +102,7 @@ class StandingMandate(BaseModel):
 
 
 class Mandate(BaseModel):
+    id: str
     user_id: str
     currency: CurrencyCode
     per_txn_limit: Decimal
@@ -225,6 +227,7 @@ class ConfirmationRequest(BaseModel):
     confirmation_token: str
     warning_key: str
     routes: list[Route]
+    selected_route: Route | None = None
     expires_in_seconds: int = Field(default=300, gt=0)
 
 

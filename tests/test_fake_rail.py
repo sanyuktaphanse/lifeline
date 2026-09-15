@@ -21,9 +21,9 @@ TOKEN = "confirm-token-test"
 MANDATE_REF = "mandate-rent-landlord_sp"
 
 
-def _route(amount: str = "1200") -> Route:
+def _route(amount: str = "1200", rail: str = "wise") -> Route:
     return Route(
-        rail="wise",
+        rail=rail,
         corridor="SG>BR",
         amount=Decimal(amount),
         currency_from="SGD",
@@ -155,6 +155,26 @@ def test_fail_once_is_matched_on_the_idempotency_key_not_the_mandate_ref():
     receipt = _execute(FakeRail(), "txn-0700-rent", mandate_ref=FAIL_ONCE_KEY)
 
     assert receipt.status is ReceiptStatus.COMPLETED
+
+
+def test_a_failed_key_is_not_recorded_so_another_route_may_retry_it():
+    rail = FakeRail()
+
+    with pytest.raises(RailError):
+        rail.execute(_route(), MANDATE_REF, FAIL_ONCE_KEY, TOKEN)
+    retry = rail.execute(_route(rail="bank_wire"), MANDATE_REF, FAIL_ONCE_KEY, TOKEN)
+
+    assert retry.status is ReceiptStatus.COMPLETED
+    assert retry.rail == "bank_wire"
+
+
+def test_fail_once_keys_can_be_chosen_when_the_rail_is_made():
+    rail = FakeRail(fail_once_keys={"student_001:t1:propose_transfer:1"})
+
+    with pytest.raises(RailError):
+        _execute(rail, "student_001:t1:propose_transfer:1")
+
+    assert _execute(rail, FAIL_ONCE_KEY).status is ReceiptStatus.COMPLETED
 
 
 def test_failure_leaves_no_receipt_behind():

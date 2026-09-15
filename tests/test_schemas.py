@@ -117,8 +117,13 @@ def test_trace_transfer_and_precheck_are_tier_zero():
     assert TIERS[ActionType.PRECHECK] is Tier.T0
 
 
+def test_get_quote_is_tier_zero():
+    assert TIERS[ActionType.GET_QUOTE] is Tier.T0
+
+
 def test_standing_mandates_default_to_empty():
     mandate = Mandate(
+        id="mandate-student_001-v1",
         user_id="student_001",
         currency="SGD",
         per_txn_limit=Decimal("1500"),
@@ -131,6 +136,23 @@ def test_standing_mandates_default_to_empty():
     )
 
     assert mandate.standing_mandates == []
+
+
+def test_mandate_requires_an_id():
+    fields = {
+        "user_id": "student_001",
+        "currency": "SGD",
+        "per_txn_limit": Decimal("1500"),
+        "daily_limit": Decimal("2500"),
+        "allowed_payees": {"landlord_sp"},
+        "allowed_corridors": {"SG>BR"},
+        "allowed_purposes": {"rent"},
+        "valid_from": NOW - timedelta(days=30),
+        "valid_until": NOW + timedelta(days=30),
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        Mandate(**fields)
+    assert [error["loc"] for error in excinfo.value.errors()] == [("id",)]
 
 
 def test_tool_result_message_carries_source_tool_result():
@@ -201,6 +223,22 @@ def test_confirmation_request_validates_with_a_default_expiry():
     assert confirmation.action.amount == Decimal("1200")
     assert confirmation.routes[0].rail == "wise"
     assert confirmation.expires_in_seconds == 300
+
+
+def test_confirmation_request_carries_an_optional_selected_route():
+    route = Route(**_route_fields())
+
+    confirmation = ConfirmationRequest(
+        action=_rent_action(),
+        confirmation_token="a" * 64,
+        warning_key="warn.transfer.irreversible",
+        routes=[route, Route(**_route_fields(rail="bank_wire"))],
+        selected_route=route,
+    )
+
+    assert _confirmation().selected_route is None
+    assert confirmation.selected_route == route
+    assert len(confirmation.routes) == 2
 
 
 def test_agent_reply_validates_with_every_part():
