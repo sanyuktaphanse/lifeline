@@ -6,4 +6,4 @@ evidence:
 	$(PYTHON) -m core.harness
 
 dev:
-	$(PYTHON) -m uvicorn --factory api.main:create_app --reload --port 8000
+	$(PYTHON) -m uvicorn --factory api.main:create_app --reload --host 127.0.0.1 --port 8000

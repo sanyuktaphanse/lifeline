@@ -82,10 +82,18 @@ class FakeRail(Rail):
         self._requests[idempotency_key] = request
         return receipt.model_copy(deep=True)
 
+    def restore(self, receipt: Receipt, route: Route, mandate_ref: str) -> None:
+        key = receipt.idempotency_key
+        self._receipts[key] = receipt.model_copy(deep=True)
+        self._requests[key] = (route.model_dump(exclude={"quoted_at"}), mandate_ref)
+
     def status(self, receipt_id: str) -> TraceResult:
         trace = self._traces.get(receipt_id)
         if trace is None:
             raise RailError(f"No scripted trace for receipt {receipt_id}.")
+        issued = next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+        if issued is not None:
+            trace = trace.model_copy(update={"stage_entered_at": issued.stage_entered_at})
         return trace.model_copy(deep=True)
 
     def freeze(self, instrument_id: str) -> FreezeResult:

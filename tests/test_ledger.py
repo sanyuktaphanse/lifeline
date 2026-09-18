@@ -88,3 +88,43 @@ def test_entries_are_the_contract_ledger_entry_with_a_utc_ts():
 
     assert type(entry) is LedgerEntry
     assert entry.ts.utcoffset() == timedelta(0)
+
+
+def test_a_file_ledger_writes_one_json_line_per_entry_and_reloads_an_intact_chain(tmp_path):
+    from core.ledger import JsonlLedger
+
+    path = tmp_path / "data" / "ledger.jsonl"
+    first = JsonlLedger(path)
+    first.append("agent", "proposal", {"user_id": "student_001", "amount": "1200", "nested": {"a": [1, 2.5, None]}})
+    first.append("agent", "decision", {"user_id": "student_001", "rule_ids": ["R11"]})
+
+    reloaded = JsonlLedger(path)
+
+    assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+    assert reloaded.entries() == first.entries()
+    assert reloaded.verify() is None
+    third = reloaded.append("agent", "note", {"user_id": "student_001"})
+    assert third.seq == 3
+    assert third.prev_hash == first.head()
+    assert JsonlLedger(path).verify() is None
+
+
+def test_a_tampered_file_ledger_loads_and_verify_names_the_first_broken_entry(tmp_path):
+    from core.ledger import JsonlLedger
+
+    path = tmp_path / "ledger.jsonl"
+    ledger = JsonlLedger(path)
+    ledger.append("agent", "proposal", {"amount": "1200"})
+    ledger.append("agent", "decision", {"rule_ids": ["R11"]})
+    path.write_text(path.read_text(encoding="utf-8").replace('"1200"', '"9999"'), encoding="utf-8")
+
+    assert JsonlLedger(path).verify() == 1
+
+
+def test_a_missing_file_is_an_empty_ledger(tmp_path):
+    from core.ledger import JsonlLedger
+
+    ledger = JsonlLedger(tmp_path / "none" / "ledger.jsonl")
+
+    assert ledger.entries() == []
+    assert not (tmp_path / "none" / "ledger.jsonl").exists()
