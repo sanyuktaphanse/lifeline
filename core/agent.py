@@ -25,10 +25,14 @@ from contracts.schemas import (
     Route,
     RouteStatus,
     Source,
+    StandingEvent,
+    StandingMandate,
+    StandingTerms,
     Tier,
     ToolCall,
 )
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 
 ACTOR = "agent"
@@ -72,7 +76,8 @@ SYSTEM_PROMPT = (
 )
 
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
-ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
+STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
 
 
@@ -94,9 +99,23 @@ TOOLS = [
     ),
     _tool(
         "propose_transfer",
-        "Propose a transfer. Nothing moves until the student confirms it.",
-        {name: TEXT for name in ACTION_FIELDS},
+        "Propose a transfer. Nothing moves until the student confirms it, unless it is a run of one of "
+        "their standing mandates within its pattern, named by standing_mandate_id.",
+        {**{name: TEXT for name in ACTION_FIELDS}, "standing_mandate_id": TEXT},
         list(ACTION_FIELDS),
+    ),
+    _tool(
+        "create_standing_mandate",
+        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28. "
+        "Nothing is set up until the student confirms it.",
+        {**{name: TEXT for name in ACTION_FIELDS}, **{name: TEXT for name in STANDING_TERMS}},
+        [*ACTION_FIELDS, *STANDING_TERMS],
+    ),
+    _tool(
+        "cancel_standing_run",
+        "Skip the next run of a standing mandate, by its id.",
+        {"standing_mandate_id": TEXT},
+        ["standing_mandate_id"],
     ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
     _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
@@ -136,6 +155,8 @@ TOOL_ACTIONS = {
     "add_payee": ActionType.ADD_PAYEE,
     "freeze_card": ActionType.FREEZE_CARD,
     "change_limit": ActionType.CHANGE_LIMIT,
+    "create_standing_mandate": ActionType.CREATE_STANDING_MANDATE,
+    "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -144,6 +165,8 @@ REQUIRED_ARGUMENTS = {
     "get_quote": ("corridor", "amount"),
     "add_payee": ("payee_id",),
     "freeze_card": ("instrument_id",),
+    "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
+    "cancel_standing_run": ("standing_mandate_id",),
 }
 
 TEXTS = {
@@ -158,6 +181,8 @@ TEXTS = {
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
         "too_many_steps": "I stopped before finishing. Please ask again.",
+        "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
+        "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
@@ -177,6 +202,8 @@ TEXTS = {
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
+        "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
+        "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
@@ -196,6 +223,8 @@ TEXTS = {
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
+        "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
+        "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
@@ -317,6 +346,26 @@ def _closing_results(calls: list[ToolCall]) -> list[Message]:
     return results
 
 
+def _standing_from(action: Action, confirmed_at: datetime, token: str) -> StandingMandate:
+    terms = action.standing_terms
+    if terms is None:
+        raise ValueError("A standing mandate is created only from an action the engine checked for its terms.")
+    return StandingMandate(
+        id=action.standing_mandate_id or "",
+        payee_id=action.payee_id or "",
+        amount=action.amount,
+        tolerance_pct=terms.tolerance_pct,
+        schedule=terms.schedule,
+        corridor=action.corridor,
+        purpose=action.purpose or "",
+        notice_hours=terms.notice_hours,
+        cancel_window_hours=terms.cancel_window_hours,
+        confirmed_at=confirmed_at,
+        confirmation_token=token,
+        active=True,
+    )
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -385,6 +434,10 @@ class AgentLoop:
         self._conversations: dict[str, list[Message]] = {}
         self._consumed: dict[str, tuple[str, Action]] = {}
         self._closed: dict[str, tuple[str, str, str]] = {}
+        self._standing_notices: dict[tuple[str, str, str], datetime] = {}
+        self._standing_cancelled: set[tuple[str, str, str]] = set()
+        self._standing_attempted: set[tuple[str, str, str]] = set()
+        self._standing_skipped: set[tuple[str, str, str]] = set()
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -507,22 +560,22 @@ class AgentLoop:
         if missing:
             return None, {"error": f"{call.name} needs {', '.join(missing)}."}
         key = f"{user_id}:t{trail.turn}:{call.name}:{number}"
+        fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
+        if action_type is ActionType.CREATE_STANDING_MANDATE:
+            fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
+            fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
         try:
             action = Action(
                 type=action_type,
                 source=Source.USER_TURN,
                 idempotency_key=key,
                 requested_at=_now(),
-                **{
-                    name: call.arguments[name]
-                    for name in ACTION_ARGUMENTS
-                    if call.arguments.get(name) not in (None, "")
-                },
+                **fields,
             )
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE)
+        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
         untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
@@ -544,6 +597,10 @@ class AgentLoop:
             return self._reply(trail, lang, _text(lang, "settings"), decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
+        if action.type is ActionType.TRANSFER:
+            if decision.allowed:
+                return self._pay_standing_now(user_id, mandate, lang, trail, action, decision)
+            return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
         if not decision.allowed:
             return decision, {"refused": True, "rule_ids": decision.rule_ids, "reasons": decision.reasons}
         result = self._run_now(user_id, action, call.arguments, trail)
@@ -580,6 +637,11 @@ class AgentLoop:
                 return {"trace": self._rails[rail_name].status(receipt_id).model_dump(mode="json")}
             except RailError as error:
                 return {"error": str(error)}
+        if action.type is ActionType.CANCEL_STANDING_RUN:
+            standing = self._standing(user_id, action.standing_mandate_id or "")
+            period = self._next_unrun_period(user_id, standing, action.requested_at)
+            self._standing_cancelled.add((user_id, standing.id, period))
+            return {"cancelled": {"standing_mandate_id": standing.id, "period": period}}
         if action.type is ActionType.PRECHECK:
             result = self._router.precheck(
                 str(arguments.get("action_kind", "")),
@@ -624,6 +686,20 @@ class AgentLoop:
             pending.display_name = str(arguments.get("display_name") or action.payee_id)
             hours = self._mandates[user_id].cooling_hours
             text = _text(lang, "confirm_payee", payee=action.payee_id, display_name=pending.display_name, hours=hours)
+        elif action.type is ActionType.CREATE_STANDING_MANDATE and action.standing_terms is not None:
+            terms = action.standing_terms
+            text = _text(
+                lang,
+                "confirm_standing",
+                amount=action.amount,
+                currency=action.currency,
+                payee=action.payee_id,
+                purpose=action.purpose,
+                schedule=terms.schedule,
+                tolerance=terms.tolerance_pct,
+                notice=terms.notice_hours,
+                cancel=terms.cancel_window_hours,
+            )
         else:
             text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
         self._pending[token] = pending
@@ -671,43 +747,8 @@ class AgentLoop:
             return self._offer_next_route(lang, trail, token, pending, error)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
-        self._history.setdefault(user_id, []).append(action)
-        self._receipt_rails.setdefault(user_id, {})[receipt.receipt_id] = route.rail
-        self._write(
-            trail,
-            "execution",
-            {
-                "action": _action_json(action),
-                "route": route.model_dump(mode="json"),
-                "mandate_ref": mandate.id,
-                "idempotency_key": action.idempotency_key,
-            },
-        )
-        self._write(trail, "receipt", {"rail": route.rail, "receipt": receipt.model_dump(mode="json")})
-        if route.simulated != receipt.simulated:
-            self._write(
-                trail,
-                "note",
-                {
-                    "kind": "simulated_mismatch",
-                    "idempotency_key": action.idempotency_key,
-                    "rail": route.rail,
-                    "receipt_id": receipt.receipt_id,
-                    "route_simulated": route.simulated,
-                    "receipt_simulated": receipt.simulated,
-                },
-            )
-        text = _text(
-            lang,
-            "sent",
-            amount=receipt.amount,
-            currency=receipt.currency,
-            rail=receipt.rail,
-            receipt_id=receipt.receipt_id,
-        )
-        if receipt.simulated:
-            text = f"{text} {_text(lang, 'simulated')}"
-        return self._reply(trail, lang, text, decision=decision, receipt=receipt)
+        self._record_payment(user_id, trail, action, route, receipt, mandate.id)
+        return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 
     def _unknown_token(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
         consumed = self._consumed.get(token)
@@ -770,6 +811,8 @@ class AgentLoop:
         freeze: FreezeResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
+        elif action.type is ActionType.CREATE_STANDING_MANDATE:
+            text = self._create_standing(user_id, lang, trail, action, token)
         else:
             text, freeze = self._freeze(lang, trail, action)
         return self._reply(trail, lang, text, decision=decision, freeze=freeze)
@@ -782,7 +825,7 @@ class AgentLoop:
             return _text(lang, "payee_exists", payee=payee)
         added_at = _now()
         allowed_from = added_at + timedelta(hours=mandate.cooling_hours)
-        version = self._new_version(user_id, payee, added_at)
+        version = self._new_version(user_id, self._with_payee(user_id, payee, added_at))
         self._write(trail, "execution", {"action": _action_json(action), "result": {"payee_added": payee}})
         self._write(
             trail,
@@ -805,17 +848,209 @@ class AgentLoop:
             allowed_from=allowed_from.isoformat(timespec="seconds"),
         )
 
-    def _new_version(
-        self, user_id: str, payee: str, added_at: datetime, version_id: str | None = None
-    ) -> Mandate:
+    def _with_payee(self, user_id: str, payee: str, added_at: datetime) -> dict[str, Any]:
         current = self._mandates[user_id]
-        version = current.model_copy(
-            update={
-                "id": version_id or _next_version(current.id),
-                "allowed_payees": current.allowed_payees | {payee},
-                "payee_added_at": {**current.payee_added_at, payee: added_at},
-            }
+        return {
+            "allowed_payees": current.allowed_payees | {payee},
+            "payee_added_at": {**current.payee_added_at, payee: added_at},
+        }
+
+    def _with_standing(self, user_id: str, standing: StandingMandate) -> dict[str, Any]:
+        return {"standing_mandates": [*self._mandates[user_id].standing_mandates, standing]}
+
+    def _create_standing(self, user_id: str, lang: str, trail: _Trail, action: Action, token: str) -> str:
+        standing = _standing_from(action, _now(), token)
+        version = self._new_version(user_id, self._with_standing(user_id, standing))
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"standing_created": standing.id}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "standing_created",
+                "idempotency_key": action.idempotency_key,
+                "standing_mandate": standing.model_dump(mode="json", exclude={"confirmation_token"}),
+                "action": _action_json(action),
+                "new_mandate_id": version.id,
+            },
         )
+        return _text(
+            lang,
+            "standing_created",
+            standing_id=standing.id,
+            amount=standing.amount,
+            currency=action.currency,
+            payee=standing.payee_id,
+            schedule=standing.schedule,
+        )
+
+    def _standing(self, user_id: str, standing_id: str) -> StandingMandate:
+        return next(s for s in self._mandates[user_id].standing_mandates if s.id == standing_id)
+
+    def _ran(self, user_id: str, standing: StandingMandate, period: str) -> bool:
+        return any(
+            past.type is ActionType.TRANSFER
+            and past.standing_mandate_id == standing.id
+            and (occurrence_containing(standing.schedule, standing.notice_hours, past.requested_at) or ("",))[0] == period
+            for past in self._history.get(user_id, [])
+        )
+
+    def _next_unrun_period(self, user_id: str, standing: StandingMandate, at: datetime) -> str:
+        period, due = next_occurrence(standing.schedule, at)
+        if self._ran(user_id, standing, period):
+            period, due = next_occurrence(standing.schedule, due + timedelta(hours=24))
+        return period
+
+    def run_due_standing_mandates(self, now: datetime) -> list[StandingEvent]:
+        events: list[StandingEvent] = []
+        for user_id, mandate in list(self._mandates.items()):
+            for standing in mandate.standing_mandates:
+                occurrence = occurrence_containing(standing.schedule, standing.notice_hours, now)
+                if not standing.active or occurrence is None:
+                    continue
+                period, due = occurrence
+                key = (user_id, standing.id, period)
+                if key in self._standing_attempted or self._ran(user_id, standing, period):
+                    continue
+                event = {
+                    "user_id": user_id,
+                    "standing_mandate_id": standing.id,
+                    "period": period,
+                    "due_at": due,
+                    "amount": standing.amount,
+                    "currency": mandate.currency,
+                    "payee_id": standing.payee_id,
+                }
+                if key in self._standing_cancelled:
+                    if key not in self._standing_skipped:
+                        self._standing_skipped.add(key)
+                        self._write(self._attempt_trail(user_id, mandate), "note", {"kind": "standing_skipped", "standing_mandate_id": standing.id, "period": period})
+                        events.append(StandingEvent(kind="skipped", **event))
+                    continue
+                noticed = self._standing_notices.get(key)
+                if noticed is None:
+                    noticed = self._standing_notices[key] = now
+                    cancel_until = now + timedelta(hours=standing.cancel_window_hours)
+                    self._write(
+                        self._attempt_trail(user_id, mandate),
+                        "note",
+                        {
+                            "kind": "standing_notice",
+                            "standing_mandate_id": standing.id,
+                            "period": period,
+                            "due_at": due.isoformat(),
+                            "noticed_at": now.isoformat(),
+                            "cancel_until": cancel_until.isoformat(),
+                        },
+                    )
+                    events.append(StandingEvent(kind="notice", cancel_until=cancel_until, **event))
+                if now >= noticed + timedelta(hours=standing.cancel_window_hours):
+                    events.append(self._run_standing(user_id, standing, period, now, event))
+        return events
+
+    def _run_standing(
+        self, user_id: str, standing: StandingMandate, period: str, now: datetime, event: dict[str, Any]
+    ) -> StandingEvent:
+        mandate = self._mandates[user_id]
+        trail = self._attempt_trail(user_id, mandate)
+        action = Action(
+            type=ActionType.TRANSFER,
+            source=Source.STANDING_MANDATE,
+            idempotency_key=f"{user_id}:standing:{standing.id}:{period}",
+            requested_at=now,
+            amount=standing.amount,
+            currency=mandate.currency,
+            corridor=standing.corridor,
+            payee_id=standing.payee_id,
+            purpose=standing.purpose,
+            standing_mandate_id=standing.id,
+        )
+        self._standing_attempted.add((user_id, standing.id, period))
+        self._write(
+            trail,
+            "proposal",
+            {"standing_run": {"standing_mandate_id": standing.id, "period": period}, "action": _action_json(action)},
+        )
+        decision = self._engine.check(action, mandate, self._history.get(user_id, []))
+        self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
+        if not decision.allowed or decision.requires_confirmation:
+            return StandingEvent(kind="needs_student", decision=decision, **event)
+        receipt = self._pay(user_id, trail, action, standing.id, standing.confirmation_token)
+        if receipt is None:
+            return StandingEvent(kind="rail_failed", decision=decision, **event)
+        return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
+
+    def _pay_standing_now(
+        self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, decision: Decision
+    ) -> AgentReply:
+        standing = self._standing(user_id, action.standing_mandate_id or "")
+        receipt = self._pay(user_id, trail, action, standing.id, standing.confirmation_token)
+        if receipt is None:
+            return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
+        return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
+
+    def _pay(
+        self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
+    ) -> Receipt | None:
+        routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
+        route = self._choose(routes, set())
+        if route is None:
+            return None
+        try:
+            receipt = self._rails[route.rail].execute(route, mandate_ref, action.idempotency_key, token)
+        except RailError as error:
+            self._write(
+                trail,
+                "note",
+                {"idempotency_key": action.idempotency_key, "rail": route.rail, "rail_error": str(error), "executed": False},
+            )
+            return None
+        self._record_payment(user_id, trail, action, route, receipt, mandate_ref)
+        return receipt
+
+    def _record_payment(
+        self, user_id: str, trail: _Trail, action: Action, route: Route, receipt: Receipt, mandate_ref: str
+    ) -> None:
+        self._history.setdefault(user_id, []).append(action)
+        self._receipt_rails.setdefault(user_id, {})[receipt.receipt_id] = route.rail
+        self._write(
+            trail,
+            "execution",
+            {
+                "action": _action_json(action),
+                "route": route.model_dump(mode="json"),
+                "mandate_ref": mandate_ref,
+                "idempotency_key": action.idempotency_key,
+            },
+        )
+        self._write(trail, "receipt", {"rail": route.rail, "receipt": receipt.model_dump(mode="json")})
+        if route.simulated != receipt.simulated:
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "simulated_mismatch",
+                    "idempotency_key": action.idempotency_key,
+                    "rail": route.rail,
+                    "receipt_id": receipt.receipt_id,
+                    "route_simulated": route.simulated,
+                    "receipt_simulated": receipt.simulated,
+                },
+            )
+
+    def _sent_text(self, lang: str, receipt: Receipt) -> str:
+        text = _text(
+            lang,
+            "sent",
+            amount=receipt.amount,
+            currency=receipt.currency,
+            rail=receipt.rail,
+            receipt_id=receipt.receipt_id,
+        )
+        return f"{text} {_text(lang, 'simulated')}" if receipt.simulated else text
+
+    def _new_version(self, user_id: str, update: dict[str, Any], version_id: str | None = None) -> Mandate:
+        current = self._mandates[user_id]
+        version = current.model_copy(update={"id": version_id or _next_version(current.id), **update})
         self._versions[version.id] = version
         self._mandates[user_id] = version
         return version
@@ -970,9 +1205,32 @@ class AgentLoop:
                 payee = entry.payload["payee_id"]
                 if mandate is not None and payee not in mandate.payee_added_at:
                     added_at = datetime.fromisoformat(entry.payload["added_at"])
-                    self._new_version(user_id, payee, added_at, entry.payload.get("new_mandate_id"))
+                    update = self._with_payee(user_id, payee, added_at)
+                    self._new_version(user_id, update, entry.payload.get("new_mandate_id"))
+            elif entry.kind == "note" and entry.payload.get("kind") == "standing_created":
+                self._rebuild_standing(user_id, entry.payload)
+            elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
+                key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
+                self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+            elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
+                self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
+            if entry.kind == "proposal" and "standing_run" in entry.payload:
+                run = entry.payload["standing_run"]
+                self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
+            if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
+                cancelled = entry.payload["result"]["cancelled"]
+                self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
         for waited in waiting.values():
             self._restore_pending(waited)
+
+    def _rebuild_standing(self, user_id: str, payload: dict[str, Any]) -> None:
+        mandate = self._mandates.get(user_id)
+        if mandate is None or any(s.id == payload["standing_mandate"]["id"] for s in mandate.standing_mandates):
+            return
+        action = Action.model_validate(payload["action"])
+        token = self._engine.confirmation_token_for(action, mandate)
+        standing = StandingMandate.model_validate({**payload["standing_mandate"], "confirmation_token": token})
+        self._new_version(user_id, self._with_standing(user_id, standing), payload.get("new_mandate_id"))
 
     def _maybe_waiting(
         self, user_id: str, entry: LedgerEntry, proposal: dict[str, Any], waiting: dict[str, "_Waiting"]

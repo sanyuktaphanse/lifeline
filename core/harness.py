@@ -10,11 +10,12 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Role, Source, ToolCall
+from contracts.schemas import AgentReply, Mandate, Message, Role, Source, StandingEvent, ToolCall
 from core.agent import AgentLoop
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
+from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail
 from rails.fake_router import FakeRouter
 
@@ -43,7 +44,8 @@ FIXTURE_MANDATE: dict[str, Any] = {
     "allowed_purposes": ["rent"],
 }
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
-FIXTURE_VALIDITY = timedelta(days=30)
+# Long enough to cover a standing run that falls due up to two months ahead.
+FIXTURE_VALIDITY = timedelta(days=70)
 
 
 @dataclass
@@ -148,6 +150,42 @@ def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]
     return [f"{where}: the model did not receive {text!r}" for text in wanted if text not in seen]
 
 
+def _run_due_time(mandate: Mandate, when: str) -> datetime:
+    standing = mandate.standing_mandates[-1]
+    now = datetime.now(timezone.utc)
+    period, due = next_occurrence(standing.schedule, now)
+    if due - timedelta(hours=standing.notice_hours) <= now + timedelta(minutes=1):
+        period, due = next_occurrence(standing.schedule, due + RUN_WINDOW_AFTER_DUE)
+    notice_at = due - timedelta(hours=standing.notice_hours)
+    if when == "notice":
+        return notice_at + timedelta(minutes=1)
+    if when == "after_cancel_window":
+        return notice_at + timedelta(hours=standing.cancel_window_hours, minutes=2)
+    raise ValueError(f"run_due must be notice or after_cancel_window, not {when!r}")
+
+
+def _judge_events(where: str, events: list[StandingEvent], expected: list[dict[str, Any]]) -> list[str]:
+    kinds = [event.kind for event in events]
+    if len(events) != len(expected):
+        return [f"{where}: events were {kinds}, expected {[wanted.get('kind') for wanted in expected]}"]
+    failures = []
+    for event, wanted in zip(events, expected):
+        view = {
+            "kind": event.kind,
+            "standing_mandate_id": event.standing_mandate_id,
+            "period": event.period,
+            "rule_ids": event.decision.rule_ids if event.decision else [],
+            "tier": event.decision.tier.value if event.decision else None,
+            "receipt_mandate_ref": event.receipt.mandate_ref if event.receipt else None,
+        }
+        failures += [
+            f"{where}: event {name} was {view.get(name)!r}, expected {value!r}"
+            for name, value in wanted.items()
+            if view.get(name) != value
+        ]
+    return failures
+
+
 def _token(confirm: Any, replies: list[AgentReply]) -> str:
     if confirm == "latest":
         source = next((reply for reply in reversed(replies) if reply.confirmation), None)
@@ -176,18 +214,23 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         adapter = FakeModelAdapter(responses)
         fixtures = scenario.get("fixtures", {})
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
+        mandates = {USER: _mandate(fixtures.get("mandate", {}))}
         loop = AgentLoop(
             adapter=adapter,
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
             rails=_rails(),
-            mandates={USER: _mandate(fixtures.get("mandate", {}))},
+            mandates=mandates,
             balances={USER: balances},
             pending={},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
+            if "run_due" in turn:
+                events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
+                result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
+                continue
             message = Message(
                 role=Role.USER,
                 text=turn["user"],

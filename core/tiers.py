@@ -6,6 +6,8 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.PRECHECK: Tier.T0,
     ActionType.GET_QUOTE: Tier.T0,
     ActionType.SET_REMINDER: Tier.T1,
+    ActionType.CANCEL_STANDING_RUN: Tier.T1,
+    ActionType.CREATE_STANDING_MANDATE: Tier.T2,
     ActionType.TRANSFER: Tier.T2,
     ActionType.ADD_PAYEE: Tier.T2,
     ActionType.FREEZE_CARD: Tier.T2,

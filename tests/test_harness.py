@@ -12,7 +12,7 @@ from core.harness import (
     render_report,
 )
 
-SCENARIOS = {"T06", "T07", "T08", "T10", "T11", "T13", "T22", "X01", "X06", "X07", "X08", "X09", "X17", "X24"}
+SCENARIOS = {"T06", "T07", "T08", "T10", "T11", "T13", "T22", "T34", "X01", "X06", "X07", "X08", "X09", "X17", "X24"}
 
 OVER_LIMIT = {
     "id": "T07",
@@ -210,3 +210,29 @@ def test_a_scenario_file_that_cannot_be_read_fails_its_entry_without_stopping_th
     assert results["T07"].status == "failed"
     assert "cannot be read" in results["T07"].runs[0].failures[0]
     assert results["T99"].status == NOT_AUTOMATED
+
+
+def test_a_run_due_turn_checks_the_events_it_returns(tmp_path):
+    suites = _suites(tmp_path)
+    create = {
+        "amount": "1200", "currency": "SGD", "corridor": "SG>BR", "payee_id": "landlord_sp", "purpose": "rent",
+        "schedule": "monthly:1", "tolerance_pct": "5", "notice_hours": 48, "cancel_window_hours": 24,
+    }
+    scenario = {
+        "id": "T07",
+        "runs": [
+            {
+                "lang": "en",
+                "turns": [
+                    {"user": "Pay 1,200 SGD rent to landlord_sp monthly", "model": [{"calls": [{"name": "create_standing_mandate", "arguments": create}]}]},
+                    {"user": "Yes", "confirm": "latest"},
+                    {"run_due": "notice", "expect": {"events": [{"kind": "run"}]}},
+                ],
+            }
+        ],
+    }
+    _write_scenario(suites, scenario)
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert result.runs[0].failures == ["turn 3: event kind was 'notice', expected 'run'"]

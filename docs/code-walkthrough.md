@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, and then the conversation's own erasable store, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, then the conversation's own erasable store, and then standing mandates under rules R12 and R13, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -9,23 +9,24 @@ Every Python excerpt below is copied exactly from the file it names. Read the fi
 1. Python concepts used in this code
 2. The schemas, `contracts/schemas.py`
 3. The tier table, `core/tiers.py`
-4. The mandate engine, `core/mandate.py`
-5. The interfaces, `contracts/interfaces.py`
-6. The rail errors, `contracts/errors.py`
-7. The ledger, `core/ledger.py`
-8. The conversation store, `core/conversation_store.py`
-9. The fake model adapter, `core/fake_adapter.py`
-10. The model adapter, `core/model_adapter.py`
-11. The fake router, `rails/fake_router.py`
-12. The fake rail, `rails/fake_rail.py`
-13. The agent loop, `core/agent.py`
-14. The evaluation harness, `core/harness.py`
-15. The API, `api/main.py`
-16. The tests
-17. The suites and their scenarios
-18. The knowledge base, `rails/knowledge/`
-19. Configuration files
-20. Commands used to build and check the repo
+4. Standing schedules, `core/standing.py`
+5. The mandate engine, `core/mandate.py`
+6. The interfaces, `contracts/interfaces.py`
+7. The rail errors, `contracts/errors.py`
+8. The ledger, `core/ledger.py`
+9. The conversation store, `core/conversation_store.py`
+10. The fake model adapter, `core/fake_adapter.py`
+11. The model adapter, `core/model_adapter.py`
+12. The fake router, `rails/fake_router.py`
+13. The fake rail, `rails/fake_rail.py`
+14. The agent loop, `core/agent.py`
+15. The evaluation harness, `core/harness.py`
+16. The API, `api/main.py`
+17. The tests
+18. The suites and their scenarios
+19. The knowledge base, `rails/knowledge/`
+20. Configuration files
+21. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -114,7 +115,7 @@ This file defines every data shape that crosses a boundary between parts of the 
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
@@ -128,7 +129,7 @@ NonNegativeAmount = Annotated[Decimal, Field(ge=0)]
 Hours = Annotated[float, Field(ge=0)]
 ```
 
-The five aliases are reusable field types. The regular expressions use `^` and `$` to anchor the match to the whole string. `[A-Z]{3}` means exactly three uppercase letters, so `SGD` passes and `sgd` or `SGDX` fail. The corridor pattern means two letters, the character `>`, and two more letters, so `SG>BR` passes and `Singapore to Brazil` fails. The `r` before the string makes it a raw string, so backslashes would not be treated as escapes. `Hours` uses `float` because a duration is not money. `ActionAmount` is the amount an `Action` may carry: above zero and at most `MAX_ACTION_AMOUNT`, one hundred million, whose comment cites the decision that set it. `le` means less than or equal. An amount above it fails validation when the action is built, so it never reaches the engine; routes and receipts keep `PositiveAmount`, because they only carry an amount an action already had.
+The five aliases are reusable field types. The regular expressions use `^` and `$` to anchor the match to the whole string. `[A-Z]{3}` means exactly three uppercase letters, so `SGD` passes and `sgd` or `SGDX` fail. The corridor pattern means two letters, the character `>`, and two more letters, so `SG>BR` passes and `Singapore to Brazil` fails. The `r` before the string makes it a raw string, so backslashes would not be treated as escapes. `Hours` uses `float` because a duration is not money. `ActionAmount` is the amount an `Action` may carry: above zero and at most `MAX_ACTION_AMOUNT`, one hundred million, whose comment cites the decision that set it. `le` means less than or equal. An amount above it fails validation when the action is built, so it never reaches the engine; routes and receipts keep `PositiveAmount`, because they only carry an amount an action already had. `StandingSchedule` accepts only `monthly:` followed by a day from 1 to 28, so every month has the day.
 
 ```python
 class Source(str, Enum):
@@ -137,6 +138,7 @@ class Source(str, Enum):
     TOOL_RESULT = "tool_result"
     TRANSLATED_TEXT = "translated_text"
     PROVIDER_STATUS = "provider_status"
+    STANDING_MANDATE = "standing_mandate"
 
 
 class Tier(str, Enum):
@@ -161,6 +163,8 @@ class ActionType(str, Enum):
     TRACE_TRANSFER = "trace_transfer"
     PRECHECK = "precheck"
     GET_QUOTE = "get_quote"
+    CREATE_STANDING_MANDATE = "create_standing_mandate"
+    CANCEL_STANDING_RUN = "cancel_standing_run"
 
 
 class RouteStatus(str, Enum):
@@ -191,9 +195,26 @@ class Role(str, Enum):
     ASSISTANT = "assistant"
     SYSTEM = "system"
     TOOL = "tool"
+
+
+# Source: docs/decisions.md, 18 September 2026. A standing run is due monthly on a day from 1 to 28.
+StandingSchedule = Annotated[str, Field(pattern=r"^monthly:([1-9]|1[0-9]|2[0-8])$")]
+
+
+class StandingTerms(BaseModel):
+    schedule: StandingSchedule
+    tolerance_pct: Annotated[Decimal, Field(ge=0, le=100)]
+    notice_hours: int = Field(ge=0)
+    cancel_window_hours: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _cancel_window_ends_by_the_due_time(self) -> "StandingTerms":
+        if self.cancel_window_hours > self.notice_hours:
+            raise ValueError("cancel_window_hours may not exceed notice_hours.")
+        return self
 ```
 
-Each enum is a closed vocabulary. Because every status field is typed with one of these enums, a value such as `"maintenance"` or `"lost"` fails validation instead of being stored. `FreezeStatus` says whether a card freeze was done, is not supported by the issuer, or failed. `GET_QUOTE` is the action type for a quote, which only reads prices. `Role` lists who can speak in a conversation: the student, the model, the operator, and a tool.
+Each enum is a closed vocabulary. Because every status field is typed with one of these enums, a value such as `"maintenance"` or `"lost"` fails validation instead of being stored. `FreezeStatus` says whether a card freeze was done, is not supported by the issuer, or failed. `GET_QUOTE` is the action type for a quote, which only reads prices. `Role` lists who can speak in a conversation: the student, the model, the operator, and a tool. `STANDING_MANDATE` is the source of a run the loop starts under a standing mandate. `CREATE_STANDING_MANDATE` and `CANCEL_STANDING_RUN` are the two standing mandate actions. `StandingTerms` holds the terms a student confirms when setting up a standing mandate: the schedule, the tolerance, the notice hours, and the cancel window hours. Its validator refuses a cancel window longer than the notice, so a run can always happen by its due time.
 
 ```python
 class Action(BaseModel):
@@ -209,10 +230,12 @@ class Action(BaseModel):
     payee_id: str | None = None
     purpose: str | None = None
     instrument_id: str | None = None
+    standing_mandate_id: str | None = None
+    standing_terms: StandingTerms | None = None
     confirmation_token: str | None = None
 ```
 
-An `Action` is one request to do something. `source` defaults to the user turn, and code that builds an action from anything else must say so. `idempotency_key` identifies one logical payment; sending the same key twice is caught by rule R10, and the minimum length of eight stops trivial keys. `requested_at` uses a `lambda`, a small unnamed function, as its factory, so each action gets the current UTC time when it is created rather than the time the module was loaded. The transfer fields are optional because a balance read has no amount or payee. `instrument_id` names a card, written as the issuer, a colon, and the card, such as `wise:card_01`. Only a freeze uses it, and it exists so the confirmation token can say which card a freeze is for.
+An `Action` is one request to do something. `source` defaults to the user turn, and code that builds an action from anything else must say so. `idempotency_key` identifies one logical payment; sending the same key twice is caught by rule R10, and the minimum length of eight stops trivial keys. `requested_at` uses a `lambda`, a small unnamed function, as its factory, so each action gets the current UTC time when it is created rather than the time the module was loaded. The transfer fields are optional because a balance read has no amount or payee. `instrument_id` names a card, written as the issuer, a colon, and the card, such as `wise:card_01`. Only a freeze uses it, and it exists so the confirmation token can say which card a freeze is for. `standing_mandate_id` names the standing mandate a transfer runs under, or the one being created or cancelled, and `standing_terms` carries the terms of one being created.
 
 ```python
 class StandingMandate(BaseModel):
@@ -395,9 +418,23 @@ class AgentReply(BaseModel):
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
+
+
+class StandingEvent(BaseModel):
+    kind: Literal["notice", "run", "skipped", "needs_student", "rail_failed"]
+    user_id: str
+    standing_mandate_id: str
+    period: str
+    due_at: AwareDatetime
+    amount: PositiveAmount
+    currency: CurrencyCode
+    payee_id: str
+    cancel_until: AwareDatetime | None = None
+    decision: Decision | None = None
+    receipt: Receipt | None = None
 ```
 
-`ConfirmationRequest` is what the student sees before a transfer goes ahead: the `Action` being approved, the token the mandate engine issued for it, the warning key, and the routes with their fees. `selected_route` is the one route the agent chose from them, while `routes` keeps the full list so the student can compare. `Field(default=300, gt=0)` gives `expires_in_seconds` a default of 300 and rejects zero or any negative number.
+`ConfirmationRequest` is what the student sees before a transfer goes ahead: the `Action` being approved, the token the mandate engine issued for it, the warning key, and the routes with their fees. `selected_route` is the one route the agent chose from them, while `routes` keeps the full list so the student can compare. `Field(default=300, gt=0)` gives `expires_in_seconds` a default of 300 and rejects zero or any negative number. `StandingEvent` is what `run_due_standing_mandates` returns for the app: `Literal` limits `kind` to its five values, and each event carries the student, the standing mandate, the period, the due time, the amount, and the payee, plus the cancel deadline of a notice, and the decision and receipt of a run.
 
 `AgentReply` is everything one agent turn sends to the frontend. Its optional parts default to `None`, so a simple answer needs only `text`, `lang`, and `ledger_seqs`. `list[Annotated[int, Field(ge=1)]]` applies the limit to each item, so `[1, 0]` fails on the second item alone, and `ledger_seqs` follows the same rule as `LedgerEntry.seq`, which also starts at 1. Both classes come after `Message` because every model they refer to is defined above them. `freeze` holds the `FreezeResult` when the turn executed a freeze, so the frontend can read the status and the issuer's deep link as data instead of from the reply text. It stays `None` on every other reply, the one that asks to confirm a freeze included.
 
@@ -412,6 +449,8 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.PRECHECK: Tier.T0,
     ActionType.GET_QUOTE: Tier.T0,
     ActionType.SET_REMINDER: Tier.T1,
+    ActionType.CANCEL_STANDING_RUN: Tier.T1,
+    ActionType.CREATE_STANDING_MANDATE: Tier.T2,
     ActionType.TRANSFER: Tier.T2,
     ActionType.ADD_PAYEE: Tier.T2,
     ActionType.FREEZE_CARD: Tier.T2,
@@ -421,7 +460,56 @@ TIERS: dict[ActionType, Tier] = {
 }
 ```
 
-A single dictionary maps each action type to its tier. Keeping it as data rather than `if` statements means the whole policy can be read at a glance, and `TIERS[action.type]` is a direct lookup. A test compares `set(TIERS)` with `set(ActionType)`, so adding an action type without a tier fails immediately. `GET_QUOTE` is T0 because a quote reads prices and moves nothing.
+A single dictionary maps each action type to its tier. Keeping it as data rather than `if` statements means the whole policy can be read at a glance, and `TIERS[action.type]` is a direct lookup. A test compares `set(TIERS)` with `set(ActionType)`, so adding an action type without a tier fails immediately. `GET_QUOTE` is T0 because a quote reads prices and moves nothing. Cancelling one standing run is T1, because it only skips a payment, and creating a standing mandate is T2, because it authorises payments to come. A standing run itself is a transfer, T2 in the table, which the engine decides at T1 only when it is within its standing mandate's pattern.
+
+## Standing schedules, `core/standing.py`
+
+This file holds the calendar arithmetic of standing mandates. It is plain Python with no model calls, so the mandate engine can use it.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+# Source: docs/decisions.md, 18 September 2026. A run may happen from the notice until a day after it falls due.
+RUN_WINDOW_AFTER_DUE = timedelta(hours=24)
+
+
+def _day(schedule: str) -> int:
+    return int(schedule.removeprefix("monthly:"))
+
+
+def _due(schedule: str, year: int, month: int) -> datetime:
+    return datetime(year, month, _day(schedule), tzinfo=timezone.utc)
+
+
+def _months_from(at: datetime) -> list[tuple[int, int]]:
+    at = at.astimezone(timezone.utc)
+    following = (at.year + 1, 1) if at.month == 12 else (at.year, at.month + 1)
+    return [(at.year, at.month), following]
+
+
+def period_of(due: datetime) -> str:
+    return f"{due.year:04d}-{due.month:02d}"
+
+
+def occurrence_containing(schedule: str, notice_hours: int, at: datetime) -> tuple[str, datetime] | None:
+    for year, month in _months_from(at):
+        due = _due(schedule, year, month)
+        if due - timedelta(hours=notice_hours) <= at < due + RUN_WINDOW_AFTER_DUE:
+            return period_of(due), due
+    return None
+
+
+def next_occurrence(schedule: str, at: datetime) -> tuple[str, datetime]:
+    for year, month in _months_from(at):
+        due = _due(schedule, year, month)
+        if at < due + RUN_WINDOW_AFTER_DUE:
+            return period_of(due), due
+    raise AssertionError("One of two consecutive months always has a due date after any time in the first.")
+```
+
+`RUN_WINDOW_AFTER_DUE` is how long after the due time a run may still happen, a day, and its comment names the decision that set it. `_day` reads the day from a schedule such as `monthly:10`; `removeprefix` drops the leading text. `_due` is the due time in a given month, midnight UTC on that day. `_months_from` gives the month of a time and the month after it, which is all a window of at most a few weeks can reach; December is followed by January of the next year. `period_of` names a period by its year and month, such as `2026-10`.
+
+`occurrence_containing` finds the occurrence whose window contains a time: the window opens `notice_hours` before the due time and closes a day after it, and the end is excluded, so a time exactly a day after the due time is outside. It returns the period and the due time, or `None` when the time falls between windows. `next_occurrence` finds the first occurrence whose window has not closed yet, which is how the loop picks the period a cancellation applies to and how the harness finds the next run. Its last line cannot be reached, because one of two consecutive months always has a due date after any time in the first; it raises rather than return nothing silently.
 
 ## The mandate engine, `core/mandate.py`
 
@@ -437,7 +525,8 @@ from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
-from contracts.schemas import Action, ActionType, Decision, Mandate, Source, Tier
+from contracts.schemas import Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
+from core.standing import occurrence_containing
 from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
@@ -448,6 +537,7 @@ WARNING_KEYS = {
     ActionType.TRANSFER: TRANSFER_WARNING_KEY,
     ActionType.ADD_PAYEE: "warn.payee.new",
     ActionType.FREEZE_CARD: "warn.freeze.card",
+    ActionType.CREATE_STANDING_MANDATE: "warn.standing.new",
 }
 # Source: the order of evaluation table in docs/technical-reference.md. An allowed
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
@@ -466,7 +556,7 @@ def _confirm_secret() -> bytes:
     return secret.encode("utf-8")
 ```
 
-`_confirm_secret` returns the key used to sign confirmation tokens. The leading underscore marks it as private to this module. It reads the secret from the environment each time, so a changed variable takes effect without a restart. In development a clearly named placeholder is used so tests work with no setup. In production a missing secret raises `RuntimeError`, so the placeholder can never be used to sign real payments. `.encode("utf-8")` turns the text into bytes, which `hmac` requires. `TRANSFER_WARNING_KEY` is a key for translated warning text, not the text itself, so the frontend can show it in the student's language. `WARNING_KEYS` gives every T2 action type its own warning: an irreversible payment, a new payee, or a frozen card. A test checks that every T2 type has one, so the lookup below can never miss. `ALLOWED_RULE` maps each tier an action can be allowed at to the rule that governed the yes. T3 has no entry because a T3 action is never allowed.
+`_confirm_secret` returns the key used to sign confirmation tokens. The leading underscore marks it as private to this module. It reads the secret from the environment each time, so a changed variable takes effect without a restart. In development a clearly named placeholder is used so tests work with no setup. In production a missing secret raises `RuntimeError`, so the placeholder can never be used to sign real payments. `.encode("utf-8")` turns the text into bytes, which `hmac` requires. `TRANSFER_WARNING_KEY` is a key for translated warning text, not the text itself, so the frontend can show it in the student's language. `WARNING_KEYS` gives every T2 action type its own warning: an irreversible payment, a new payee, or a frozen card. A test checks that every T2 type has one, so the lookup below can never miss. `ALLOWED_RULE` maps each tier an action can be allowed at to the rule that governed the yes. T3 has no entry because a T3 action is never allowed. `WARNING_KEYS` includes `warn.standing.new` for creating a standing mandate.
 
 ```python
 def _amount_field(amount: Decimal | None) -> str:
@@ -487,6 +577,8 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
             action.payee_id or "",
             action.purpose or "",
             action.instrument_id or "",
+            action.standing_mandate_id or "",
+            action.standing_terms.model_dump_json() if action.standing_terms else "",
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -496,7 +588,7 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
     ).hexdigest()
 ```
 
-`_amount_field` writes an amount in one fixed form, so `1200`, `1200.0`, and `1200.00` all give the same text and the same token. `confirmation_token_for` puts the nine fields that define an action into a JSON list: the student, the type, the key, the five transfer fields, and the card. A list is used instead of joining the fields with a separator, because JSON escaping makes it impossible for one field's text to spill into the next. `x or ""` turns `None` into an empty string. The HMAC of that text is the token: it proves the engine issued it, and it changes if any of the nine fields changes, so a token to freeze one card is refused for another.
+`_amount_field` writes an amount in one fixed form, so `1200`, `1200.0`, and `1200.00` all give the same text and the same token. `confirmation_token_for` puts the nine fields that define an action into a JSON list: the student, the type, the key, the five transfer fields, and the card. A list is used instead of joining the fields with a separator, because JSON escaping makes it impossible for one field's text to spill into the next. `x or ""` turns `None` into an empty string. The HMAC of that text is the token: it proves the engine issued it, and it changes if any of the nine fields changes, so a token to freeze one card is refused for another. The payload also holds the standing mandate id and the standing terms as JSON, so a token for one standing mandate's terms is refused for any other.
 
 ```python
 def _utc_date(action: Action) -> date:
@@ -514,9 +606,58 @@ def _spent_on(day: date, history: Sequence[Action]) -> Decimal:
         ),
         Decimal(0),
     )
+
+
+def _standing_named(action: Action, mandate: Mandate) -> StandingMandate | None:
+    return next((s for s in mandate.standing_mandates if s.id == action.standing_mandate_id), None)
+
+
+def _confirmed_standing(action: Action, mandate: Mandate) -> StandingMandate | None:
+    standing = _standing_named(action, mandate)
+    if standing is None or not standing.active or standing.confirmed_at > action.requested_at:
+        return None
+    return standing
+
+
+def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]) -> list[str]:
+    standing = _standing_named(action, mandate)
+    if standing is None:
+        return [f"no standing mandate {action.standing_mandate_id} is on mandate {mandate.id}"]
+    if not standing.active:
+        return [f"standing mandate {standing.id} is not active"]
+    if standing.confirmed_at > action.requested_at:
+        return [f"standing mandate {standing.id} was confirmed after this request"]
+    outside = []
+    for name, value, expected in (
+        ("payee", action.payee_id, standing.payee_id),
+        ("corridor", action.corridor, standing.corridor),
+        ("purpose", action.purpose, standing.purpose),
+    ):
+        if value != expected:
+            outside.append(f"the {name} {value} is not {expected}")
+    allowed_drift = standing.amount * standing.tolerance_pct / 100
+    if action.amount is None or abs(action.amount - standing.amount) > allowed_drift:
+        outside.append(
+            f"the amount {action.amount} is more than {standing.tolerance_pct} percent "
+            f"from {standing.amount}"
+        )
+    occurrence = occurrence_containing(standing.schedule, standing.notice_hours, action.requested_at)
+    if occurrence is None:
+        outside.append(
+            f"it was requested at {action.requested_at.astimezone(timezone.utc).isoformat(timespec='seconds')}, "
+            f"outside the window of schedule {standing.schedule}"
+        )
+    elif any(
+        past.type is ActionType.TRANSFER
+        and past.standing_mandate_id == standing.id
+        and occurrence_containing(standing.schedule, standing.notice_hours, past.requested_at) == occurrence
+        for past in history
+    ):
+        outside.append(f"a run for {occurrence[0]} already executed")
+    return outside
 ```
 
-`_utc_date` converts a request time to UTC before taking the date, so a transfer at 07:00 in Singapore and one at 23:00 the previous evening in London are compared on the same calendar. `_spent_on` adds up every earlier transfer on that day. Starting the sum at `Decimal(0)` keeps the total a `Decimal` even when there is no history.
+`_utc_date` converts a request time to UTC before taking the date, so a transfer at 07:00 in Singapore and one at 23:00 the previous evening in London are compared on the same calendar. `_spent_on` adds up every earlier transfer on that day. Starting the sum at `Decimal(0)` keeps the total a `Decimal` even when there is no history. The three functions after them read standing mandates. `_standing_named` finds the standing mandate an action names on the mandate. `_confirmed_standing` returns it only when it is active and was confirmed before the request, which is what R01 asks of a run the loop starts. `_outside_pattern` lists every way a transfer falls outside its standing mandate: an unknown, inactive, or later confirmed standing mandate stops the list at once. Otherwise it checks a different payee, corridor, or purpose, and an amount further than `tolerance_pct` percent from the standing amount. It checks a request time outside the window, using `occurrence_containing` from `core/standing.py`, and a run that already executed in the same period. An empty list means the transfer is within the pattern.
 
 ```python
 class DeterministicMandateEngine(MandateEngine):
@@ -527,8 +668,14 @@ class DeterministicMandateEngine(MandateEngine):
         self, action: Action, mandate: Mandate, history: Sequence[Action] = ()
     ) -> Decision:
         tier = TIERS[action.type]
+        standing_run = action.type is ActionType.TRANSFER and action.standing_mandate_id is not None
+        trusted_source = action.source is Source.USER_TURN or (
+            action.source is Source.STANDING_MANDATE
+            and standing_run
+            and _confirmed_standing(action, mandate) is not None
+        )
 
-        if action.source is not Source.USER_TURN:
+        if not trusted_source:
             return Decision(
                 allowed=False,
                 reasons=[
@@ -538,9 +685,20 @@ class DeterministicMandateEngine(MandateEngine):
                 rule_ids=["R01"],
                 tier=tier,
             )
+
+        outside = _outside_pattern(action, mandate, history) if standing_run else []
+        within_pattern = standing_run and not outside
+        if within_pattern:
+            tier = Tier.T1
+        escalation = (
+            (["R13"], [f"This transfer falls outside standing mandate {action.standing_mandate_id} because "
+                       + ", and ".join(outside) + "."])
+            if outside
+            else ([], [])
+        )
 ```
 
-The class implements the `MandateEngine` interface. Its `confirmation_token_for` method delegates to the module function of the same name; inside a method, the bare name refers to the module level function, not the method. `history` defaults to an empty tuple `()` rather than an empty list, because a tuple cannot be changed and so is a safe default. The first check is R01. When the source is anything other than the user turn, the engine returns at once with a single reason. Nothing else is evaluated, because an injected instruction should not be weighed at all. Two adjacent string literals inside the list are joined into one string by Python.
+The class implements the `MandateEngine` interface. Its `confirmation_token_for` method delegates to the module function of the same name; inside a method, the bare name refers to the module level function, not the method. `history` defaults to an empty tuple `()` rather than an empty list, because a tuple cannot be changed and so is a safe default. The first check is R01. When the source is anything other than the user turn, the engine returns at once with a single reason. Nothing else is evaluated, because an injected instruction should not be weighed at all. Two adjacent string literals inside the list are joined into one string by Python. `standing_run` is true for a transfer naming a standing mandate. `trusted_source` accepts the student's own turn, and the source `standing_mandate` only on such a transfer whose standing mandate is active and confirmed; any other source is refused under R01. For a standing run, `_outside_pattern` decides the rest: within the pattern the tier becomes T1, and outside it `escalation` holds the rule id R13 and one reason joining every part that fell outside with `, and `.
 
 ```python
         reasons: list[str] = []
@@ -570,9 +728,29 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
         if action.type is ActionType.FREEZE_CARD and not action.instrument_id:
             rule_ids.append("R04")
             reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
+
+        if action.type is ActionType.CREATE_STANDING_MANDATE:
+            missing = [
+                name
+                for name in ("amount", "currency", "corridor", "payee_id", "purpose", "standing_mandate_id", "standing_terms")
+                if getattr(action, name) in (None, "")
+            ]
+            if missing:
+                rule_ids.append("R04")
+                reasons.append(
+                    "A standing mandate needs an amount, a currency, a corridor, a payee, a purpose, "
+                    f"an id, and its terms, and this one has no {', no '.join(missing)}."
+                )
+
+        if action.type is ActionType.CANCEL_STANDING_RUN and _standing_named(action, mandate) is None:
+            rule_ids.append("R04")
+            reasons.append(
+                f"Cancelling a run needs a standing mandate on mandate {mandate.id}, and "
+                f"{action.standing_mandate_id or 'none'} is not one."
+            )
 ```
 
-From here on, failures are collected instead of returned. R02 refuses tier T3, because a mandate cannot authorise changing itself. R03 checks the validity window using a chained comparison, `a <= b <= c`, which Python reads as `a <= b and b <= c`. Tier T0 is exempt, so an expired mandate never stops the student from reading their balance. R04 also covers adding a payee: `not action.payee_id` is true for both `None` and an empty string, so a request to add nobody is refused. The same check refuses a request to freeze a card that names no card.
+From here on, failures are collected instead of returned. R02 refuses tier T3, because a mandate cannot authorise changing itself. R03 checks the validity window using a chained comparison, `a <= b <= c`, which Python reads as `a <= b and b <= c`. Tier T0 is exempt, so an expired mandate never stops the student from reading their balance. R04 also covers adding a payee: `not action.payee_id` is true for both `None` and an empty string, so a request to add nobody is refused. The same check refuses a request to freeze a card that names no card. Creating a standing mandate needs its amount, currency, corridor, payee, purpose, id, and terms, and R04 names each one that is missing. Cancelling a run needs a standing mandate on the mandate, or R04 refuses it.
 
 ```python
         if any(past.idempotency_key == action.idempotency_key for past in history):
@@ -583,7 +761,7 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
                 tier=tier,
             )
 
-        if action.type is ActionType.TRANSFER:
+        if action.type in (ActionType.TRANSFER, ActionType.CREATE_STANDING_MANDATE):
             missing = [
                 name
                 for name, value in (("amount", action.amount), ("currency", action.currency))
@@ -600,7 +778,7 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
                     f"Currency {action.currency} does not match the mandate currency "
                     f"{mandate.currency}."
                 )
-            if missing or action.currency != mandate.currency:
+            if (missing or action.currency != mandate.currency) and "R04" not in rule_ids:
                 rule_ids.append("R04")
 
             if action.payee_id not in mandate.allowed_payees:
@@ -637,7 +815,7 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
                     f"{mandate.per_txn_limit}."
                 )
 
-            if action.amount is not None:
+            if action.type is ActionType.TRANSFER and action.amount is not None:
                 running_total = _spent_on(_utc_date(action), history) + action.amount
                 if running_total > mandate.daily_limit:
                     rule_ids.append("R09")
@@ -647,7 +825,7 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
                     )
 ```
 
-R10 comes first and returns at once, for every action type: `any(...)` is true if at least one earlier action used the same idempotency key, which means this action already ran and evaluating it again would count it twice or repeat it. Keys are made per tool call, so only a replayed token can repeat one, and a replayed payee or freeze is refused as surely as a replayed payment. The rules that follow apply only to transfers. R04 first checks that the transfer has an amount and a currency at all. `missing` lists whichever of the two is `None`, and the reason names each one, such as "this one has no amount". A transfer without an amount would otherwise slip past R08 and R09, which only look at an amount that is present. When both are present, R04 compares the currency with the mandate's. Either way R04 is recorded once, so a transfer with no currency does not report R04 twice. R14 enforces the cooling period. `get` returns `None` for a payee with no recorded addition time, so payees who were on the mandate from the start are never held back. For a payee added through Lifeline, the transfer is refused until `cooling_hours` have passed since `added_at`, and the reason states the exact time it becomes allowed, in UTC, to the second. `timedelta(hours=...)` is a length of time that can be added to a datetime. R05 to R08 each compare one field of the action with one field of the mandate and record a failure. R09 adds today's earlier transfers to this one and compares the running total with the daily limit, and its reason states the total so the student sees the actual numbers.
+R10 comes first and returns at once, for every action type: `any(...)` is true if at least one earlier action used the same idempotency key, which means this action already ran and evaluating it again would count it twice or repeat it. Keys are made per tool call, so only a replayed token can repeat one, and a replayed payee or freeze is refused as surely as a replayed payment. The rules that follow apply only to transfers. R04 first checks that the transfer has an amount and a currency at all. `missing` lists whichever of the two is `None`, and the reason names each one, such as "this one has no amount". A transfer without an amount would otherwise slip past R08 and R09, which only look at an amount that is present. When both are present, R04 compares the currency with the mandate's. Either way R04 is recorded once, so a transfer with no currency does not report R04 twice. R14 enforces the cooling period. `get` returns `None` for a payee with no recorded addition time, so payees who were on the mandate from the start are never held back. For a payee added through Lifeline, the transfer is refused until `cooling_hours` have passed since `added_at`, and the reason states the exact time it becomes allowed, in UTC, to the second. `timedelta(hours=...)` is a length of time that can be added to a datetime. R05 to R08 each compare one field of the action with one field of the mandate and record a failure. R09 adds today's earlier transfers to this one and compares the running total with the daily limit, and its reason states the total so the student sees the actual numbers. The money rules apply to creating a standing mandate as well as to a transfer, so a standing mandate to a payee not on the mandate, or above the per transaction limit, is refused when it is created. R09, the daily running total, applies only to a transfer, because creating a standing mandate moves nothing. `"R04" not in rule_ids` keeps R04 from being listed twice when a missing term and a currency mismatch both fail.
 
 ```python
         if (
@@ -660,16 +838,22 @@ R10 comes first and returns at once, for every action type: `any(...)` is true i
             rule_ids.append("R11")
             reasons.append("The confirmation token does not belong to this exact action.")
 
+        escalation_ids, escalation_reasons = escalation
         if rule_ids:
-            return Decision(allowed=False, reasons=reasons, rule_ids=rule_ids, tier=tier)
+            return Decision(
+                allowed=False,
+                reasons=escalation_reasons + reasons,
+                rule_ids=escalation_ids + rule_ids,
+                tier=tier,
+            )
 
         confirms = tier is Tier.T2
         needs_token = confirms and action.confirmation_token is None
 
         return Decision(
             allowed=True,
-            reasons=[],
-            rule_ids=[ALLOWED_RULE[tier]],
+            reasons=escalation_reasons,
+            rule_ids=escalation_ids + (["R12"] if within_pattern else [ALLOWED_RULE[tier]]),
             tier=tier,
             requires_confirmation=needs_token,
             warning_key=WARNING_KEYS[action.type] if confirms else None,
@@ -679,7 +863,7 @@ R10 comes first and returns at once, for every action type: `any(...)` is true i
         )
 ```
 
-R11 sits outside the transfer block, so it covers every T2 action: adding a payee and freezing a card as well as a transfer. It runs only when a token was supplied. The engine recomputes the token for this exact action and compares it in constant time. If any rule failed, the decision is a refusal that lists every failed rule and its reason. Otherwise the action is allowed, and `rule_ids` holds the one rule that governed the yes: R02 for T0 and T1, R11 for T2. Every decision therefore cites at least one rule, so the ledger always records why an action was allowed as well as why one was refused. `confirms` is true for every T2 action, and `needs_token` is true for one that has not been confirmed yet. `value if condition else None` is Python's conditional expression. The first time a clean T2 action arrives, the decision is allowed but asks for confirmation and carries the token; when the same action comes back with that token, R11 passes, no further confirmation is needed, and no new token is issued. Both decisions cite R11 and both carry the warning key, so the confirmed decision still names the warning the student accepted.
+R11 sits outside the transfer block, so it covers every T2 action: adding a payee and freezing a card as well as a transfer. It runs only when a token was supplied. The engine recomputes the token for this exact action and compares it in constant time. If any rule failed, the decision is a refusal that lists every failed rule and its reason. Otherwise the action is allowed, and `rule_ids` holds the one rule that governed the yes: R02 for T0 and T1, R11 for T2. Every decision therefore cites at least one rule, so the ledger always records why an action was allowed as well as why one was refused. `confirms` is true for every T2 action, and `needs_token` is true for one that has not been confirmed yet. `value if condition else None` is Python's conditional expression. The first time a clean T2 action arrives, the decision is allowed but asks for confirmation and carries the token; when the same action comes back with that token, R11 passes, no further confirmation is needed, and no new token is issued. Both decisions cite R11 and both carry the warning key, so the confirmed decision still names the warning the student accepted. Every decision now carries the escalation first. A refusal lists R13 before the rules that failed, with its reason first. An allowed decision lists R13 before its own rule. The own rule is R12 for a standing run within its pattern, decided at T1 with no confirmation, and otherwise the tier's rule, so an escalated transfer cites R13 and then R11 and asks for confirmation like any T2 transfer.
 
 ```python
 _ENGINE = DeterministicMandateEngine()
@@ -1661,10 +1845,14 @@ from contracts.schemas import (
     Route,
     RouteStatus,
     Source,
+    StandingEvent,
+    StandingMandate,
+    StandingTerms,
     Tier,
     ToolCall,
 )
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 
 ACTOR = "agent"
@@ -1712,7 +1900,8 @@ The imports come from the contracts and from nothing that belongs to a particula
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
-ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
+STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
 
 
@@ -1734,9 +1923,23 @@ TOOLS = [
     ),
     _tool(
         "propose_transfer",
-        "Propose a transfer. Nothing moves until the student confirms it.",
-        {name: TEXT for name in ACTION_FIELDS},
+        "Propose a transfer. Nothing moves until the student confirms it, unless it is a run of one of "
+        "their standing mandates within its pattern, named by standing_mandate_id.",
+        {**{name: TEXT for name in ACTION_FIELDS}, "standing_mandate_id": TEXT},
         list(ACTION_FIELDS),
+    ),
+    _tool(
+        "create_standing_mandate",
+        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28. "
+        "Nothing is set up until the student confirms it.",
+        {**{name: TEXT for name in ACTION_FIELDS}, **{name: TEXT for name in STANDING_TERMS}},
+        [*ACTION_FIELDS, *STANDING_TERMS],
+    ),
+    _tool(
+        "cancel_standing_run",
+        "Skip the next run of a standing mandate, by its id.",
+        {"standing_mandate_id": TEXT},
+        ["standing_mandate_id"],
     ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
     _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
@@ -1776,6 +1979,8 @@ TOOL_ACTIONS = {
     "add_payee": ActionType.ADD_PAYEE,
     "freeze_card": ActionType.FREEZE_CARD,
     "change_limit": ActionType.CHANGE_LIMIT,
+    "create_standing_mandate": ActionType.CREATE_STANDING_MANDATE,
+    "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -1784,10 +1989,12 @@ REQUIRED_ARGUMENTS = {
     "get_quote": ("corridor", "amount"),
     "add_payee": ("payee_id",),
     "freeze_card": ("instrument_id",),
+    "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
+    "cancel_standing_run": ("standing_mandate_id",),
 }
 ```
 
-`ACTION_FIELDS` lists the tool arguments that become fields of an `Action`. `_tool` builds one tool definition in the shape the model adapter expects: a name, a description, and a JSON schema of the arguments. Every argument is typed as text, and pydantic converts text such as `"1200"` into a `Decimal` when the `Action` is built. `ACTION_ARGUMENTS` adds `instrument_id`, the one argument that becomes an `Action` field without being a transfer field. There are nine tools. The first eight are the ones the student uses, and `change_limit` exists so that a limit change becomes an action the mandate engine can refuse, instead of text the model makes up. `{name: TEXT for name in ACTION_FIELDS}` is a dictionary comprehension that gives each transfer field the text type. `TOOL_ACTIONS` maps each tool name to its action type, which is also how the tool's tier is found. `DIRECT_TOOLS` names the two tools an app may run without the model, through `act` below; both only read, so both are tier T0. `REQUIRED_ARGUMENTS` names the arguments a call cannot run without. A transfer needs all five fields, a quote needs a corridor and an amount, adding a payee needs the payee id, and freezing a card needs the card. The two new tools describe themselves to the model honestly: nothing changes until the student confirms, and a new payee waits out a cooling period.
+`ACTION_FIELDS` lists the tool arguments that become fields of an `Action`. `_tool` builds one tool definition in the shape the model adapter expects: a name, a description, and a JSON schema of the arguments. Every argument is typed as text, and pydantic converts text such as `"1200"` into a `Decimal` when the `Action` is built. `ACTION_ARGUMENTS` adds `instrument_id`, the one argument that becomes an `Action` field without being a transfer field. There are nine tools. The first eight are the ones the student uses, and `change_limit` exists so that a limit change becomes an action the mandate engine can refuse, instead of text the model makes up. `{name: TEXT for name in ACTION_FIELDS}` is a dictionary comprehension that gives each transfer field the text type. `TOOL_ACTIONS` maps each tool name to its action type, which is also how the tool's tier is found. `DIRECT_TOOLS` names the two tools an app may run without the model, through `act` below; both only read, so both are tier T0. `REQUIRED_ARGUMENTS` names the arguments a call cannot run without. A transfer needs all five fields, a quote needs a corridor and an amount, adding a payee needs the payee id, and freezing a card needs the card. The two new tools describe themselves to the model honestly: nothing changes until the student confirms, and a new payee waits out a cooling period. `ACTION_ARGUMENTS` also takes `standing_mandate_id`, and `STANDING_TERMS` names the four arguments that become a standing mandate's terms. `propose_transfer` takes an optional `standing_mandate_id`, `create_standing_mandate` sets up a standing mandate, and `cancel_standing_run` skips the next run of one, so there are now eleven tools.
 
 ```python
 TEXTS = {
@@ -1802,6 +2009,8 @@ TEXTS = {
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
         "too_many_steps": "I stopped before finishing. Please ask again.",
+        "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
+        "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
@@ -1821,6 +2030,8 @@ TEXTS = {
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
+        "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
+        "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
@@ -1840,6 +2051,8 @@ TEXTS = {
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
+        "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
+        "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
@@ -1851,7 +2064,7 @@ TEXTS = {
 }
 ```
 
-`TEXTS` holds every fixed reply in English, Portuguese, and Chinese. The loop writes these itself instead of asking the model, because a refusal, a confirmation, or a receipt must say exactly what happened. The words in braces are filled in by `format`. Replies the model writes, such as an answer about a balance, come from the model in the language the system prompt names. The English refusal also lists the engine's reasons, which are written in English, while the other two languages give the rule ids. `simulated` is added after the `sent` reply whenever the receipt is simulated, so the student is never told money moved when it did not. The six newer replies confirm and report adding a payee and freezing a card. `freeze_not_supported` says plainly that Lifeline could not freeze the card itself and gives the issuer's link, because a student with a lost card must not believe it is frozen when it is not. `payee_exists` answers a request to add a payee who is already allowed, and says that nothing changed.
+`TEXTS` holds every fixed reply in English, Portuguese, and Chinese. The loop writes these itself instead of asking the model, because a refusal, a confirmation, or a receipt must say exactly what happened. The words in braces are filled in by `format`. Replies the model writes, such as an answer about a balance, come from the model in the language the system prompt names. The English refusal also lists the engine's reasons, which are written in English, while the other two languages give the rule ids. `simulated` is added after the `sent` reply whenever the receipt is simulated, so the student is never told money moved when it did not. The six newer replies confirm and report adding a payee and freezing a card. `freeze_not_supported` says plainly that Lifeline could not freeze the card itself and gives the issuer's link, because a student with a lost card must not believe it is frozen when it is not. `payee_exists` answers a request to add a payee who is already allowed, and says that nothing changed. `confirm_standing` asks the student to confirm a standing mandate's terms, and `standing_created` says it was set up.
 
 ```python
 def _amounts_in(text: str) -> set[Decimal]:
@@ -1969,6 +2182,26 @@ def _closing_results(calls: list[ToolCall]) -> list[Message]:
     return results
 
 
+def _standing_from(action: Action, confirmed_at: datetime, token: str) -> StandingMandate:
+    terms = action.standing_terms
+    if terms is None:
+        raise ValueError("A standing mandate is created only from an action the engine checked for its terms.")
+    return StandingMandate(
+        id=action.standing_mandate_id or "",
+        payee_id=action.payee_id or "",
+        amount=action.amount,
+        tolerance_pct=terms.tolerance_pct,
+        schedule=terms.schedule,
+        corridor=action.corridor,
+        purpose=action.purpose or "",
+        notice_hours=terms.notice_hours,
+        cancel_window_hours=terms.cancel_window_hours,
+        confirmed_at=confirmed_at,
+        confirmation_token=token,
+        active=True,
+    )
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -2008,7 +2241,7 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 ```
 
-`detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. Its name starts with an underscore because nothing outside this module uses it. `_Waiting` holds what the rebuild learns from the ledger about a confirmation that may still be waiting, before it becomes a `PendingConfirmation`. `_remembered` copies a message keeping only `REMEMBERED_FIELDS`, so the provider's reasoning blocks and the model's name are not kept. `_for_model` wraps a pasted message in `PASTED_FRAME` whenever it is sent, so pasted text is stored as it was pasted and always reaches the model marked as data. `_bounded` keeps the last twenty messages and then drops any at the front until the first is from the student, so the history never opens with a tool result whose call was trimmed away. `_closing_results` answers every tool call of an answer whose turn ended at one of them, the first with a note that the reply follows and the rest as not run, because a provider rejects a tool call with no result. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine.
+`detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. Its name starts with an underscore because nothing outside this module uses it. `_Waiting` holds what the rebuild learns from the ledger about a confirmation that may still be waiting, before it becomes a `PendingConfirmation`. `_remembered` copies a message keeping only `REMEMBERED_FIELDS`, so the provider's reasoning blocks and the model's name are not kept. `_for_model` wraps a pasted message in `PASTED_FRAME` whenever it is sent, so pasted text is stored as it was pasted and always reaches the model marked as data. `_bounded` keeps the last twenty messages and then drops any at the front until the first is from the student, so the history never opens with a tool result whose call was trimmed away. `_closing_results` answers every tool call of an answer whose turn ended at one of them, the first with a note that the reply follows and the rest as not run, because a provider rejects a tool call with no result. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine. `_standing_from` builds a `StandingMandate` from a confirmed `create_standing_mandate` action, its confirmation time, and its token; it raises when the action has no terms, which the engine's R04 already prevents.
 
 ```python
 class AgentLoop:
@@ -2040,6 +2273,10 @@ class AgentLoop:
         self._conversations: dict[str, list[Message]] = {}
         self._consumed: dict[str, tuple[str, Action]] = {}
         self._closed: dict[str, tuple[str, str, str]] = {}
+        self._standing_notices: dict[tuple[str, str, str], datetime] = {}
+        self._standing_cancelled: set[tuple[str, str, str]] = set()
+        self._standing_attempted: set[tuple[str, str, str]] = set()
+        self._standing_skipped: set[tuple[str, str, str]] = set()
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -2084,7 +2321,7 @@ class AgentLoop:
         return self._converse(user_id, mandate, lang, message, pasted)
 ```
 
-The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `conversations` is the `ConversationStore` that keeps the messages; without one, the loop keeps them in a store held in memory. `self._conversations` holds each student's remembered messages, bounded, and is filled from the store once the ledger has been read, `self._consumed` the tokens already used to act, each with the student and the action it carried out, and `self._closed` the tokens that can no longer be confirmed, with the reason and the key. All three are filled before the ledger is read, because the rebuild fills them. `handle` takes an optional `pasted` message beside the student's own. A pasted message must carry a source other than `user_turn`, or `handle` raises before anything is written, because pasted text claiming to be the student's turn would defeat the provenance check. `handle` works out the language first, from the student's own words. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. A confirmation's reply goes through `_remember_confirmation`, so it is remembered like any turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy. `act` runs one of the `DIRECT_TOOLS` for an app, such as a trace button, without asking the model. Any other tool raises `ValueError` before anything is written, so nothing that moves money or changes the mandate can skip the model's proposal and the student's confirmation. It takes the next turn number and starts a trail with the current mandate, just as a conversation turn does, then runs the call through `_run_tool`, the same path a model's tool call takes. The action therefore passes the mandate engine and leaves `proposal`, `decision`, and `execution` in the ledger. With no model answering, the entries carry no provider or model. It returns the decision and the result. A read only tool never ends a turn, so a finished `AgentReply` coming back would mean something is wrong, and it raises instead of returning it. `erase_conversation` forgets a student's conversation, both the history in memory and the records in the store, and returns how many records it removed. It never touches the ledger.
+The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `conversations` is the `ConversationStore` that keeps the messages; without one, the loop keeps them in a store held in memory. `self._conversations` holds each student's remembered messages, bounded, and is filled from the store once the ledger has been read, `self._consumed` the tokens already used to act, each with the student and the action it carried out, and `self._closed` the tokens that can no longer be confirmed, with the reason and the key. All three are filled before the ledger is read, because the rebuild fills them. `handle` takes an optional `pasted` message beside the student's own. A pasted message must carry a source other than `user_turn`, or `handle` raises before anything is written, because pasted text claiming to be the student's turn would defeat the provenance check. `handle` works out the language first, from the student's own words. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. A confirmation's reply goes through `_remember_confirmation`, so it is remembered like any turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy. `act` runs one of the `DIRECT_TOOLS` for an app, such as a trace button, without asking the model. Any other tool raises `ValueError` before anything is written, so nothing that moves money or changes the mandate can skip the model's proposal and the student's confirmation. It takes the next turn number and starts a trail with the current mandate, just as a conversation turn does, then runs the call through `_run_tool`, the same path a model's tool call takes. The action therefore passes the mandate engine and leaves `proposal`, `decision`, and `execution` in the ledger. With no model answering, the entries carry no provider or model. It returns the decision and the result. A read only tool never ends a turn, so a finished `AgentReply` coming back would mean something is wrong, and it raises instead of returning it. `erase_conversation` forgets a student's conversation, both the history in memory and the records in the store, and returns how many records it removed. It never touches the ledger. Four more collections hold the standing mandates' state, each keyed by the student, the standing mandate, and the period: when each notice was given, which periods were cancelled, which runs were attempted, and which skips were reported.
 
 ```python
     def _converse(
@@ -2174,22 +2411,22 @@ A conversation turn takes the next turn number and starts a trail. The student's
         if missing:
             return None, {"error": f"{call.name} needs {', '.join(missing)}."}
         key = f"{user_id}:t{trail.turn}:{call.name}:{number}"
+        fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
+        if action_type is ActionType.CREATE_STANDING_MANDATE:
+            fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
+            fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
         try:
             action = Action(
                 type=action_type,
                 source=Source.USER_TURN,
                 idempotency_key=key,
                 requested_at=_now(),
-                **{
-                    name: call.arguments[name]
-                    for name in ACTION_ARGUMENTS
-                    if call.arguments.get(name) not in (None, "")
-                },
+                **fields,
             )
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE)
+        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
         untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
@@ -2211,6 +2448,10 @@ A conversation turn takes the next turn number and starts a trail. The student's
             return self._reply(trail, lang, _text(lang, "settings"), decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
+        if action.type is ActionType.TRANSFER:
+            if decision.allowed:
+                return self._pay_standing_now(user_id, mandate, lang, trail, action, decision)
+            return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
         if not decision.allowed:
             return decision, {"refused": True, "rule_ids": decision.rule_ids, "reasons": decision.reasons}
         result = self._run_now(user_id, action, call.arguments, trail)
@@ -2219,7 +2460,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return decision, result
 ```
 
-`_run_tool` turns one tool call into an `Action` and puts it through the mandate engine before anything runs. An unknown tool or a missing argument goes back to the model as an error and creates no action. The idempotency key joins the user, the turn, the tool, and the call number, as in `student_001:t1:propose_transfer:1`, so it differs in every turn and is never supplied by the model. The `Action` starts with source `user_turn`, because a tool call is the model acting on the student's own request, and `requested_at` is now. `**{...}` passes only the action fields the call actually gave. When pydantic rejects an argument, such as a negative amount, the error names the fields and nothing is written. For a transfer or a new payee, `_untrusted_fields` then looks for a payee or an amount the student never typed; a new payee has no amount, so only its payee id can be untrusted. If it finds one, `model_copy` makes a copy of the action with its source changed to where that detail first appeared, `tool_result` or `pasted_text`, the payee's source when both are untrusted. `next(iter(...))` takes the first value of a dictionary, and dictionaries keep the order their keys were added. The loop does not refuse anything itself. The proposal is written, the engine checks the action against the mandate and the history, and the decision is written. Three paths follow. A tier T3 decision ends the turn with the settings reply, so a T3 action never reaches a tool. Every T2 action, a transfer, a new payee, or a freeze, goes to `_propose`. Anything else that was refused goes back to the model with its rule ids and reasons. An allowed action runs at once, joins the history, and is written as an execution with its result.
+`_run_tool` turns one tool call into an `Action` and puts it through the mandate engine before anything runs. An unknown tool or a missing argument goes back to the model as an error and creates no action. The idempotency key joins the user, the turn, the tool, and the call number, as in `student_001:t1:propose_transfer:1`, so it differs in every turn and is never supplied by the model. The `Action` starts with source `user_turn`, because a tool call is the model acting on the student's own request, and `requested_at` is now. `**{...}` passes only the action fields the call actually gave. When pydantic rejects an argument, such as a negative amount, the error names the fields and nothing is written. For a transfer or a new payee, `_untrusted_fields` then looks for a payee or an amount the student never typed; a new payee has no amount, so only its payee id can be untrusted. If it finds one, `model_copy` makes a copy of the action with its source changed to where that detail first appeared, `tool_result` or `pasted_text`, the payee's source when both are untrusted. `next(iter(...))` takes the first value of a dictionary, and dictionaries keep the order their keys were added. The loop does not refuse anything itself. The proposal is written, the engine checks the action against the mandate and the history, and the decision is written. Three paths follow. A tier T3 decision ends the turn with the settings reply, so a T3 action never reaches a tool. Every T2 action, a transfer, a new payee, or a freeze, goes to `_propose`. Anything else that was refused goes back to the model with its rule ids and reasons. An allowed action runs at once, joins the history, and is written as an execution with its result. For `create_standing_mandate` the loop, never the model, gives the standing mandate its id, made from the student, the turn, and the call number, and gathers the four term arguments into `standing_terms`, which pydantic validates. A new standing mandate goes through the provenance check like a transfer. A transfer the engine decides below T2, which only happens under R12, is paid at once by `_pay_standing_now` if allowed, and otherwise ends the turn with the refusal.
 
 When the source was changed, the engine refuses the action under R01, exactly as it refuses any action from data, and after the decision the loop writes an `injection_suspected` entry naming the key, each untrusted field with its source, and the tool call. The loop proposes and the engine decides. Keeping every refusal in the engine means every refusal in the ledger carries a rule from the one place that makes them. `injection_suspected` is its own entry kind, not a `note`, so security events can be counted without reminders mixed in. This stops a payment to a payee who is already on the mandate, which would otherwise have passed every other rule and reached a confirmation.
 
@@ -2253,6 +2494,11 @@ When the source was changed, the engine refuses the action under R01, exactly as
                 return {"trace": self._rails[rail_name].status(receipt_id).model_dump(mode="json")}
             except RailError as error:
                 return {"error": str(error)}
+        if action.type is ActionType.CANCEL_STANDING_RUN:
+            standing = self._standing(user_id, action.standing_mandate_id or "")
+            period = self._next_unrun_period(user_id, standing, action.requested_at)
+            self._standing_cancelled.add((user_id, standing.id, period))
+            return {"cancelled": {"standing_mandate_id": standing.id, "period": period}}
         if action.type is ActionType.PRECHECK:
             result = self._router.precheck(
                 str(arguments.get("action_kind", "")),
@@ -2263,7 +2509,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
         return {"error": f"No runner for {action.type.value}."}
 ```
 
-`_run_now` runs the four kinds of tier T0 action and the one tier T1 action. A balance read returns the student's balances, all of them or one currency, with amounts written as text. A quote asks the router for every route. A reminder writes a ledger note with its text and due date. A trace looks up which rail issued the receipt, only among this student's receipts, so one student can never trace another's transfer, and asks that rail for the status; a `RailError` from the rail becomes an error result. A precheck asks the router. The last line answers an action type with no runner, which cannot happen with the current tools but keeps the result honest if a tool is ever added without one.
+`_run_now` runs the four kinds of tier T0 action and the one tier T1 action. A balance read returns the student's balances, all of them or one currency, with amounts written as text. A quote asks the router for every route. A reminder writes a ledger note with its text and due date. A trace looks up which rail issued the receipt, only among this student's receipts, so one student can never trace another's transfer, and asks that rail for the status; a `RailError` from the rail becomes an error result. A precheck asks the router. The last line answers an action type with no runner, which cannot happen with the current tools but keeps the result honest if a tool is ever added without one. It also runs `cancel_standing_run`, the second tier T1 action: it works out which period to skip, remembers the cancellation, and returns the period in its result, which the execution entry keeps.
 
 ```python
     def _propose(
@@ -2301,6 +2547,20 @@ When the source was changed, the engine refuses the action under R01, exactly as
             pending.display_name = str(arguments.get("display_name") or action.payee_id)
             hours = self._mandates[user_id].cooling_hours
             text = _text(lang, "confirm_payee", payee=action.payee_id, display_name=pending.display_name, hours=hours)
+        elif action.type is ActionType.CREATE_STANDING_MANDATE and action.standing_terms is not None:
+            terms = action.standing_terms
+            text = _text(
+                lang,
+                "confirm_standing",
+                amount=action.amount,
+                currency=action.currency,
+                payee=action.payee_id,
+                purpose=action.purpose,
+                schedule=terms.schedule,
+                tolerance=terms.tolerance_pct,
+                notice=terms.notice_hours,
+                cancel=terms.cancel_window_hours,
+            )
         else:
             text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
         self._pending[token] = pending
@@ -2314,7 +2574,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
         return self._reply(trail, lang, text, decision=decision, confirmation=confirmation)
 ```
 
-`_propose` handles every T2 action after its decision. Anything the engine did not allow, or did not ask to confirm, ends the turn with the refusal and nothing else. `not token` is true for `None` and for an empty string. The waiting confirmation is built first, with what every T2 action shares. A transfer then gets its routes: the router quotes every route and `_choose` picks one, and the confirm reply names the rail, fee, and spread. Adding a payee keeps the display name the model passed, or the payee id when there is none, and the reply names the cooling period from the student's mandate. A freeze names the card. The waiting confirmation is stored under the token, and the reply carries a `ConfirmationRequest`; for a payee or a freeze its `routes` is empty and `selected_route` is `None`. Nothing executes here, and the ledger holds only the proposal and the decision. Before any of that, a request to add a payee who is already on the student's current mandate ends with the `payee_exists` reply: nothing is stored, nothing waits for confirmation, and the payee's addition time is untouched.
+`_propose` handles every T2 action after its decision. Anything the engine did not allow, or did not ask to confirm, ends the turn with the refusal and nothing else. `not token` is true for `None` and for an empty string. The waiting confirmation is built first, with what every T2 action shares. A transfer then gets its routes: the router quotes every route and `_choose` picks one, and the confirm reply names the rail, fee, and spread. Adding a payee keeps the display name the model passed, or the payee id when there is none, and the reply names the cooling period from the student's mandate. A freeze names the card. The waiting confirmation is stored under the token, and the reply carries a `ConfirmationRequest`; for a payee or a freeze its `routes` is empty and `selected_route` is `None`. Nothing executes here, and the ledger holds only the proposal and the decision. Before any of that, a request to add a payee who is already on the student's current mandate ends with the `payee_exists` reply: nothing is stored, nothing waits for confirmation, and the payee's addition time is untouched. A standing mandate's confirmation text repeats every term the student is agreeing to.
 
 ```python
     def _confirm(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
@@ -2352,43 +2612,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
             return self._offer_next_route(lang, trail, token, pending, error)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
-        self._history.setdefault(user_id, []).append(action)
-        self._receipt_rails.setdefault(user_id, {})[receipt.receipt_id] = route.rail
-        self._write(
-            trail,
-            "execution",
-            {
-                "action": _action_json(action),
-                "route": route.model_dump(mode="json"),
-                "mandate_ref": mandate.id,
-                "idempotency_key": action.idempotency_key,
-            },
-        )
-        self._write(trail, "receipt", {"rail": route.rail, "receipt": receipt.model_dump(mode="json")})
-        if route.simulated != receipt.simulated:
-            self._write(
-                trail,
-                "note",
-                {
-                    "kind": "simulated_mismatch",
-                    "idempotency_key": action.idempotency_key,
-                    "rail": route.rail,
-                    "receipt_id": receipt.receipt_id,
-                    "route_simulated": route.simulated,
-                    "receipt_simulated": receipt.simulated,
-                },
-            )
-        text = _text(
-            lang,
-            "sent",
-            amount=receipt.amount,
-            currency=receipt.currency,
-            rail=receipt.rail,
-            receipt_id=receipt.receipt_id,
-        )
-        if receipt.simulated:
-            text = f"{text} {_text(lang, 'simulated')}"
-        return self._reply(trail, lang, text, decision=decision, receipt=receipt)
+        self._record_payment(user_id, trail, action, route, receipt, mandate.id)
+        return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 ```
 
 `_confirm` is the second half of a transfer. A token that is not waiting, or that belongs to another student, is refused and nothing is written. A token older than `CONFIRMATION_TTL` is removed and refused. `total_seconds() // 60` turns the limit into whole minutes for the reply, because `//` divides and drops the remainder. Otherwise the trail continues the turn that proposed the transfer, with its provider and model. The action is rebuilt exactly as it was proposed, with only the token added, and the engine checks it again. This second check is what turns the token into permission: R11 confirms the token belongs to this exact action, and the engine now reports it allowed without asking for another confirmation. If the check fails, the waiting confirmation is removed and the refusal is written as a decision. A payee or a freeze then goes to `_carry_out`. For a transfer, `assert` states that the pending confirmation holds its route; an `assert` raises an error if its condition is ever false, so a broken assumption fails loudly instead of paying over no route. The loop writes the confirmation, then calls the rail named by the selected route with that route, the mandate's `id` as `mandate_ref`, the action's idempotency key, and the token. A `RailError` goes to `_offer_next_route`. When the rail returns a receipt, the waiting confirmation is removed and its token recorded as consumed, the action joins the history, the key of the rail that paid is remembered for tracing, and the execution and the receipt are written, in that order. The receipt entry carries that key as `rail` beside the receipt, because the receipt names the rail by its own name, which need not match its key in `rails`. The receipt's `simulated` flag is the rail's truth, because only the rail that executed knows whether money moved. When it differs from the route's flag, which is what the router expected, a `note` whose `kind` is `simulated_mismatch` records both flags, the key, the rail, and the receipt id. Whenever the receipt is simulated, the reply adds the `simulated` text in the student's language. The trail carries the id of the mandate the confirmation is checked against, which is the version that authorises the payment and the one the receipt names.
@@ -2461,6 +2686,8 @@ When no confirmation waits under the token for this student, and when a waiting 
         freeze: FreezeResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
+        elif action.type is ActionType.CREATE_STANDING_MANDATE:
+            text = self._create_standing(user_id, lang, trail, action, token)
         else:
             text, freeze = self._freeze(lang, trail, action)
         return self._reply(trail, lang, text, decision=decision, freeze=freeze)
@@ -2473,7 +2700,7 @@ When no confirmation waits under the token for this student, and when a waiting 
             return _text(lang, "payee_exists", payee=payee)
         added_at = _now()
         allowed_from = added_at + timedelta(hours=mandate.cooling_hours)
-        version = self._new_version(user_id, payee, added_at)
+        version = self._new_version(user_id, self._with_payee(user_id, payee, added_at))
         self._write(trail, "execution", {"action": _action_json(action), "result": {"payee_added": payee}})
         self._write(
             trail,
@@ -2495,18 +2722,230 @@ When no confirmation waits under the token for this student, and when a waiting 
             display_name=name or payee,
             allowed_from=allowed_from.isoformat(timespec="seconds"),
         )
+```
 
-    def _new_version(
-        self, user_id: str, payee: str, added_at: datetime, version_id: str | None = None
-    ) -> Mandate:
+`_carry_out` also finishes a confirmed standing mandate, handing it to `_create_standing` below. How it finishes a payee or a freeze is explained after `_freeze`, further down.
+
+```python
+    def _with_payee(self, user_id: str, payee: str, added_at: datetime) -> dict[str, Any]:
         current = self._mandates[user_id]
-        version = current.model_copy(
-            update={
-                "id": version_id or _next_version(current.id),
-                "allowed_payees": current.allowed_payees | {payee},
-                "payee_added_at": {**current.payee_added_at, payee: added_at},
-            }
+        return {
+            "allowed_payees": current.allowed_payees | {payee},
+            "payee_added_at": {**current.payee_added_at, payee: added_at},
+        }
+
+    def _with_standing(self, user_id: str, standing: StandingMandate) -> dict[str, Any]:
+        return {"standing_mandates": [*self._mandates[user_id].standing_mandates, standing]}
+
+    def _create_standing(self, user_id: str, lang: str, trail: _Trail, action: Action, token: str) -> str:
+        standing = _standing_from(action, _now(), token)
+        version = self._new_version(user_id, self._with_standing(user_id, standing))
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"standing_created": standing.id}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "standing_created",
+                "idempotency_key": action.idempotency_key,
+                "standing_mandate": standing.model_dump(mode="json", exclude={"confirmation_token"}),
+                "action": _action_json(action),
+                "new_mandate_id": version.id,
+            },
         )
+        return _text(
+            lang,
+            "standing_created",
+            standing_id=standing.id,
+            amount=standing.amount,
+            currency=action.currency,
+            payee=standing.payee_id,
+            schedule=standing.schedule,
+        )
+```
+
+`_with_payee` and `_with_standing` describe a change to the current mandate as the fields a new version replaces, and `_new_version`, further down, applies one. `_create_standing` builds the `StandingMandate` from the confirmed action with `_standing_from`, stamped with the confirmation time and the token the student confirmed with, and makes it part of a new mandate version. The execution records the action, and a `standing_created` note records the standing mandate without its token, the action, and the new version's id: everything a restart needs to build it again, the token included, since the engine can compute it again from the action. The reply names the standing mandate's id.
+
+```python
+    def _standing(self, user_id: str, standing_id: str) -> StandingMandate:
+        return next(s for s in self._mandates[user_id].standing_mandates if s.id == standing_id)
+
+    def _ran(self, user_id: str, standing: StandingMandate, period: str) -> bool:
+        return any(
+            past.type is ActionType.TRANSFER
+            and past.standing_mandate_id == standing.id
+            and (occurrence_containing(standing.schedule, standing.notice_hours, past.requested_at) or ("",))[0] == period
+            for past in self._history.get(user_id, [])
+        )
+
+    def _next_unrun_period(self, user_id: str, standing: StandingMandate, at: datetime) -> str:
+        period, due = next_occurrence(standing.schedule, at)
+        if self._ran(user_id, standing, period):
+            period, due = next_occurrence(standing.schedule, due + timedelta(hours=24))
+        return period
+```
+
+`_standing` finds a standing mandate on the student's current mandate by id. `_ran` says whether a run of it already executed in a period, by looking in the history for a transfer that carries its id and falls in that period's window. `(... or ("",))[0]` reads the period of an occurrence, or an empty string when a transfer fell outside every window. `_next_unrun_period` is the period a cancellation applies to: the next occurrence, or the one after it when that one already ran.
+
+```python
+    def run_due_standing_mandates(self, now: datetime) -> list[StandingEvent]:
+        events: list[StandingEvent] = []
+        for user_id, mandate in list(self._mandates.items()):
+            for standing in mandate.standing_mandates:
+                occurrence = occurrence_containing(standing.schedule, standing.notice_hours, now)
+                if not standing.active or occurrence is None:
+                    continue
+                period, due = occurrence
+                key = (user_id, standing.id, period)
+                if key in self._standing_attempted or self._ran(user_id, standing, period):
+                    continue
+                event = {
+                    "user_id": user_id,
+                    "standing_mandate_id": standing.id,
+                    "period": period,
+                    "due_at": due,
+                    "amount": standing.amount,
+                    "currency": mandate.currency,
+                    "payee_id": standing.payee_id,
+                }
+                if key in self._standing_cancelled:
+                    if key not in self._standing_skipped:
+                        self._standing_skipped.add(key)
+                        self._write(self._attempt_trail(user_id, mandate), "note", {"kind": "standing_skipped", "standing_mandate_id": standing.id, "period": period})
+                        events.append(StandingEvent(kind="skipped", **event))
+                    continue
+                noticed = self._standing_notices.get(key)
+                if noticed is None:
+                    noticed = self._standing_notices[key] = now
+                    cancel_until = now + timedelta(hours=standing.cancel_window_hours)
+                    self._write(
+                        self._attempt_trail(user_id, mandate),
+                        "note",
+                        {
+                            "kind": "standing_notice",
+                            "standing_mandate_id": standing.id,
+                            "period": period,
+                            "due_at": due.isoformat(),
+                            "noticed_at": now.isoformat(),
+                            "cancel_until": cancel_until.isoformat(),
+                        },
+                    )
+                    events.append(StandingEvent(kind="notice", cancel_until=cancel_until, **event))
+                if now >= noticed + timedelta(hours=standing.cancel_window_hours):
+                    events.append(self._run_standing(user_id, standing, period, now, event))
+        return events
+
+    def _run_standing(
+        self, user_id: str, standing: StandingMandate, period: str, now: datetime, event: dict[str, Any]
+    ) -> StandingEvent:
+        mandate = self._mandates[user_id]
+        trail = self._attempt_trail(user_id, mandate)
+        action = Action(
+            type=ActionType.TRANSFER,
+            source=Source.STANDING_MANDATE,
+            idempotency_key=f"{user_id}:standing:{standing.id}:{period}",
+            requested_at=now,
+            amount=standing.amount,
+            currency=mandate.currency,
+            corridor=standing.corridor,
+            payee_id=standing.payee_id,
+            purpose=standing.purpose,
+            standing_mandate_id=standing.id,
+        )
+        self._standing_attempted.add((user_id, standing.id, period))
+        self._write(
+            trail,
+            "proposal",
+            {"standing_run": {"standing_mandate_id": standing.id, "period": period}, "action": _action_json(action)},
+        )
+        decision = self._engine.check(action, mandate, self._history.get(user_id, []))
+        self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
+        if not decision.allowed or decision.requires_confirmation:
+            return StandingEvent(kind="needs_student", decision=decision, **event)
+        receipt = self._pay(user_id, trail, action, standing.id, standing.confirmation_token)
+        if receipt is None:
+            return StandingEvent(kind="rail_failed", decision=decision, **event)
+        return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
+```
+
+`run_due_standing_mandates` is what the app's scheduler calls with the current time. For every active standing mandate whose window contains `now`, it takes one step. A period already run or already attempted is left alone. A cancelled period is skipped: a `standing_skipped` note is written once, and a `skipped` event returned. The first time a period is seen, a `standing_notice` note records when the notice was given and until when the student may cancel, and a `notice` event is returned for the app. `self._standing_notices[key] = now` stores the notice time and hands it back in one expression. Once `cancel_window_hours` have passed since that notice, `_run_standing` runs the period. It builds the transfer with source `standing_mandate` and the key `<user>:standing:<id>:<period>`, marks the period attempted so the scheduler never repeats it, and writes the proposal marked `standing_run`. It then asks the engine and writes the decision. A decision that is refused or asks for confirmation returns `needs_student` and pays nothing. Otherwise `_pay` pays under the standing mandate's id and the token the student confirmed it with, and a `run` event carries the decision and the receipt, or `rail_failed` when the rail failed. Each event is a `StandingEvent`, built from the fields shared in `event` with `**`.
+
+```python
+    def _pay_standing_now(
+        self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, decision: Decision
+    ) -> AgentReply:
+        standing = self._standing(user_id, action.standing_mandate_id or "")
+        receipt = self._pay(user_id, trail, action, standing.id, standing.confirmation_token)
+        if receipt is None:
+            return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
+        return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
+
+    def _pay(
+        self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
+    ) -> Receipt | None:
+        routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
+        route = self._choose(routes, set())
+        if route is None:
+            return None
+        try:
+            receipt = self._rails[route.rail].execute(route, mandate_ref, action.idempotency_key, token)
+        except RailError as error:
+            self._write(
+                trail,
+                "note",
+                {"idempotency_key": action.idempotency_key, "rail": route.rail, "rail_error": str(error), "executed": False},
+            )
+            return None
+        self._record_payment(user_id, trail, action, route, receipt, mandate_ref)
+        return receipt
+
+    def _record_payment(
+        self, user_id: str, trail: _Trail, action: Action, route: Route, receipt: Receipt, mandate_ref: str
+    ) -> None:
+        self._history.setdefault(user_id, []).append(action)
+        self._receipt_rails.setdefault(user_id, {})[receipt.receipt_id] = route.rail
+        self._write(
+            trail,
+            "execution",
+            {
+                "action": _action_json(action),
+                "route": route.model_dump(mode="json"),
+                "mandate_ref": mandate_ref,
+                "idempotency_key": action.idempotency_key,
+            },
+        )
+        self._write(trail, "receipt", {"rail": route.rail, "receipt": receipt.model_dump(mode="json")})
+        if route.simulated != receipt.simulated:
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "simulated_mismatch",
+                    "idempotency_key": action.idempotency_key,
+                    "rail": route.rail,
+                    "receipt_id": receipt.receipt_id,
+                    "route_simulated": route.simulated,
+                    "receipt_simulated": receipt.simulated,
+                },
+            )
+
+    def _sent_text(self, lang: str, receipt: Receipt) -> str:
+        text = _text(
+            lang,
+            "sent",
+            amount=receipt.amount,
+            currency=receipt.currency,
+            rail=receipt.rail,
+            receipt_id=receipt.receipt_id,
+        )
+        return f"{text} {_text(lang, 'simulated')}" if receipt.simulated else text
+```
+
+`_pay_standing_now` pays a transfer the engine allowed under R12 from a chat turn, and ends the turn with the receipt. `_pay` is the one place a transfer without a waiting confirmation is paid: it quotes the routes, picks the best one, and calls the rail with the mandate reference and token it is given. A `RailError` writes the usual failure note and returns `None`. `_record_payment` writes what every payment leaves behind, and `_confirm` uses it too: the action joins the history, the receipt's rail is remembered for tracing, and the execution and the receipt are written, with a `simulated_mismatch` note when the rail and the route disagree. `_sent_text` builds the reply that money was sent, adding the simulation sentence when the receipt is simulated.
+
+```python
+    def _new_version(self, user_id: str, update: dict[str, Any], version_id: str | None = None) -> Mandate:
+        current = self._mandates[user_id]
+        version = current.model_copy(update={"id": version_id or _next_version(current.id), **update})
         self._versions[version.id] = version
         self._mandates[user_id] = version
         return version
@@ -2673,14 +3112,37 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
                 payee = entry.payload["payee_id"]
                 if mandate is not None and payee not in mandate.payee_added_at:
                     added_at = datetime.fromisoformat(entry.payload["added_at"])
-                    self._new_version(user_id, payee, added_at, entry.payload.get("new_mandate_id"))
+                    update = self._with_payee(user_id, payee, added_at)
+                    self._new_version(user_id, update, entry.payload.get("new_mandate_id"))
+            elif entry.kind == "note" and entry.payload.get("kind") == "standing_created":
+                self._rebuild_standing(user_id, entry.payload)
+            elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
+                key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
+                self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+            elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
+                self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
+            if entry.kind == "proposal" and "standing_run" in entry.payload:
+                run = entry.payload["standing_run"]
+                self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
+            if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
+                cancelled = entry.payload["result"]["cancelled"]
+                self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
 ```
 
-`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id. The same pass records the token of every executed T2 action as consumed, computing it again from the action with the engine. It also rebuilds the confirmations that were still waiting. `proposals` remembers every proposal by its idempotency key, and `waiting` holds the keys whose confirmation is still open. A decision opens one through `_maybe_waiting`, and a second decision for the same key, a refusal at confirmation, closes it and records its token as refused. A confirmation closes a payee or a freeze, which finish in the same step. A transfer stays open until its execution, because a rail can fail between the confirmation and the payment. A rail failure note adds the failed rail and restarts the waiting time.
+`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id. The same pass records the token of every executed T2 action as consumed, computing it again from the action with the engine. It also rebuilds the confirmations that were still waiting. `proposals` remembers every proposal by its idempotency key, and `waiting` holds the keys whose confirmation is still open. A decision opens one through `_maybe_waiting`, and a second decision for the same key, a refusal at confirmation, closes it and records its token as refused. A confirmation closes a payee or a freeze, which finish in the same step. A transfer stays open until its execution, because a rail can fail between the confirmation and the payment. A rail failure note adds the failed rail and restarts the waiting time. It also rebuilds the standing mandates: a `standing_created` note goes to `_rebuild_standing`, a `standing_notice` note restores when the notice was given, a `standing_skipped` note restores the skip, a proposal marked `standing_run` restores the attempt, and the execution of a `cancel_standing_run` restores the cancellation from its result.
 
 ```python
         for waited in waiting.values():
             self._restore_pending(waited)
+
+    def _rebuild_standing(self, user_id: str, payload: dict[str, Any]) -> None:
+        mandate = self._mandates.get(user_id)
+        if mandate is None or any(s.id == payload["standing_mandate"]["id"] for s in mandate.standing_mandates):
+            return
+        action = Action.model_validate(payload["action"])
+        token = self._engine.confirmation_token_for(action, mandate)
+        standing = StandingMandate.model_validate({**payload["standing_mandate"], "confirmation_token": token})
+        self._new_version(user_id, self._with_standing(user_id, standing), payload.get("new_mandate_id"))
 
     def _maybe_waiting(
         self, user_id: str, entry: LedgerEntry, proposal: dict[str, Any], waiting: dict[str, "_Waiting"]
@@ -2733,7 +3195,7 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
         self._pending.setdefault(token, pending)
 ```
 
-`_maybe_waiting` opens a waiting confirmation only for a decision that allowed the action and asked for confirmation with a warning. It skips a payee who was already allowed at that point in the ledger, because at the time the loop answered that nothing changed and created nothing to confirm. `_restore_pending` drops anything older than `CONFIRMATION_TTL`, recording its token as expired, as `_confirm` would. For a transfer it quotes again and picks the best route that has not failed, dropping the confirmation when none is left and recording its token as out of routes, as `_offer_next_route` did. The token is computed again by the engine from the action, which is why the ledger never needs to hold it. `setdefault` leaves any confirmation already waiting under that token untouched.
+`_maybe_waiting` opens a waiting confirmation only for a decision that allowed the action and asked for confirmation with a warning. It skips a payee who was already allowed at that point in the ledger, because at the time the loop answered that nothing changed and created nothing to confirm. `_restore_pending` drops anything older than `CONFIRMATION_TTL`, recording its token as expired, as `_confirm` would. For a transfer it quotes again and picks the best route that has not failed, dropping the confirmation when none is left and recording its token as out of routes, as `_offer_next_route` did. The token is computed again by the engine from the action, which is why the ledger never needs to hold it. `setdefault` leaves any confirmation already waiting under that token untouched. `_rebuild_standing` adds a standing mandate from its note to a new version with the recorded id, computing its token again from the recorded action, and skips one the mandate already holds.
 
 ## The evaluation harness, `core/harness.py`
 
@@ -2752,11 +3214,12 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Role, Source, ToolCall
+from contracts.schemas import AgentReply, Mandate, Message, Role, Source, StandingEvent, ToolCall
 from core.agent import AgentLoop
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
+from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail
 from rails.fake_router import FakeRouter
 
@@ -2785,10 +3248,11 @@ FIXTURE_MANDATE: dict[str, Any] = {
     "allowed_purposes": ["rent"],
 }
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
-FIXTURE_VALIDITY = timedelta(days=30)
+# Long enough to cover a standing run that falls due up to two months ahead.
+FIXTURE_VALIDITY = timedelta(days=70)
 ```
 
-The harness imports the same pieces a test of the agent loop uses: the fake model adapter, the hash chained ledger, the deterministic engine, the fake router, and the fake rail. It never imports a real model or a real rail, so running it costs nothing and needs no keys. `SUITES_DIR`, `SCENARIOS_DIR`, and `REPORT_PATH` are built from `ROOT`, the folder above `core/`, so the harness works from any current directory. `PASSED`, `FAILED`, and `NOT_AUTOMATED` are the only three results an entry can have. `TEXT_CHECKS` names the two expectations that add up across levels, as explained below. The fixtures are the same student, mandate, and balances as the agent tests, and the comment says they are fixtures and names this file as their source, because rule 4 of the project forbids a limit without a source.
+The harness imports the same pieces a test of the agent loop uses: the fake model adapter, the hash chained ledger, the deterministic engine, the fake router, and the fake rail. It never imports a real model or a real rail, so running it costs nothing and needs no keys. `SUITES_DIR`, `SCENARIOS_DIR`, and `REPORT_PATH` are built from `ROOT`, the folder above `core/`, so the harness works from any current directory. `PASSED`, `FAILED`, and `NOT_AUTOMATED` are the only three results an entry can have. `TEXT_CHECKS` names the two expectations that add up across levels, as explained below. The fixtures are the same student, mandate, and balances as the agent tests, and the comment says they are fixtures and names this file as their source, because rule 4 of the project forbids a limit without a source. `FIXTURE_VALIDITY` is seventy days either side of now, so a standing run that falls due up to two months ahead is still inside the fixture mandate.
 
 ```python
 @dataclass
@@ -2903,9 +3367,45 @@ def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]
         return [f"{where}: the model was not called, so it saw nothing"]
     seen = "\n".join(message.text for message in calls[0][0])
     return [f"{where}: the model did not receive {text!r}" for text in wanted if text not in seen]
+
+
+def _run_due_time(mandate: Mandate, when: str) -> datetime:
+    standing = mandate.standing_mandates[-1]
+    now = datetime.now(timezone.utc)
+    period, due = next_occurrence(standing.schedule, now)
+    if due - timedelta(hours=standing.notice_hours) <= now + timedelta(minutes=1):
+        period, due = next_occurrence(standing.schedule, due + RUN_WINDOW_AFTER_DUE)
+    notice_at = due - timedelta(hours=standing.notice_hours)
+    if when == "notice":
+        return notice_at + timedelta(minutes=1)
+    if when == "after_cancel_window":
+        return notice_at + timedelta(hours=standing.cancel_window_hours, minutes=2)
+    raise ValueError(f"run_due must be notice or after_cancel_window, not {when!r}")
+
+
+def _judge_events(where: str, events: list[StandingEvent], expected: list[dict[str, Any]]) -> list[str]:
+    kinds = [event.kind for event in events]
+    if len(events) != len(expected):
+        return [f"{where}: events were {kinds}, expected {[wanted.get('kind') for wanted in expected]}"]
+    failures = []
+    for event, wanted in zip(events, expected):
+        view = {
+            "kind": event.kind,
+            "standing_mandate_id": event.standing_mandate_id,
+            "period": event.period,
+            "rule_ids": event.decision.rule_ids if event.decision else [],
+            "tier": event.decision.tier.value if event.decision else None,
+            "receipt_mandate_ref": event.receipt.mandate_ref if event.receipt else None,
+        }
+        failures += [
+            f"{where}: event {name} was {view.get(name)!r}, expected {value!r}"
+            for name, value in wanted.items()
+            if view.get(name) != value
+        ]
+    return failures
 ```
 
-`_model_saw` checks the `model_saw` expectation of a turn: every listed string must appear in the messages of the first model call that turn made. That is how a scenario proves the model received earlier turns. A turn that never called the model fails the check, because it could not have seen anything.
+`_model_saw` checks the `model_saw` expectation of a turn: every listed string must appear in the messages of the first model call that turn made. That is how a scenario proves the model received earlier turns. A turn that never called the model fails the check, because it could not have seen anything. `_run_due_time` turns a `run_due` value into a time, standing in for the app's scheduler. It takes the latest standing mandate and the next occurrence whose notice is still ahead, then returns a minute after the notice time for `notice`, or just after the cancel window for `after_cancel_window`. `_judge_events` compares the standing events a `run_due` turn returned with the expected list, in order, each on the fields it names, read from a flat view of the event.
 
 ```python
 def _token(confirm: Any, replies: list[AgentReply]) -> str:
@@ -2939,18 +3439,23 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         adapter = FakeModelAdapter(responses)
         fixtures = scenario.get("fixtures", {})
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
+        mandates = {USER: _mandate(fixtures.get("mandate", {}))}
         loop = AgentLoop(
             adapter=adapter,
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
             rails=_rails(),
-            mandates={USER: _mandate(fixtures.get("mandate", {}))},
+            mandates=mandates,
             balances={USER: balances},
             pending={},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
+            if "run_due" in turn:
+                events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
+                result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
+                continue
             message = Message(
                 role=Role.USER,
                 text=turn["user"],
@@ -2983,7 +3488,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     return result
 ```
 
-`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger, and `verify` must find the hash chain intact.
+`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger, and `verify` must find the hash chain intact. A turn with `run_due` calls `run_due_standing_mandates` at that time and checks the events instead of a reply.
 
 ```python
 def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -> list[EntryResult]:
@@ -3380,7 +3885,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 276 tests. Each was written before the code it checks and was seen to fail first.
+There are 324 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -3503,6 +4008,33 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_mandate.py` | `test_transfer_to_a_payee_inside_the_cooling_window_is_refused_under_r14` | A payee added two hours ago is refused under R14, and the reason gives the exact time the transfer becomes allowed |
 | `test_mandate.py` | `test_transfer_to_a_payee_after_the_cooling_window_is_allowed` | A payee added 25 hours ago can be paid |
 | `test_mandate.py` | `test_cooling_hours_can_be_set_per_mandate` | A mandate with a one hour cooling period lets a payee added two hours ago be paid |
+| `test_standing.py` | `test_standing_action_types_have_their_tiers_and_warning` | Creating is T2 with `warn.standing.new`, cancelling a run is T1 |
+| `test_standing.py` | `test_a_run_within_pattern_is_allowed_at_t1_under_r12_without_confirmation` | A run within its pattern is allowed at T1 citing only R12, with no confirmation, token, or reason |
+| `test_standing.py` | `test_the_student_may_also_send_the_run_themselves_within_pattern` | The same transfer from the student's own turn is also R12 |
+| `test_standing.py` | `test_an_amount_inside_the_tolerance_is_within_pattern` | Runs for the two edges of 5 percent and an amount between; each is R12 |
+| `test_standing.py` | `test_a_request_inside_the_schedule_window_is_within_pattern` | Runs for the window's opening, the due time, and just before its close; each is R12 |
+| `test_standing.py` | `test_an_unknown_standing_mandate_escalates_under_r13` | An id not on the mandate escalates, naming it |
+| `test_standing.py` | `test_an_inactive_standing_mandate_escalates_under_r13` | An inactive standing mandate escalates |
+| `test_standing.py` | `test_a_standing_mandate_confirmed_after_the_request_escalates_under_r13` | A standing mandate confirmed after the request escalates |
+| `test_standing.py` | `test_a_different_payee_escalates_under_r13_and_names_it` | Another payee escalates, naming the payee |
+| `test_standing.py` | `test_a_different_corridor_escalates_under_r13_and_names_it` | Another corridor escalates, naming it |
+| `test_standing.py` | `test_a_different_purpose_escalates_under_r13_and_names_it` | Another purpose escalates, naming it |
+| `test_standing.py` | `test_an_amount_outside_the_tolerance_escalates_under_r13_and_names_it` | Runs for a cent past the edge and for 1,500; each escalates, naming the amount |
+| `test_standing.py` | `test_a_request_outside_the_schedule_window_escalates_under_r13` | Runs for just before the window, its exact close, and ten days after; each escalates |
+| `test_standing.py` | `test_a_second_run_in_the_same_period_escalates_under_r13` | A second run in a period that already ran escalates, naming the period |
+| `test_standing.py` | `test_every_reason_outside_the_pattern_is_named_in_one_r13_reason` | An amount and a purpose outside the pattern are both named in the one reason |
+| `test_standing.py` | `test_an_escalated_transfer_that_breaks_a_money_rule_is_refused_citing_r13_too` | An escalated transfer to a stranger is refused citing R13 and R06 |
+| `test_standing.py` | `test_a_run_within_pattern_still_passes_the_money_rules` | A run above a lowered per transaction limit is refused under R08 |
+| `test_standing.py` | `test_the_standing_source_is_refused_under_r01_without_a_matching_standing_mandate` | The standing source naming no standing mandate is refused under R01 |
+| `test_standing.py` | `test_the_standing_source_is_refused_under_r01_on_any_other_action` | The standing source on adding a payee is refused under R01 |
+| `test_standing.py` | `test_creating_a_standing_mandate_needs_confirmation_with_its_warning` | Creating needs confirmation, cites R11, and carries `warn.standing.new` |
+| `test_standing.py` | `test_creating_a_standing_mandate_without_its_terms_is_refused_under_r04` | Runs for a missing amount, payee, terms, and id; each is refused under R04 |
+| `test_standing.py` | `test_creating_a_standing_mandate_passes_the_payee_and_limit_rules` | A stranger and 1,600 SGD are refused under R06 and R08 at creation |
+| `test_standing.py` | `test_the_token_signs_the_standing_terms` | A token for one set of terms is refused under R11 for another and accepted for its own |
+| `test_standing.py` | `test_cancelling_a_run_is_t1_and_needs_a_standing_mandate_on_the_mandate` | Cancelling is allowed at T1 under R02, and an unknown or missing id is refused under R04 |
+| `test_standing.py` | `test_a_schedule_must_be_monthly_on_a_day_from_1_to_28` | Runs for four bad schedules; each fails validation |
+| `test_standing.py` | `test_the_cancel_window_may_not_exceed_the_notice` | A cancel window longer than the notice fails validation |
+| `test_standing.py` | `test_occurrences_follow_the_window_around_each_due_date` | The window's edges, a time between windows, the next month, and the turn of the year |
 | `test_mandate.py` | `test_freeze_card_without_an_instrument_id_is_refused_under_r04` | Runs for no card and an empty one; each freeze is refused under R04 alone |
 | `test_mandate.py` | `test_a_replayed_add_payee_is_refused_under_r10` | An executed payee action presented again is refused under R10 |
 | `test_mandate.py` | `test_an_amount_of_one_hundred_million_is_accepted_by_the_schema` | The ceiling itself is a valid amount |
@@ -3662,6 +4194,13 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_agent.py` | `test_history_is_bounded_to_twenty_messages_and_starts_with_the_student` | After fifteen turns the model sees at most twenty earlier messages, starting with the student |
 | `test_agent.py` | `test_a_new_loop_rebuilds_the_conversation_from_the_store` | A new loop over the same store gives the model the conversation of the loop before it |
 | `test_agent.py` | `test_erasing_a_conversation_forgets_it_and_leaves_the_ledger_untouched` | After erasing, the model sees no earlier messages, the earlier ledger entries are unchanged, and the chain verifies |
+| `test_agent.py` | `test_creating_a_standing_mandate_confirms_then_adds_it_to_a_new_mandate_version` | Proposing gives a confirmation with `warn.standing.new`, the loop's id, and the terms; confirming adds the standing mandate to version 2 with its token, and the ledger holds the note but never the token |
+| `test_agent.py` | `test_a_standing_run_gives_notice_then_executes_under_r12_after_the_cancel_window` | Nothing before the notice, one notice, nothing during the cancel window, one run under R12 at T1 with the receipt against the standing mandate id, and nothing after |
+| `test_agent.py` | `test_a_cancelled_run_is_skipped_for_that_period_only` | A cancellation after the notice skips the run, pays nothing, and is reported once |
+| `test_agent.py` | `test_an_out_of_pattern_amount_under_a_standing_mandate_escalates_to_a_t2_confirmation` | 1,500 SGD under a 1,200 standing mandate reaches a T2 confirmation citing R13 and R11 |
+| `test_agent.py` | `test_the_student_can_pay_a_standing_run_within_pattern_straight_away_under_r12` | Inside the window, a run from chat is paid at once under R12 with its receipt |
+| `test_agent.py` | `test_a_new_loop_rebuilds_standing_mandates_notices_and_cancellations` | A new loop has the standing mandate with its token, the version, the notice, and the cancellation |
+| `test_agent.py` | `test_a_standing_run_from_chat_that_breaks_a_money_rule_ends_the_turn_with_the_refusal` | A run from chat above a lowered limit ends the turn with the R08 refusal |
 | `test_agent.py` | `test_erasing_one_student_keeps_the_others` | Erasing one student leaves another student's records |
 | `test_agent.py` | `test_a_payee_injected_in_an_earlier_turn_is_still_untrusted` | A payee and amount from an earlier turn's tool result are refused under R01 in a later turn |
 | `test_agent.py` | `test_details_the_student_typed_in_an_earlier_turn_stay_trusted` | An amount typed in one turn and a payee named in the next reach a confirmation |
@@ -3701,14 +4240,15 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_harness.py` | `test_a_scenario_that_raises_is_a_failure_not_a_crash` | A scenario that runs out of scripted answers is reported as failed with the error |
 | `test_harness.py` | `test_a_missing_scenario_is_reported_as_not_automated` | An entry with no scenario has no runs, is not automated, and is listed so in the report |
 | `test_harness.py` | `test_the_report_counts_are_computed_and_carry_the_commit_and_time` | The suite, tier, and language counts follow from the results, and the report names the commit and the time it was given |
-| `test_harness.py` | `test_every_real_scenario_passes_and_every_other_entry_is_not_automated` | The 14 real scenarios pass and every other entry of both suites is not automated |
-| `test_harness.py` | `test_every_scenario_file_names_an_entry_in_a_suite` | Every scenario file is one of the 14 and names a suite entry |
+| `test_harness.py` | `test_every_real_scenario_passes_and_every_other_entry_is_not_automated` | The 15 real scenarios pass and every other entry of both suites is not automated |
+| `test_harness.py` | `test_every_scenario_file_names_an_entry_in_a_suite` | Every scenario file is one of the 15 and names a suite entry |
 | `test_harness.py` | `test_a_runs_text_checks_add_to_the_scenarios_instead_of_replacing_them` | A string the scenario requires is still checked in a run that adds its own |
 | `test_harness.py` | `test_model_saw_checks_what_the_model_received_and_a_literal_token_can_be_confirmed` | A string the model never received fails `model_saw` with that string named, and a literal token is tried |
+| `test_harness.py` | `test_a_run_due_turn_checks_the_events_it_returns` | A `run_due` turn expecting a run where a notice came fails, naming both |
 | `test_harness.py` | `test_a_scenario_file_that_cannot_be_read_fails_its_entry_without_stopping_the_others` | A malformed scenario fails its entry with the parse error while the other entries still run |
 | `test_agent.py` | `test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it` | A rail named `wise_backend` behind the `wise` route names the receipt and the reply, and a new loop over the ledger still traces the receipt through the right rail |
 
-Twenty parametrized tests add forty extra runs, which is how 236 test functions become 276 tests.
+Twenty six parametrized tests add fifty three extra runs, which is how 271 test functions become 324 tests.
 
 ## The suites and their scenarios
 
@@ -3765,7 +4305,7 @@ runs:
       ledger: [proposal, decision, confirmation_rejected]
 ```
 
-`runs` lists one or more conversations, each with the language its turns default to. Each turn has the student's text under `user`, an optional `lang` and `source`, and the model's scripted answers under `model`, each either `text` or a list of `calls` with a tool `name` and `arguments`. A turn with `confirm: latest` confirms the newest confirmation, `confirm: 1` confirms the one from turn 1, and `token:` sends a literal string, such as a confirmation from yesterday that was never issued. `expect` on a turn may also list `model_saw`, strings the model must have received in that turn's first call, which is how memory across turns is checked. `expect` on a turn checks that turn's reply. `expected` checks the final reply and the whole run. It can sit on the scenario for every run, on a run, or on both, and a run's `must_contain` and `must_not_contain` add to the scenario's while its other keys replace them. The keys are `reply`, the kind of reply (`receipt`, `freeze`, `confirmation`, `refusal`, or `answer`); `rule_ids`, exactly and in order; `warning_key`; `lang`; `ledger`, the entry kinds of the action trail in order, leaving out the `turn` entries that only count a call's messages; `must_contain`, strings the final reply must include; and `must_not_contain`, strings no reply and no ledger entry may include. `fixtures` can override the mandate or the balances, and `note` says what part of the entry the scenario does not cover, and appears in the report.
+`runs` lists one or more conversations, each with the language its turns default to. Each turn has the student's text under `user`, an optional `lang` and `source`, and the model's scripted answers under `model`, each either `text` or a list of `calls` with a tool `name` and `arguments`. A turn with `confirm: latest` confirms the newest confirmation, `confirm: 1` confirms the one from turn 1, and `token:` sends a literal string, such as a confirmation from yesterday that was never issued. `expect` on a turn may also list `model_saw`, strings the model must have received in that turn's first call, which is how memory across turns is checked. A turn with `run_due: notice` or `run_due: after_cancel_window` has no message: it stands in for the app's scheduler and calls `run_due_standing_mandates` at that moment of the next run of the latest standing mandate, and its `expect` lists `events`, each matched on the fields it names. `expect` on a turn checks that turn's reply. `expected` checks the final reply and the whole run. It can sit on the scenario for every run, on a run, or on both, and a run's `must_contain` and `must_not_contain` add to the scenario's while its other keys replace them. The keys are `reply`, the kind of reply (`receipt`, `freeze`, `confirmation`, `refusal`, or `answer`); `rule_ids`, exactly and in order; `warning_key`; `lang`; `ledger`, the entry kinds of the action trail in order, leaving out the `turn` entries that only count a call's messages; `must_contain`, strings the final reply must include; and `must_not_contain`, strings no reply and no ledger entry may include. `fixtures` can override the mandate or the balances, and `note` says what part of the entry the scenario does not cover, and appears in the report.
 
 Quote a bare yes or no. YAML reads an unquoted `Yes` as the value true, not as the word, which is why the scenarios write `user: "Yes"`. The harness fails such a run with a validation error rather than guessing.
 

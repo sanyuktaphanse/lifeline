@@ -7,7 +7,8 @@ from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
-from contracts.schemas import Action, ActionType, Decision, Mandate, Source, Tier
+from contracts.schemas import Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
+from core.standing import occurrence_containing
 from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
@@ -18,6 +19,7 @@ WARNING_KEYS = {
     ActionType.TRANSFER: TRANSFER_WARNING_KEY,
     ActionType.ADD_PAYEE: "warn.payee.new",
     ActionType.FREEZE_CARD: "warn.freeze.card",
+    ActionType.CREATE_STANDING_MANDATE: "warn.standing.new",
 }
 # Source: the order of evaluation table in docs/technical-reference.md. An allowed
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
@@ -54,6 +56,8 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
             action.payee_id or "",
             action.purpose or "",
             action.instrument_id or "",
+            action.standing_mandate_id or "",
+            action.standing_terms.model_dump_json() if action.standing_terms else "",
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -80,6 +84,55 @@ def _spent_on(day: date, history: Sequence[Action]) -> Decimal:
     )
 
 
+def _standing_named(action: Action, mandate: Mandate) -> StandingMandate | None:
+    return next((s for s in mandate.standing_mandates if s.id == action.standing_mandate_id), None)
+
+
+def _confirmed_standing(action: Action, mandate: Mandate) -> StandingMandate | None:
+    standing = _standing_named(action, mandate)
+    if standing is None or not standing.active or standing.confirmed_at > action.requested_at:
+        return None
+    return standing
+
+
+def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]) -> list[str]:
+    standing = _standing_named(action, mandate)
+    if standing is None:
+        return [f"no standing mandate {action.standing_mandate_id} is on mandate {mandate.id}"]
+    if not standing.active:
+        return [f"standing mandate {standing.id} is not active"]
+    if standing.confirmed_at > action.requested_at:
+        return [f"standing mandate {standing.id} was confirmed after this request"]
+    outside = []
+    for name, value, expected in (
+        ("payee", action.payee_id, standing.payee_id),
+        ("corridor", action.corridor, standing.corridor),
+        ("purpose", action.purpose, standing.purpose),
+    ):
+        if value != expected:
+            outside.append(f"the {name} {value} is not {expected}")
+    allowed_drift = standing.amount * standing.tolerance_pct / 100
+    if action.amount is None or abs(action.amount - standing.amount) > allowed_drift:
+        outside.append(
+            f"the amount {action.amount} is more than {standing.tolerance_pct} percent "
+            f"from {standing.amount}"
+        )
+    occurrence = occurrence_containing(standing.schedule, standing.notice_hours, action.requested_at)
+    if occurrence is None:
+        outside.append(
+            f"it was requested at {action.requested_at.astimezone(timezone.utc).isoformat(timespec='seconds')}, "
+            f"outside the window of schedule {standing.schedule}"
+        )
+    elif any(
+        past.type is ActionType.TRANSFER
+        and past.standing_mandate_id == standing.id
+        and occurrence_containing(standing.schedule, standing.notice_hours, past.requested_at) == occurrence
+        for past in history
+    ):
+        outside.append(f"a run for {occurrence[0]} already executed")
+    return outside
+
+
 class DeterministicMandateEngine(MandateEngine):
     def confirmation_token_for(self, action: Action, mandate: Mandate) -> str:
         return confirmation_token_for(action, mandate)
@@ -88,8 +141,14 @@ class DeterministicMandateEngine(MandateEngine):
         self, action: Action, mandate: Mandate, history: Sequence[Action] = ()
     ) -> Decision:
         tier = TIERS[action.type]
+        standing_run = action.type is ActionType.TRANSFER and action.standing_mandate_id is not None
+        trusted_source = action.source is Source.USER_TURN or (
+            action.source is Source.STANDING_MANDATE
+            and standing_run
+            and _confirmed_standing(action, mandate) is not None
+        )
 
-        if action.source is not Source.USER_TURN:
+        if not trusted_source:
             return Decision(
                 allowed=False,
                 reasons=[
@@ -99,6 +158,17 @@ class DeterministicMandateEngine(MandateEngine):
                 rule_ids=["R01"],
                 tier=tier,
             )
+
+        outside = _outside_pattern(action, mandate, history) if standing_run else []
+        within_pattern = standing_run and not outside
+        if within_pattern:
+            tier = Tier.T1
+        escalation = (
+            (["R13"], [f"This transfer falls outside standing mandate {action.standing_mandate_id} because "
+                       + ", and ".join(outside) + "."])
+            if outside
+            else ([], [])
+        )
 
         reasons: list[str] = []
         rule_ids: list[str] = []
@@ -128,6 +198,26 @@ class DeterministicMandateEngine(MandateEngine):
             rule_ids.append("R04")
             reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
 
+        if action.type is ActionType.CREATE_STANDING_MANDATE:
+            missing = [
+                name
+                for name in ("amount", "currency", "corridor", "payee_id", "purpose", "standing_mandate_id", "standing_terms")
+                if getattr(action, name) in (None, "")
+            ]
+            if missing:
+                rule_ids.append("R04")
+                reasons.append(
+                    "A standing mandate needs an amount, a currency, a corridor, a payee, a purpose, "
+                    f"an id, and its terms, and this one has no {', no '.join(missing)}."
+                )
+
+        if action.type is ActionType.CANCEL_STANDING_RUN and _standing_named(action, mandate) is None:
+            rule_ids.append("R04")
+            reasons.append(
+                f"Cancelling a run needs a standing mandate on mandate {mandate.id}, and "
+                f"{action.standing_mandate_id or 'none'} is not one."
+            )
+
         if any(past.idempotency_key == action.idempotency_key for past in history):
             return Decision(
                 allowed=False,
@@ -136,7 +226,7 @@ class DeterministicMandateEngine(MandateEngine):
                 tier=tier,
             )
 
-        if action.type is ActionType.TRANSFER:
+        if action.type in (ActionType.TRANSFER, ActionType.CREATE_STANDING_MANDATE):
             missing = [
                 name
                 for name, value in (("amount", action.amount), ("currency", action.currency))
@@ -153,7 +243,7 @@ class DeterministicMandateEngine(MandateEngine):
                     f"Currency {action.currency} does not match the mandate currency "
                     f"{mandate.currency}."
                 )
-            if missing or action.currency != mandate.currency:
+            if (missing or action.currency != mandate.currency) and "R04" not in rule_ids:
                 rule_ids.append("R04")
 
             if action.payee_id not in mandate.allowed_payees:
@@ -190,7 +280,7 @@ class DeterministicMandateEngine(MandateEngine):
                     f"{mandate.per_txn_limit}."
                 )
 
-            if action.amount is not None:
+            if action.type is ActionType.TRANSFER and action.amount is not None:
                 running_total = _spent_on(_utc_date(action), history) + action.amount
                 if running_total > mandate.daily_limit:
                     rule_ids.append("R09")
@@ -209,16 +299,22 @@ class DeterministicMandateEngine(MandateEngine):
             rule_ids.append("R11")
             reasons.append("The confirmation token does not belong to this exact action.")
 
+        escalation_ids, escalation_reasons = escalation
         if rule_ids:
-            return Decision(allowed=False, reasons=reasons, rule_ids=rule_ids, tier=tier)
+            return Decision(
+                allowed=False,
+                reasons=escalation_reasons + reasons,
+                rule_ids=escalation_ids + rule_ids,
+                tier=tier,
+            )
 
         confirms = tier is Tier.T2
         needs_token = confirms and action.confirmation_token is None
 
         return Decision(
             allowed=True,
-            reasons=[],
-            rule_ids=[ALLOWED_RULE[tier]],
+            reasons=escalation_reasons,
+            rule_ids=escalation_ids + (["R12"] if within_pattern else [ALLOWED_RULE[tier]]),
             tier=tier,
             requires_confirmation=needs_token,
             warning_key=WARNING_KEYS[action.type] if confirms else None,

@@ -1076,3 +1076,156 @@ def test_erasing_one_student_keeps_the_others():
 
     assert s.store.records(USER) == []
     assert [record["messages"][0]["text"] for record in s.store.records("student_002")] == ["Hello"]
+
+
+def _standing_schedule() -> str:
+    target = datetime.now(timezone.utc) + timedelta(days=7)
+    return f"monthly:{target.day if target.day <= 28 else 1}"
+
+
+STANDING_TERMS = {"schedule": _standing_schedule(), "tolerance_pct": "5", "notice_hours": 48, "cancel_window_hours": 24}
+STANDING_ARGS = {**RENT, **STANDING_TERMS}
+STANDING_ID = "student_001-standing-1-1"
+STANDING_REQUEST = "Pay 1,200 SGD rent to landlord_sp in Brazil every month"
+
+
+def _create_standing(setup: Setup, **terms) -> str:
+    setup.adapter._responses.insert(0, _call("create_standing_mandate", {**STANDING_ARGS, **terms}))
+    token = setup.loop.handle(USER, _user(STANDING_REQUEST)).confirmation.confirmation_token
+    setup.loop.handle(USER, _user("Yes"), confirmation_token=token)
+    return token
+
+
+def _times(setup: Setup):
+    from core.standing import next_occurrence
+
+    standing = setup.mandates[USER].standing_mandates[-1]
+    period, due = next_occurrence(standing.schedule, datetime.now(timezone.utc))
+    notice_at = due - timedelta(hours=standing.notice_hours)
+    return period, due, notice_at + timedelta(minutes=1), notice_at + timedelta(hours=standing.cancel_window_hours, minutes=2)
+
+
+def test_creating_a_standing_mandate_confirms_then_adds_it_to_a_new_mandate_version():
+    s = _setup([_call("create_standing_mandate", STANDING_ARGS)])
+
+    proposed = s.loop.handle(USER, _user(STANDING_REQUEST))
+    token = proposed.confirmation.confirmation_token
+    assert proposed.confirmation.warning_key == "warn.standing.new"
+    assert proposed.confirmation.action.standing_mandate_id == STANDING_ID
+    assert proposed.confirmation.action.standing_terms.schedule == STANDING_TERMS["schedule"]
+    assert s.mandates[USER].standing_mandates == []
+
+    s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    mandate = s.mandates[USER]
+    [standing] = mandate.standing_mandates
+    assert mandate.id == "mandate-student_001-v2"
+    assert (standing.id, standing.payee_id, standing.amount, standing.active) == (STANDING_ID, "landlord_sp", Decimal("1200"), True)
+    assert (standing.notice_hours, standing.cancel_window_hours, standing.tolerance_pct) == (48, 24, Decimal("5"))
+    assert standing.confirmation_token == token
+    assert _kinds(s.ledger) == ["proposal", "decision", "confirmation", "execution", "note"]
+    assert _trail(s.ledger)[-1].payload["kind"] == "standing_created"
+    assert token not in json.dumps([entry.payload for entry in s.ledger.entries()])
+
+
+def test_a_standing_run_gives_notice_then_executes_under_r12_after_the_cancel_window():
+    s = _setup([])
+    _create_standing(s)
+    period, due, notice_time, run_time = _times(s)
+    before = len(_trail(s.ledger))
+
+    assert s.loop.run_due_standing_mandates(notice_time - timedelta(minutes=2)) == []
+    [notice] = s.loop.run_due_standing_mandates(notice_time)
+    assert s.loop.run_due_standing_mandates(notice_time + timedelta(hours=1)) == []
+    [run] = s.loop.run_due_standing_mandates(run_time)
+    assert s.loop.run_due_standing_mandates(run_time + timedelta(hours=1)) == []
+
+    assert (notice.kind, notice.standing_mandate_id, notice.period, notice.due_at) == ("notice", STANDING_ID, period, due)
+    assert notice.cancel_until == notice_time + timedelta(hours=24)
+    assert run.kind == "run"
+    assert (run.decision.rule_ids, run.decision.tier, run.decision.requires_confirmation) == (["R12"], Tier.T1, False)
+    assert run.receipt.mandate_ref == STANDING_ID
+    assert run.receipt.amount == Decimal("1200")
+    trail = _trail(s.ledger)[before:]
+    assert [entry.kind for entry in trail] == ["note", "proposal", "decision", "execution", "receipt"]
+    assert trail[0].payload["kind"] == "standing_notice"
+    assert trail[1].payload["action"]["standing_mandate_id"] == STANDING_ID
+    assert trail[1].payload["action"]["source"] == "standing_mandate"
+    assert trail[3].payload["mandate_ref"] == STANDING_ID
+    assert trail[4].payload["receipt"]["mandate_ref"] == STANDING_ID
+
+
+def test_a_cancelled_run_is_skipped_for_that_period_only():
+    s = _setup([])
+    _create_standing(s)
+    period, due, notice_time, run_time = _times(s)
+    s.loop.run_due_standing_mandates(notice_time)
+    s.adapter._responses[:0] = [_call("cancel_standing_run", {"standing_mandate_id": STANDING_ID}), _say("Cancelled.")]
+
+    s.loop.handle(USER, _user("Cancel this month's rent run"))
+    [skipped] = s.loop.run_due_standing_mandates(run_time)
+
+    assert skipped.kind == "skipped"
+    assert skipped.period == period
+    assert _entries(s.ledger, "receipt") == []
+    cancel = [e for e in _entries(s.ledger, "execution") if e["action"]["type"] == "cancel_standing_run"][0]
+    assert cancel["result"] == {"cancelled": {"standing_mandate_id": STANDING_ID, "period": period}}
+    assert s.loop.run_due_standing_mandates(run_time + timedelta(hours=1)) == []
+
+
+def test_an_out_of_pattern_amount_under_a_standing_mandate_escalates_to_a_t2_confirmation():
+    s = _setup([])
+    _create_standing(s)
+    s.adapter._responses[:0] = [_call("propose_transfer", {**RENT, "amount": "1500", "standing_mandate_id": STANDING_ID})]
+
+    reply = s.loop.handle(USER, _user("Pay the standing rent to landlord_sp now but make it 1,500 SGD"))
+
+    assert reply.confirmation is not None
+    assert reply.decision.rule_ids == ["R13", "R11"]
+    assert reply.decision.tier is Tier.T2
+    assert "amount 1500" in reply.decision.reasons[0]
+    assert reply.receipt is None
+
+
+def test_the_student_can_pay_a_standing_run_within_pattern_straight_away_under_r12():
+    s = _setup([])
+    _create_standing(s, notice_hours=300, cancel_window_hours=24)
+    s.adapter._responses[:0] = [_call("propose_transfer", {**RENT, "standing_mandate_id": STANDING_ID})]
+
+    reply = s.loop.handle(USER, _user("Pay this month's standing rent of 1,200 SGD to landlord_sp now"))
+
+    assert reply.decision.rule_ids == ["R12"]
+    assert reply.confirmation is None
+    assert reply.receipt.mandate_ref == STANDING_ID
+    assert _kinds(s.ledger)[-4:] == ["proposal", "decision", "execution", "receipt"]
+
+
+def test_a_new_loop_rebuilds_standing_mandates_notices_and_cancellations():
+    ledger = HashChainLedger()
+    s = _setup([], ledger=ledger)
+    token = _create_standing(s)
+    period, due, notice_time, run_time = _times(s)
+    s.loop.run_due_standing_mandates(notice_time)
+    s.adapter._responses[:0] = [_call("cancel_standing_run", {"standing_mandate_id": STANDING_ID}), _say("Cancelled.")]
+    s.loop.handle(USER, _user("Cancel this month's rent run"))
+
+    again = _setup([], ledger=ledger)
+
+    [standing] = again.mandates[USER].standing_mandates
+    assert standing.confirmation_token == token
+    assert again.mandates[USER].id == "mandate-student_001-v2"
+    assert [event.kind for event in again.loop.run_due_standing_mandates(run_time)] == ["skipped"]
+
+
+def test_a_standing_run_from_chat_that_breaks_a_money_rule_ends_the_turn_with_the_refusal():
+    s = _setup([])
+    _create_standing(s, notice_hours=300, cancel_window_hours=24)
+    s.mandates[USER] = s.mandates[USER].model_copy(update={"per_txn_limit": Decimal("1000")})
+    s.adapter._responses[:0] = [_call("propose_transfer", {**RENT, "standing_mandate_id": STANDING_ID})]
+
+    reply = s.loop.handle(USER, _user("Pay this month's standing rent of 1,200 SGD to landlord_sp now"))
+
+    assert reply.decision.allowed is False
+    assert "R08" in reply.decision.rule_ids
+    assert reply.receipt is None
+    assert len(s.adapter.calls) == 2

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
@@ -21,6 +21,7 @@ class Source(str, Enum):
     TOOL_RESULT = "tool_result"
     TRANSLATED_TEXT = "translated_text"
     PROVIDER_STATUS = "provider_status"
+    STANDING_MANDATE = "standing_mandate"
 
 
 class Tier(str, Enum):
@@ -42,6 +43,8 @@ class ActionType(str, Enum):
     TRACE_TRANSFER = "trace_transfer"
     PRECHECK = "precheck"
     GET_QUOTE = "get_quote"
+    CREATE_STANDING_MANDATE = "create_standing_mandate"
+    CANCEL_STANDING_RUN = "cancel_standing_run"
 
 
 class RouteStatus(str, Enum):
@@ -74,6 +77,23 @@ class Role(str, Enum):
     TOOL = "tool"
 
 
+# Source: docs/decisions.md, 18 September 2026. A standing run is due monthly on a day from 1 to 28.
+StandingSchedule = Annotated[str, Field(pattern=r"^monthly:([1-9]|1[0-9]|2[0-8])$")]
+
+
+class StandingTerms(BaseModel):
+    schedule: StandingSchedule
+    tolerance_pct: Annotated[Decimal, Field(ge=0, le=100)]
+    notice_hours: int = Field(ge=0)
+    cancel_window_hours: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _cancel_window_ends_by_the_due_time(self) -> "StandingTerms":
+        if self.cancel_window_hours > self.notice_hours:
+            raise ValueError("cancel_window_hours may not exceed notice_hours.")
+        return self
+
+
 class Action(BaseModel):
     type: ActionType
     source: Source = Source.USER_TURN
@@ -87,6 +107,8 @@ class Action(BaseModel):
     payee_id: str | None = None
     purpose: str | None = None
     instrument_id: str | None = None
+    standing_mandate_id: str | None = None
+    standing_terms: StandingTerms | None = None
     confirmation_token: str | None = None
 
 
@@ -248,3 +270,17 @@ class AgentReply(BaseModel):
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
+
+
+class StandingEvent(BaseModel):
+    kind: Literal["notice", "run", "skipped", "needs_student", "rail_failed"]
+    user_id: str
+    standing_mandate_id: str
+    period: str
+    due_at: AwareDatetime
+    amount: PositiveAmount
+    currency: CurrencyCode
+    payee_id: str
+    cancel_until: AwareDatetime | None = None
+    decision: Decision | None = None
+    receipt: Receipt | None = None
