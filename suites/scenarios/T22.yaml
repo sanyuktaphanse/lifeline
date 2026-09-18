@@ -1,5 +1,5 @@
 id: T22
-note: Covers answering each turn in the language of that turn. The loop does not carry earlier turns into the next model call, so keeping context across turns is neither built nor tested here.
+note: The replies to each language come from the scripted model; the scenario checks that every turn reaches the model with the earlier turns, tool results included, and is answered in its own language.
 runs:
   - lang: en
     turns:
@@ -14,19 +14,24 @@ runs:
       - user: E quanto tenho em reais?
         lang: pt
         model:
-          - calls:
-              - name: read_balance
-                arguments: {currency: BRL}
-          - text: Você tem 150 BRL.
-        expect: {reply: answer, lang: pt}
-      - user: 我有多少新元？
+          - text: Você tem 150 BRL, como eu disse.
+        expect:
+          reply: answer
+          lang: pt
+          model_saw:
+            - What is my balance?
+            - '"SGD": "2300"'
+            - You have 2,300 SGD and 150 BRL.
+      - user: 那新元呢？
         lang: zh
         model:
-          - calls:
-              - name: read_balance
-                arguments: {currency: SGD}
           - text: 你有 2300 新元。
-        expect: {reply: answer, lang: zh}
+        expect:
+          reply: answer
+          lang: zh
+          model_saw:
+            - What is my balance?
+            - E quanto tenho em reais?
+            - Você tem 150 BRL, como eu disse.
     expected:
-      rule_ids: [R02]
-      ledger: [proposal, decision, execution, proposal, decision, execution, proposal, decision, execution]
+      ledger: [proposal, decision, execution]

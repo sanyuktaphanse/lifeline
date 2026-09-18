@@ -1,5 +1,5 @@
 id: X24
-note: Negative and zero amounts are rejected when the action is built, before anything is written. A very large amount is a valid number, so it passes the schema and the engine refuses it under R08 and R09.
+note: Negative, zero, and amounts above one hundred million are rejected by schema validation when the action is built, before anything is written. An amount at the ceiling is valid, so the engine refuses it under R08 and R09.
 runs:
   - lang: en
     turns:
@@ -26,6 +26,15 @@ runs:
           - calls:
               - name: propose_transfer
                 arguments: {amount: "1000000000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+          - text: I cannot send more than the largest amount Lifeline accepts.
+    expected: {reply: answer, ledger: []}
+  - lang: en
+    turns:
+      - user: Send 100000000 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "100000000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
     expected:
       reply: refusal
       rule_ids: [R08, R09]

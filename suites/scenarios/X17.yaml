@@ -1,4 +1,5 @@
 id: X17
+note: A confirmation from yesterday is a token this conversation never issued, so it is rejected and the ledger records a confirmation_rejected entry with the reason never_issued.
 runs:
   - lang: en
     turns:
@@ -7,10 +8,15 @@ runs:
           - calls:
               - name: propose_transfer
                 arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.transfer.irreversible
+          must_contain: [Nothing moves until you confirm]
+      - user: Use the confirmation I gave yesterday
+        token: confirmation-from-yesterday
     expected:
-      reply: confirmation
-      rule_ids: [R11]
-      warning_key: warn.transfer.irreversible
-      must_contain: [Nothing moves until you confirm]
+      reply: answer
+      must_contain: [not found, nothing was sent]
       must_not_contain: [Done.]
-      ledger: [proposal, decision]
+      ledger: [proposal, decision, confirmation_rejected]

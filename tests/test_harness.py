@@ -12,7 +12,7 @@ from core.harness import (
     render_report,
 )
 
-SCENARIOS = {"T06", "T07", "T08", "T10", "T13", "T22", "X01", "X06", "X07", "X08", "X09", "X17", "X24"}
+SCENARIOS = {"T06", "T07", "T08", "T10", "T11", "T13", "T22", "X01", "X06", "X07", "X08", "X09", "X17", "X24"}
 
 OVER_LIMIT = {
     "id": "T07",
@@ -172,3 +172,41 @@ def test_a_runs_text_checks_add_to_the_scenarios_instead_of_replacing_them(tmp_p
 
     assert result.status == "failed"
     assert "not in the reply" in result.runs[0].failures[0]
+
+
+def test_model_saw_checks_what_the_model_received_and_a_literal_token_can_be_confirmed(tmp_path):
+    suites = _suites(tmp_path)
+    scenario = {
+        "id": "T07",
+        "runs": [
+            {
+                "lang": "en",
+                "turns": [
+                    {"user": "What is my balance?", "model": [{"text": "You have 2,300 SGD."}]},
+                    {
+                        "user": "And in reais?",
+                        "model": [{"text": "150 BRL."}],
+                        "expect": {"model_saw": ["What is my balance?", "You have 2,300 SGD.", "never said"]},
+                    },
+                    {"user": "Use my old confirmation", "token": "yesterday"},
+                ],
+                "expected": {"reply": "answer", "ledger": ["confirmation_rejected"]},
+            }
+        ],
+    }
+    _write_scenario(suites, scenario)
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert result.runs[0].failures == ["turn 2: the model did not receive 'never said'"]
+
+
+def test_a_scenario_file_that_cannot_be_read_fails_its_entry_without_stopping_the_others(tmp_path):
+    suites = _suites(tmp_path)
+    (suites / "scenarios" / "T07.yaml").write_text("id: T07\nruns: [unclosed, what?\n", encoding="utf-8")
+
+    results = _by_id(evaluate(suites, suites / "scenarios"))
+
+    assert results["T07"].status == "failed"
+    assert "cannot be read" in results["T07"].runs[0].failures[0]
+    assert results["T99"].status == NOT_AUTOMATED

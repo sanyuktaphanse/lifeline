@@ -1,5 +1,5 @@
 id: X08
-note: A token confirms the exact action it was issued for, so confirming the 1,200 token after asking for 1,300 pays 1,200 and never 1,300. The engine's R11 refusal of a token presented with a different amount is tested in tests/test_mandate.py.
+note: A token confirms the exact action it was issued for, so confirming the 1,200 token after asking for 1,300 pays 1,200 and never 1,300. Presenting that token again for the 1,300 payment is a replay, which the engine refuses under R10 and the ledger records. The engine's R11 refusal of a token presented with a different amount is tested in tests/test_mandate.py.
 runs:
   - lang: en
     turns:
@@ -16,9 +16,11 @@ runs:
         expect: {reply: confirmation}
       - user: "Yes"
         confirm: 1
+        expect: {reply: receipt, rule_ids: [R11], must_contain: [Done. 1200 SGD]}
+      - user: Now use that same confirmation for the 1,300 payment
+        confirm: 1
     expected:
-      reply: receipt
-      rule_ids: [R11]
-      must_contain: [Done. 1200 SGD]
+      reply: refusal
+      rule_ids: [R10]
       must_not_contain: [1300 SGD was sent]
-      ledger: [proposal, decision, proposal, decision, confirmation, execution, receipt]
+      ledger: [proposal, decision, proposal, decision, confirmation, execution, receipt, proposal, decision]

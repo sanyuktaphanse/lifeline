@@ -28,7 +28,9 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 2. every payee added through Lifeline, with the time it was added, so the cooling period still applies;
 3. every mandate version, so a receipt's `mandate_ref` still resolves;
 4. every confirmation still waiting and less than 300 seconds old, so a token issued before a restart can still be confirmed once;
-5. the receipts each fake rail issued, so receipt numbers continue and a trace still finds its receipt.
+5. every token already used or closed, so a replay after a restart is still refused and recorded;
+6. the receipts each fake rail issued, so receipt numbers continue and a trace still finds its receipt;
+7. the last twenty messages of each student's conversation, so the model keeps its context.
 
 The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete `data/ledger.jsonl`. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
 
@@ -96,7 +98,7 @@ Response `200`, a transfer waiting for confirmation:
       "type": "transfer",
       "source": "user_turn",
       "idempotency_key": "student_001:t1:propose_transfer:1",
-      "requested_at": "2026-09-18T08:00:01.496160Z",
+      "requested_at": "2026-09-18T08:17:40.409164Z",
       "amount": "1200",
       "currency": "SGD",
       "corridor": "SG>BR",
@@ -125,7 +127,7 @@ Response `200`, a transfer waiting for confirmation:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:00:01.496682Z"
+        "quoted_at": "2026-09-18T08:17:40.409489Z"
       },
       {
         "rail": "sim_pix",
@@ -144,7 +146,7 @@ Response `200`, a transfer waiting for confirmation:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:00:01.496682Z"
+        "quoted_at": "2026-09-18T08:17:40.409489Z"
       },
       {
         "rail": "bank_wire",
@@ -163,7 +165,7 @@ Response `200`, a transfer waiting for confirmation:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:00:01.496682Z"
+        "quoted_at": "2026-09-18T08:17:40.409489Z"
       }
     ],
     "selected_route": {
@@ -183,7 +185,7 @@ Response `200`, a transfer waiting for confirmation:
       "rule_id": null,
       "fee_source_url": null,
       "rate_source": "fixture",
-      "quoted_at": "2026-09-18T08:00:01.496682Z"
+      "quoted_at": "2026-09-18T08:17:40.409489Z"
     },
     "expires_in_seconds": 300
   },
@@ -202,7 +204,8 @@ Response `200`, a transfer waiting for confirmation:
   "freeze": null,
   "ledger_seqs": [
     1,
-    2
+    2,
+    3
   ],
   "provider": "anthropic",
   "model": "claude-opus-5"
@@ -253,7 +256,8 @@ Response `200`, refused because the payee and amount came only from the paste. T
   "ledger_seqs": [
     1,
     2,
-    3
+    3,
+    4
   ],
   "provider": "anthropic",
   "model": "claude-opus-5"
@@ -284,7 +288,7 @@ Response `200`, the payment made:
 
 ```json
 {
-  "text": "Done. 1200 SGD was sent over wise. Receipt fake-0001.",
+  "text": "Done. 1200 SGD was sent over wise. Receipt wise-0001.",
   "lang": "en",
   "confirmation": null,
   "decision": {
@@ -299,29 +303,64 @@ Response `200`, the payment made:
     "confirmation_token": null
   },
   "receipt": {
-    "receipt_id": "fake-0001",
+    "receipt_id": "wise-0001",
     "rail": "wise",
     "amount": "1200",
     "currency": "SGD",
     "status": "completed",
-    "stage_entered_at": "2026-09-18T08:00:01.498149Z",
+    "stage_entered_at": "2026-09-18T08:17:40.410873Z",
     "mandate_ref": "mandate-student_001-v1",
     "idempotency_key": "student_001:t1:propose_transfer:1",
     "simulated": false,
-    "executed_at": "2026-09-18T08:00:01.498149Z"
+    "executed_at": "2026-09-18T08:17:40.410873Z"
   },
   "freeze": null,
   "ledger_seqs": [
-    3,
     4,
-    5
+    5,
+    6,
+    7
   ],
   "provider": "anthropic",
   "model": "claude-opus-5"
 }
 ```
 
-Response `200` when the token is unknown, already used, or expired. Nothing was sent:
+Every confirmation attempt leaves a ledger entry, and nothing is ever sent twice.
+
+Response `200` when the token was already used to pay. The action it paid is rebuilt and sent to the mandate engine, which refuses it under R10 because that payment already executed. The ledger records a `proposal` marked `replayed_token` and a `decision`:
+
+```json
+{
+  "text": "I cannot do that. Rules: R10. Idempotency key student_001:t1:propose_transfer:1 was already executed.",
+  "lang": "en",
+  "confirmation": null,
+  "decision": {
+    "allowed": false,
+    "reasons": [
+      "Idempotency key student_001:t1:propose_transfer:1 was already executed."
+    ],
+    "rule_ids": [
+      "R10"
+    ],
+    "tier": "T2",
+    "requires_confirmation": false,
+    "warning_key": null,
+    "confirmation_token": null
+  },
+  "receipt": null,
+  "freeze": null,
+  "ledger_seqs": [
+    8,
+    9,
+    10
+  ],
+  "provider": null,
+  "model": null
+}
+```
+
+Response `200` when the token was never issued, has expired, was refused when it was confirmed, or lost its last route. Nothing was sent, and the ledger records a `confirmation_rejected` entry whose `reason` is `never_issued`, `expired`, `refused`, or `no_route`. The token itself is never written:
 
 ```json
 {
@@ -331,9 +370,31 @@ Response `200` when the token is unknown, already used, or expired. Nothing was 
   "decision": null,
   "receipt": null,
   "freeze": null,
-  "ledger_seqs": [],
+  "ledger_seqs": [
+    11,
+    12
+  ],
   "provider": null,
   "model": null
+}
+```
+
+The ledger entry for that attempt:
+
+```json
+{
+  "seq": 11,
+  "ts": "2026-09-18T08:17:40.412839Z",
+  "actor": "agent",
+  "kind": "confirmation_rejected",
+  "payload": {
+    "user_id": "student_001",
+    "turn": 3,
+    "reason": "never_issued",
+    "mandate_id": "mandate-student_001-v1"
+  },
+  "prev_hash": "2bee79dd6d723f0809bb6c1ef1d25ec1f05874c71ddad11905981d7d2835ec56",
+  "hash": "bfa64019fecbc81c13fd2607f9537d0927b9da4931b92f0f694350c92c125b5c"
 }
 ```
 
@@ -348,7 +409,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
       "type": "transfer",
       "source": "user_turn",
       "idempotency_key": "student_001:t1:propose_transfer:1",
-      "requested_at": "2026-09-18T08:00:01.511843Z",
+      "requested_at": "2026-09-18T08:17:40.425018Z",
       "amount": "1200",
       "currency": "SGD",
       "corridor": "SG>BR",
@@ -377,7 +438,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:00:01.512938Z"
+        "quoted_at": "2026-09-18T08:17:40.426357Z"
       },
       {
         "rail": "sim_pix",
@@ -396,7 +457,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:00:01.512938Z"
+        "quoted_at": "2026-09-18T08:17:40.426357Z"
       },
       {
         "rail": "bank_wire",
@@ -415,7 +476,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:00:01.512938Z"
+        "quoted_at": "2026-09-18T08:17:40.426357Z"
       }
     ],
     "selected_route": {
@@ -435,7 +496,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
       "rule_id": null,
       "fee_source_url": null,
       "rate_source": "fixture",
-      "quoted_at": "2026-09-18T08:00:01.512938Z"
+      "quoted_at": "2026-09-18T08:17:40.426357Z"
     },
     "expires_in_seconds": 300
   },
@@ -443,8 +504,9 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
   "receipt": null,
   "freeze": null,
   "ledger_seqs": [
-    3,
-    4
+    4,
+    5,
+    6
   ],
   "provider": "anthropic",
   "model": "claude-opus-5"
@@ -459,7 +521,7 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
 [
   {
     "seq": 1,
-    "ts": "2026-09-18T08:00:01.496229Z",
+    "ts": "2026-09-18T08:17:40.409218Z",
     "actor": "agent",
     "kind": "proposal",
     "payload": {
@@ -477,7 +539,7 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
         "type": "transfer",
         "source": "user_turn",
         "idempotency_key": "student_001:t1:propose_transfer:1",
-        "requested_at": "2026-09-18T08:00:01.496160Z",
+        "requested_at": "2026-09-18T08:17:40.409164Z",
         "amount": "1200",
         "currency": "SGD",
         "corridor": "SG>BR",
@@ -490,11 +552,11 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
       "mandate_id": "mandate-student_001-v1"
     },
     "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-    "hash": "3fd66b019ceb3bc3524ac52086346f9dce1031ad3172d1d6179a1ffe65c8ecf1"
+    "hash": "125496d5721589fe80110d14786ae6786e18e6b7b274fb770e318ad0fd62562e"
   },
   {
     "seq": 2,
-    "ts": "2026-09-18T08:00:01.496601Z",
+    "ts": "2026-09-18T08:17:40.409430Z",
     "actor": "agent",
     "kind": "decision",
     "payload": {
@@ -515,13 +577,79 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
       "model": "claude-opus-5",
       "mandate_id": "mandate-student_001-v1"
     },
-    "prev_hash": "3fd66b019ceb3bc3524ac52086346f9dce1031ad3172d1d6179a1ffe65c8ecf1",
-    "hash": "4599885c50d46ad4da9d0320b9da96820e46c60f43dfebfb20c7458abde998a9"
+    "prev_hash": "125496d5721589fe80110d14786ae6786e18e6b7b274fb770e318ad0fd62562e",
+    "hash": "0349bfd4be9830741e89a30e6dec8215318b78386a95317422028c93511d3893"
   }
 ]
 ```
 
-The entry kinds are `proposal`, `decision`, `confirmation`, `execution`, `receipt`, `note`, and `injection_suspected`. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
+The entry kinds are `proposal`, `decision`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `conversation`. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
+
+Each `/chat` or `/confirm` call ends with one `conversation` entry holding the messages of that call: what the student typed, anything pasted, the model's tool calls, the tool results, and the reply the student saw. The API rebuilds each student's memory from these entries on start, and the model sees the last twenty messages on every call. They hold the student's own words, so show the ledger only to that student. They never hold a confirmation token. A `conversation` entry from a `/chat` call:
+
+```json
+{
+  "seq": 3,
+  "ts": "2026-09-18T08:17:40.409565Z",
+  "actor": "agent",
+  "kind": "conversation",
+  "payload": {
+    "user_id": "student_001",
+    "turn": 1,
+    "messages": [
+      {
+        "role": "user",
+        "text": "Send 1,200 SGD rent to landlord_sp in Brazil",
+        "lang": "en",
+        "source": "user_turn",
+        "tool_calls": [],
+        "tool_call_id": null
+      },
+      {
+        "role": "assistant",
+        "text": "",
+        "lang": "en",
+        "source": "user_turn",
+        "tool_calls": [
+          {
+            "id": "toolu_01",
+            "name": "propose_transfer",
+            "arguments": {
+              "amount": "1200",
+              "currency": "SGD",
+              "corridor": "SG>BR",
+              "payee_id": "landlord_sp",
+              "purpose": "rent"
+            }
+          }
+        ],
+        "tool_call_id": null
+      },
+      {
+        "role": "tool",
+        "text": "{\"turn_ended\": \"the reply to the student follows\"}",
+        "lang": "en",
+        "source": "tool_result",
+        "tool_calls": [],
+        "tool_call_id": "toolu_01"
+      },
+      {
+        "role": "assistant",
+        "text": "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD and exchange cost 0 SGD. Nothing moves until you confirm.",
+        "lang": "en",
+        "source": "user_turn",
+        "tool_calls": [],
+        "tool_call_id": null
+      }
+    ],
+    "provider": "anthropic",
+    "model": "claude-opus-5",
+    "mandate_id": "mandate-student_001-v1"
+  },
+  "prev_hash": "0349bfd4be9830741e89a30e6dec8215318b78386a95317422028c93511d3893",
+  "hash": "97b2b565a7d723dc60601f1dd3fdcdcddb3baa75195b662b03ae5d3828f59d1c"
+}
+```
 
 ## GET /ledger/{user_id}/verify
 
@@ -535,14 +663,14 @@ Checks the whole hash chain. `first_broken_seq` is `null` when every entry is in
 
 ## POST /trace
 
-Where a transfer is, by receipt id. It runs through the mandate engine and is written to the ledger like any other action. Only receipts issued to this student can be traced. `stage_entered_at` is the time on the receipt, `2026-09-18T08:00:01.498149Z` in this example.
+Where a transfer is, by receipt id. It runs through the mandate engine and is written to the ledger like any other action. Only receipts issued to this student can be traced. Receipt ids start with the name of the rail that issued them, such as `wise-0001`, so two rails never share one. `stage_entered_at` is the time on the receipt, `2026-09-18T08:17:40.410873Z` in this example.
 
 Request:
 
 ```json
 {
   "user_id": "student_001",
-  "receipt_id": "fake-0001"
+  "receipt_id": "wise-0001"
 }
 ```
 
@@ -550,9 +678,9 @@ Response `200`:
 
 ```json
 {
-  "receipt_id": "fake-0001",
+  "receipt_id": "wise-0001",
   "status": "in_transit",
-  "stage_entered_at": "2026-09-18T08:00:01.498149Z",
+  "stage_entered_at": "2026-09-18T08:17:40.410873Z",
   "typical_duration_hours": 24.0,
   "typical_duration_source": "fixture",
   "next_steps": [
@@ -566,7 +694,7 @@ Response `404` for a receipt this student does not hold, or one the rail has no 
 
 ```json
 {
-  "detail": "No receipt fake-0404 was issued for this student."
+  "detail": "No receipt wise-0404 was issued for this student."
 }
 ```
 

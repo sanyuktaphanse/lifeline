@@ -18,7 +18,7 @@ balances:
 # The rail stamps stage_entered_at from its own receipt, so the fixture gives no time.
 traces:
   wise:
-    - receipt_id: fake-0001
+    - receipt_id: wise-0001
       status: in_transit
       typical_duration_hours: 24
       typical_duration_source: fixture

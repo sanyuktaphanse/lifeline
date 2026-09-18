@@ -8,6 +8,9 @@ from pydantic import AwareDatetime, BaseModel, Field, model_validator
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]
+# Source: docs/decisions.md, 18 September 2026. No student transfer comes near one hundred million.
+MAX_ACTION_AMOUNT = Decimal("100000000")
+ActionAmount = Annotated[Decimal, Field(gt=0, le=MAX_ACTION_AMOUNT)]
 NonNegativeAmount = Annotated[Decimal, Field(ge=0)]
 Hours = Annotated[float, Field(ge=0)]
 
@@ -78,7 +81,7 @@ class Action(BaseModel):
     requested_at: AwareDatetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-    amount: PositiveAmount | None = None
+    amount: ActionAmount | None = None
     currency: CurrencyCode | None = None
     corridor: Corridor | None = None
     payee_id: str | None = None

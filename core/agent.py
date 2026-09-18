@@ -28,6 +28,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
+from core.tiers import TIERS
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -38,6 +39,9 @@ CONFIRMATION_TTL = timedelta(
 # Source: this module. A guard against a runaway tool loop, not a money rule.
 # The cap is per conversation turn: eight model calls, then the turn ends.
 MAX_MODEL_CALLS_PER_TURN = 8
+# Source: docs/decisions.md, 18 September 2026. The model sees at most this many earlier messages.
+MAX_HISTORY_MESSAGES = 20
+REMEMBERED_FIELDS = {"role", "text", "lang", "source", "tool_calls", "tool_call_id"}
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -284,6 +288,35 @@ def _next_version(mandate_id: str) -> str:
     return f"{match['base']}{int(match['number']) + 1}"
 
 
+def _remembered(message: Message) -> Message:
+    return Message.model_validate(message.model_dump(include=REMEMBERED_FIELDS))
+
+
+def _for_model(message: Message) -> Message:
+    if message.role is Role.USER and message.source is not Source.USER_TURN:
+        return message.model_copy(update={"text": PASTED_FRAME.format(text=message.text)})
+    return message
+
+
+def _bounded(messages: list[Message]) -> list[Message]:
+    kept = messages[-MAX_HISTORY_MESSAGES:]
+    while kept and kept[0].role is not Role.USER:
+        kept = kept[1:]
+    return kept
+
+
+def _closing_results(calls: list[ToolCall]) -> list[Message]:
+    results = []
+    for index, call in enumerate(calls):
+        outcome = {"turn_ended": "the reply to the student follows"} if index == 0 else {
+            "not_run": "the turn ended at an earlier call"
+        }
+        results.append(
+            Message(role=Role.TOOL, text=json.dumps(outcome), source=Source.TOOL_RESULT, tool_call_id=call.id)
+        )
+    return results
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -347,6 +380,9 @@ class AgentLoop:
         self._turns: dict[str, int] = {}
         self._receipt_rails: dict[str, dict[str, str]] = {}
         self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
+        self._conversations: dict[str, list[Message]] = {}
+        self._consumed: dict[str, tuple[str, Action]] = {}
+        self._closed: dict[str, tuple[str, str, str]] = {}
         self._rebuild_from_ledger()
 
     def mandate_version(self, mandate_id: str) -> Mandate | None:
@@ -380,7 +416,8 @@ class AgentLoop:
         lang = message.lang if "lang" in message.model_fields_set else detect_lang(message.text)
         mandate = self._mandates[user_id]
         if confirmation_token is not None:
-            return self._confirm(user_id, mandate, lang, confirmation_token)
+            reply = self._confirm(user_id, mandate, lang, confirmation_token)
+            return self._remember_confirmation(user_id, lang, message, reply)
         return self._converse(user_id, mandate, lang, message, pasted)
 
     def _converse(
@@ -390,39 +427,68 @@ class AgentLoop:
         self._turns[user_id] = turn
         trail = _Trail(user_id, turn, mandate_id=mandate.id)
         if message.role is Role.USER and message.source is Source.USER_TURN:
-            trail.from_user.add(message.text, Source.USER_TURN)
+            student = message
         else:
             source = Source.PASTED_TEXT if message.source is Source.USER_TURN else message.source
-            trail.from_data.add(message.text, source)
-        messages = [Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)), message]
-        if pasted is not None:
-            trail.from_data.add(pasted.text, pasted.source)
-            messages.append(pasted.model_copy(update={"text": PASTED_FRAME.format(text=pasted.text)}))
+            student = message.model_copy(update={"role": Role.USER, "source": source})
+        turn_messages = [_remembered(student)] + ([_remembered(pasted)] if pasted is not None else [])
+        history = self._conversations.get(user_id, [])
+        for earlier in [*history, *turn_messages]:
+            if earlier.role is Role.USER and earlier.source is Source.USER_TURN:
+                trail.from_user.add(earlier.text, Source.USER_TURN)
+            elif earlier.role in (Role.USER, Role.TOOL):
+                trail.from_data.add(earlier.text, earlier.source)
+        messages = [
+            Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)),
+            *(_for_model(earlier) for earlier in history),
+            *(_for_model(current) for current in turn_messages),
+        ]
         decision: Decision | None = None
         calls = 0
         for _ in range(MAX_MODEL_CALLS_PER_TURN):
             answer = self._adapter.complete(messages, TOOLS)
             trail.provider, trail.model = answer.provider, answer.model
+            turn_messages.append(_remembered(answer))
             if not answer.tool_calls:
-                return self._reply(trail, lang, answer.text, decision=decision)
+                return self._finish(trail, turn_messages, self._reply(trail, lang, answer.text, decision=decision))
             messages.append(answer)
-            for call in answer.tool_calls:
+            for index, call in enumerate(answer.tool_calls):
                 calls += 1
                 outcome = self._run_tool(user_id, mandate, lang, trail, call, calls)
                 if isinstance(outcome, AgentReply):
-                    return outcome
+                    turn_messages += _closing_results(answer.tool_calls[index:])
+                    turn_messages.append(Message(role=Role.ASSISTANT, text=outcome.text, lang=lang))
+                    return self._finish(trail, turn_messages, outcome)
                 decision, result = outcome
                 text = json.dumps(result, ensure_ascii=False, default=str)
                 trail.from_data.add(text, Source.TOOL_RESULT)
-                messages.append(
-                    Message(
-                        role=Role.TOOL,
-                        text=text,
-                        source=Source.TOOL_RESULT,
-                        tool_call_id=call.id,
-                    )
-                )
-        return self._reply(trail, lang, _text(lang, "too_many_steps"), decision=decision)
+                tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
+                messages.append(tool_message)
+                turn_messages.append(tool_message)
+        reply = self._reply(trail, lang, _text(lang, "too_many_steps"), decision=decision)
+        turn_messages.append(Message(role=Role.ASSISTANT, text=reply.text, lang=lang))
+        return self._finish(trail, turn_messages, reply)
+
+    def _finish(self, trail: _Trail, turn_messages: list[Message], reply: AgentReply) -> AgentReply:
+        self._remember(trail, turn_messages)
+        return reply.model_copy(update={"ledger_seqs": list(trail.seqs)})
+
+    def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
+        remembered = [_remembered(message) for message in turn_messages]
+        self._write(
+            trail,
+            "conversation",
+            {"messages": [message.model_dump(mode="json", include=REMEMBERED_FIELDS) for message in remembered]},
+        )
+        history = self._conversations.get(trail.user_id, [])
+        self._conversations[trail.user_id] = _bounded([*history, *remembered])
+
+    def _remember_confirmation(self, user_id: str, lang: str, message: Message, reply: AgentReply) -> AgentReply:
+        mandate = self._mandates[user_id]
+        trail = _Trail(user_id, self._turns.get(user_id, 0), reply.provider, reply.model, mandate.id)
+        said = [_remembered(message)] if message.text.strip() else []
+        self._remember(trail, [*said, Message(role=Role.ASSISTANT, text=reply.text, lang=lang)])
+        return reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]})
 
     def _run_tool(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, call: ToolCall, number: int
@@ -568,16 +634,17 @@ class AgentLoop:
     def _confirm(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
         pending = self._pending.get(token)
         if pending is None or pending.user_id != user_id:
-            return AgentReply(text=_text(lang, "unknown_token"), lang=lang, ledger_seqs=[])
+            return self._unknown_token(user_id, mandate, lang, token)
         if _now() - pending.created_at > CONFIRMATION_TTL:
             del self._pending[token]
-            minutes = int(CONFIRMATION_TTL.total_seconds() // 60)
-            return AgentReply(text=_text(lang, "expired", minutes=minutes), lang=lang, ledger_seqs=[])
+            self._closed[token] = (user_id, "expired", pending.action.idempotency_key)
+            return self._reject(user_id, mandate, lang, "expired", pending.action.idempotency_key)
         trail = _Trail(user_id, pending.turn, pending.provider, pending.model, mandate.id)
         action = pending.action.model_copy(update={"confirmation_token": token})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         if not decision.allowed or decision.requires_confirmation:
             del self._pending[token]
+            self._closed[token] = (user_id, "refused", action.idempotency_key)
             self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
             return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
         if action.type is not ActionType.TRANSFER:
@@ -598,6 +665,7 @@ class AgentLoop:
         except RailError as error:
             return self._offer_next_route(lang, trail, token, pending, error)
         del self._pending[token]
+        self._consumed[token] = (user_id, action)
         self._history.setdefault(user_id, []).append(action)
         self._receipt_rails.setdefault(user_id, {})[receipt.receipt_id] = route.rail
         self._write(
@@ -636,6 +704,45 @@ class AgentLoop:
             text = f"{text} {_text(lang, 'simulated')}"
         return self._reply(trail, lang, text, decision=decision, receipt=receipt)
 
+    def _unknown_token(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
+        consumed = self._consumed.get(token)
+        if consumed is not None and consumed[0] == user_id:
+            return self._replay(user_id, mandate, lang, consumed[1], token)
+        closed = self._closed.get(token)
+        if closed is not None and closed[0] == user_id:
+            return self._reject(user_id, mandate, lang, closed[1], closed[2])
+        return self._reject(user_id, mandate, lang, "never_issued", None)
+
+    def _attempt_trail(self, user_id: str, mandate: Mandate) -> _Trail:
+        turn = self._turns.get(user_id, 0) + 1
+        self._turns[user_id] = turn
+        return _Trail(user_id, turn, mandate_id=mandate.id)
+
+    def _reject(self, user_id: str, mandate: Mandate, lang: str, reason: str, key: str | None) -> AgentReply:
+        trail = self._attempt_trail(user_id, mandate)
+        payload: dict[str, Any] = {"reason": reason}
+        if key is not None:
+            payload["idempotency_key"] = key
+        self._write(trail, "confirmation_rejected", payload)
+        if reason == "expired":
+            minutes = int(CONFIRMATION_TTL.total_seconds() // 60)
+            return self._reply(trail, lang, _text(lang, "expired", minutes=minutes))
+        return self._reply(trail, lang, _text(lang, "unknown_token"))
+
+    def _replay(self, user_id: str, mandate: Mandate, lang: str, action: Action, token: str) -> AgentReply:
+        trail = self._attempt_trail(user_id, mandate)
+        replayed = action.model_copy(update={"confirmation_token": token, "requested_at": _now()})
+        self._write(trail, "proposal", {"replayed_token": True, "action": _action_json(replayed)})
+        decision = self._engine.check(replayed, mandate, self._history.get(user_id, []))
+        self._write(trail, "decision", {"idempotency_key": replayed.idempotency_key, "decision": _decision_json(decision)})
+        if decision.allowed:
+            raise RuntimeError("A consumed token was allowed again; the history must hold its executed action.")
+        return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
+
+    def _close(self, user_id: str, action: Action, reason: str) -> None:
+        token = self._engine.confirmation_token_for(action, self._mandates[user_id])
+        self._closed.setdefault(token, (user_id, reason, action.idempotency_key))
+
     def _carry_out(
         self,
         user_id: str,
@@ -648,6 +755,7 @@ class AgentLoop:
         decision: Decision,
     ) -> AgentReply:
         del self._pending[token]
+        self._consumed[token] = (user_id, action)
         self._write(
             trail,
             "confirmation",
@@ -753,6 +861,7 @@ class AgentLoop:
         selected = self._choose(routes, pending.failed_rails)
         if selected is None:
             del self._pending[token]
+            self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
             return self._reply(trail, lang, _text(lang, "no_route"))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
@@ -827,8 +936,14 @@ class AgentLoop:
                 proposals[entry.payload["action"]["idempotency_key"]] = entry.payload
             elif entry.kind == "decision":
                 key = entry.payload["idempotency_key"]
-                if waiting.pop(key, None) is None and key in proposals:
+                refused = waiting.pop(key, None)
+                if refused is not None:
+                    self._close(refused.user_id, refused.action, "refused")
+                elif key in proposals:
                     self._maybe_waiting(user_id, entry, proposals[key], waiting)
+            elif entry.kind == "conversation":
+                remembered = [Message.model_validate(message) for message in entry.payload["messages"]]
+                self._conversations[user_id] = _bounded([*self._conversations.get(user_id, []), *remembered])
             elif entry.kind == "confirmation":
                 key = entry.payload["idempotency_key"]
                 if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
@@ -840,7 +955,11 @@ class AgentLoop:
                     waiting[key].created_at = entry.ts
             if entry.kind == "execution":
                 waiting.pop(entry.payload["action"]["idempotency_key"], None)
-                self._history.setdefault(user_id, []).append(Action.model_validate(entry.payload["action"]))
+                executed = Action.model_validate(entry.payload["action"])
+                self._history.setdefault(user_id, []).append(executed)
+                if TIERS[executed.type] is Tier.T2 and user_id in self._mandates:
+                    token = self._engine.confirmation_token_for(executed, self._mandates[user_id])
+                    self._consumed[token] = (user_id, executed)
             elif entry.kind == "receipt":
                 receipt_id = entry.payload["receipt"]["receipt_id"]
                 self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
@@ -878,6 +997,7 @@ class AgentLoop:
 
     def _restore_pending(self, waited: "_Waiting") -> None:
         if _now() - waited.created_at > CONFIRMATION_TTL:
+            self._close(waited.user_id, waited.action, "expired")
             return
         pending = PendingConfirmation(
             user_id=waited.user_id,
@@ -894,6 +1014,7 @@ class AgentLoop:
             routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
             selected = self._choose(routes, pending.failed_rails)
             if selected is None:
+                self._close(waited.user_id, action, "no_route")
                 return
             pending.routes, pending.selected_route = routes, selected
         elif action.type is ActionType.ADD_PAYEE:

@@ -27,6 +27,8 @@ PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
 TEXT_CHECKS = ("must_contain", "must_not_contain")
+# The ledger expectation lists the action trail; conversation entries hold the transcript and are not part of it.
+TRANSCRIPT_KIND = "conversation"
 
 # Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
 USER = "student_001"
@@ -136,6 +138,16 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
     return failures
 
 
+def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]]], expect: dict[str, Any]) -> list[str]:
+    wanted = expect.get("model_saw", [])
+    if not wanted:
+        return []
+    if not calls:
+        return [f"{where}: the model was not called, so it saw nothing"]
+    seen = "\n".join(message.text for message in calls[0][0])
+    return [f"{where}: the model did not receive {text!r}" for text in wanted if text not in seen]
+
+
 def _token(confirm: Any, replies: list[AgentReply]) -> str:
     if confirm == "latest":
         source = next((reply for reply in reversed(replies) if reply.confirmation), None)
@@ -161,10 +173,11 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             )
         ]
         ledger = HashChainLedger()
+        adapter = FakeModelAdapter(responses)
         fixtures = scenario.get("fixtures", {})
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
         loop = AgentLoop(
-            adapter=FakeModelAdapter(responses),
+            adapter=adapter,
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
@@ -181,10 +194,12 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
                 lang=turn.get("lang", run["lang"]),
                 source=Source(turn.get("source", Source.USER_TURN.value)),
             )
-            token = _token(turn["confirm"], replies) if "confirm" in turn else None
+            token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
+            before = len(adapter.calls)
             reply = loop.handle(USER, message, confirmation_token=token)
             replies.append(reply)
             result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
+            result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))
     except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, the error becomes a failed run in the report
         result.failures.append(f"error: {type(error).__name__}: {error}")
         return result
@@ -192,7 +207,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
-    kinds = [entry.kind for entry in ledger.entries()]
+    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TRANSCRIPT_KIND]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
     ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
@@ -203,6 +218,17 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     if broken is not None:
         result.failures.append(f"ledger chain breaks at entry {broken}")
     return result
+
+
+def _run_file(path: Path, entry_id: str) -> tuple[list[RunResult], str | None]:
+    try:
+        scenario = load_suite(path)
+    except yaml.YAMLError as error:  # anti-pattern: SILENT-EXCEPT ok, the parse error fails the entry in the report
+        return [RunResult([], [f"scenario file cannot be read: {error}"])], None
+    if scenario.get("id") != entry_id:
+        return [RunResult([], [f"scenario id {scenario.get('id')!r} does not match {entry_id}"])], scenario.get("note")
+    runs = [run_scenario_run(scenario, run) for run in scenario.get("runs", [])]
+    return runs or [RunResult([], ["scenario has no runs"])], scenario.get("note")
 
 
 def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -> list[EntryResult]:
@@ -220,14 +246,7 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
             )
             path = scenarios_dir / f"{entry['id']}.yaml"
             if path.exists():
-                scenario = load_suite(path)
-                result.note = scenario.get("note")
-                if scenario.get("id") != entry["id"]:
-                    result.runs = [RunResult([], [f"scenario id {scenario.get('id')!r} does not match {entry['id']}"])]
-                else:
-                    result.runs = [run_scenario_run(scenario, run) for run in scenario.get("runs", [])]
-                if not result.runs:
-                    result.runs = [RunResult([], ["scenario has no runs"])]
+                result.runs, result.note = _run_file(path, entry["id"])
                 result.status = PASSED if all(run.passed for run in result.runs) else FAILED
             results.append(result)
     return results

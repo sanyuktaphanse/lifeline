@@ -1,0 +1,45 @@
+id: T11
+note: Asking which Joao is the scripted model's choice. The scenario checks that the question and the student's first message reach the model on the next turn, and that the loop proposes only the payee the student then names. The mandate holds payee ids, not display names.
+fixtures:
+  mandate:
+    allowed_payees: [landlord_sp, joao_rio, joao_sp]
+    allowed_purposes: [rent, allowance]
+runs:
+  - lang: en
+    turns:
+      - user: Send 500 SGD to Joao for rent
+        model:
+          - text: You have two payees called Joao, joao_rio and joao_sp. Which one should get the 500 SGD?
+        expect:
+          reply: answer
+          must_contain: [Which one]
+      - user: joao_rio
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "500", currency: SGD, corridor: SG>BR, payee_id: joao_rio, purpose: rent}
+        expect:
+          model_saw:
+            - Send 500 SGD to Joao for rent
+            - Which one should get the 500 SGD?
+    expected: {must_contain: [joao_rio]}
+  - lang: pt
+    turns:
+      - user: Mande 500 SGD de aluguel para o Joao
+        model:
+          - text: Você tem dois destinatários chamados Joao, joao_rio e joao_sp. Qual deles?
+        expect: {reply: answer, lang: pt}
+      - user: joao_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "500", currency: SGD, corridor: SG>BR, payee_id: joao_sp, purpose: rent}
+        expect:
+          model_saw:
+            - Mande 500 SGD de aluguel para o Joao
+            - Qual deles?
+    expected: {lang: pt, must_contain: [joao_sp]}
+expected:
+  reply: confirmation
+  rule_ids: [R11]
+  ledger: [proposal, decision]
