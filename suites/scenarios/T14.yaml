@@ -1,0 +1,60 @@
+id: T14
+note: The student reports a lost card and the model asks to freeze it through freeze_card. The engine checks the action as tier T2 and the code asks for confirmation under warn.freeze.card. After the student confirms, the code calls the issuer, which in the fake rail allows an API freeze for wise, and the reply carries a freeze result written to the ledger as an execution. Switching to a backup card or account is not covered, because Lifeline has no record of a student's cards or backup instruments and no tool to move payments onto a backup, so that part stays manual.
+expected:
+  reply: freeze
+  ledger: [proposal, decision, confirmation, execution]
+runs:
+  - lang: en
+    turns:
+      - user: I lost my Wise card wise:card_01, please freeze it
+        model:
+          - calls:
+              - name: freeze_card
+                arguments: {instrument_id: "wise:card_01"}
+        expect:
+          reply: confirmation
+          warning_key: warn.freeze.card
+          lang: en
+          must_contain: [freeze card wise:card_01]
+      - user: Yes, freeze it
+        confirm: latest
+        expect:
+          reply: freeze
+          lang: en
+          must_contain: [Card wise:card_01 is frozen]
+  - lang: pt
+    turns:
+      - user: Perdi meu cartão Wise wise:card_01, por favor bloqueie
+        model:
+          - calls:
+              - name: freeze_card
+                arguments: {instrument_id: "wise:card_01"}
+        expect:
+          reply: confirmation
+          warning_key: warn.freeze.card
+          lang: pt
+          must_contain: [bloquear o cartão wise:card_01]
+      - user: Sim, pode bloquear
+        confirm: latest
+        expect:
+          reply: freeze
+          lang: pt
+          must_contain: [O cartão wise:card_01 está bloqueado]
+  - lang: zh
+    turns:
+      - user: 我的 Wise 卡 wise:card_01 丢了，请帮我冻结
+        model:
+          - calls:
+              - name: freeze_card
+                arguments: {instrument_id: "wise:card_01"}
+        expect:
+          reply: confirmation
+          warning_key: warn.freeze.card
+          lang: zh
+          must_contain: [冻结卡片 wise:card_01]
+      - user: 确认冻结
+        confirm: latest
+        expect:
+          reply: freeze
+          lang: zh
+          must_contain: [卡片 wise:card_01 已冻结]

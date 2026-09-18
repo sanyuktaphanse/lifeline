@@ -1,0 +1,42 @@
+id: T15
+note: The student reports a lost card issued by revolut. The confirmation step comes from the mandate engine and the loop, and after the student confirms, the fake revolut rail answers that the issuer does not allow a freeze through the API. The reply then carries the real freeze result, the issuer deep link from the rail, and the honest message that Lifeline could not freeze the card itself, and the ledger records the attempt as an execution. The deep link is a fixture from rails/fake_rail.py, not the real issuer link. The scenario does not cover a real partner integration or whether the student then froze the card in the issuer app.
+expected:
+  reply: freeze
+  ledger: [proposal, decision, confirmation, execution]
+  must_contain: ["https://example.invalid/revolut/freeze-card"]
+runs:
+  - lang: en
+    turns:
+      - user: I lost my Revolut card revolut:card_07, freeze it now
+        model:
+          - calls:
+              - name: freeze_card
+                arguments: {instrument_id: "revolut:card_07"}
+        expect:
+          reply: confirmation
+          warning_key: warn.freeze.card
+          must_contain: [Please confirm, "revolut:card_07"]
+      - user: "Yes"
+        confirm: latest
+    expected:
+      lang: en
+      must_contain: [could not freeze card, does not allow it]
+      must_not_contain: [is frozen]
+  - lang: pt
+    turns:
+      - user: Perdi meu cartão Revolut revolut:card_07, bloqueie agora
+        model:
+          - calls:
+              - name: freeze_card
+                arguments: {instrument_id: "revolut:card_07"}
+        expect:
+          reply: confirmation
+          warning_key: warn.freeze.card
+          lang: pt
+          must_contain: [Confirme, "revolut:card_07"]
+      - user: Sim
+        confirm: latest
+    expected:
+      lang: pt
+      must_contain: [não conseguiu bloquear, o emissor não permite]
+      must_not_contain: [está bloqueado]

@@ -1,0 +1,81 @@
+id: T02
+note: The student asks for a quote of 1,200 SGD to the landlord in Brazil and the scripted model calls get_quote on SG>BR. The scenario checks that the quote passes the mandate engine and runs, so the ledger holds proposal, decision and execution, and that on the next turn the model received the real routes from the fake router, namely wise with fee 5.60 and no spread, sim_pix marked simulated, and bank_wire with fee 25 and a spread cost of 30.00 on 1200. It does not prove which route Lifeline calls cheapest or how it explains it, because that ranking and explanation are scripted model text, and the fees are router fixtures rather than live quotes.
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Quote 1,200 SGD to my landlord in Brazil and explain the cheapest route
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, purpose: rent}
+          - text: Wise is the cheapest real route at a 5.60 SGD fee with no spread. Bank wire costs 25 SGD plus a 30 SGD spread.
+        expect: {reply: answer, lang: en}
+      - user: Which fees did you compare?
+        model:
+          - text: The wise fee, the bank wire fee and its spread.
+        expect:
+          reply: answer
+          lang: en
+          model_saw:
+            - '"rail": "wise"'
+            - '"fee": "5.60"'
+            - '"rail": "sim_pix"'
+            - '"simulated": true'
+            - '"rail": "bank_wire"'
+            - '"fee": "25"'
+            - '"spread_cost": "30.00"'
+            - '"amount": "1200"'
+    expected: {lang: en}
+  - lang: pt
+    turns:
+      - user: Faça uma cotação de 1.200 SGD para meu senhorio no Brasil e explique a rota mais barata
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, purpose: rent}
+          - text: A Wise é a rota real mais barata, com tarifa de 5,60 SGD e sem spread.
+        expect: {reply: answer, lang: pt}
+      - user: Quais tarifas você comparou?
+        model:
+          - text: A tarifa da Wise, a tarifa da transferência bancária e o spread dela.
+        expect:
+          reply: answer
+          lang: pt
+          model_saw:
+            - '"rail": "wise"'
+            - '"fee": "5.60"'
+            - '"rail": "sim_pix"'
+            - '"simulated": true'
+            - '"rail": "bank_wire"'
+            - '"fee": "25"'
+            - '"spread_cost": "30.00"'
+            - '"amount": "1200"'
+    expected: {lang: pt}
+  - lang: zh
+    turns:
+      - user: 帮我报价 1200 新元给巴西的房东，并解释最便宜的路线
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, purpose: rent}
+          - text: Wise 是最便宜的真实路线，手续费 5.60 新元，没有汇差。
+        expect: {reply: answer, lang: zh}
+      - user: 你比较了哪些费用？
+        model:
+          - text: Wise 的手续费、银行电汇的手续费和汇差。
+        expect:
+          reply: answer
+          lang: zh
+          model_saw:
+            - '"rail": "wise"'
+            - '"fee": "5.60"'
+            - '"rail": "sim_pix"'
+            - '"simulated": true'
+            - '"rail": "bank_wire"'
+            - '"fee": "25"'
+            - '"spread_cost": "30.00"'
+            - '"amount": "1200"'
+    expected: {lang: zh}

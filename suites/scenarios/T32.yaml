@@ -1,0 +1,50 @@
+id: T32
+note: The student asks what a provider will ask for before Pix is enabled on a foreign account and what could get the account flagged. The scripted model calls the precheck tool with enable_pix, the real mandate engine allows it as a read only action, and the real router answers with the documents likely asked for and the review triggers. A follow up turn checks that those real results reached the model, and the ledger shows the action went through the mandate engine and ran without any money moving. The documents and triggers come from the fixed fake router, not from a real provider or a knowledge base entry, and the precheck gives no readiness verdict, so the scenario does not show that the list is complete or current for any real bank.
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Before I set up Pix on my foreign account, what will they ask and what could get me flagged?
+        lang: en
+        model:
+          - calls:
+              - name: precheck
+                arguments: {action_kind: enable_pix, provider: nubank}
+          - text: They will likely ask for your passport and your CPF number. Registering your first Pix key on a foreign passport can trigger a review.
+        expect: {reply: answer, lang: en}
+      - user: So which two documents should I bring?
+        lang: en
+        model:
+          - text: Bring your passport and your CPF number.
+        expect:
+          reply: answer
+          lang: en
+          model_saw:
+            - '"action_kind": "enable_pix"'
+            - '"passport"'
+            - '"CPF number"'
+            - first Pix key registered on a foreign passport
+  - lang: pt
+    turns:
+      - user: Antes de ativar o Pix na minha conta estrangeira, o que vão pedir e o que pode me fazer cair em revisão?
+        lang: pt
+        model:
+          - calls:
+              - name: precheck
+                arguments: {action_kind: enable_pix, provider: nubank}
+          - text: Provavelmente vão pedir seu passaporte e seu número de CPF. Cadastrar a primeira chave Pix com passaporte estrangeiro pode gerar uma revisão.
+        expect: {reply: answer, lang: pt}
+      - user: Então quais documentos eu levo?
+        lang: pt
+        model:
+          - text: Leve seu passaporte e seu número de CPF.
+        expect:
+          reply: answer
+          lang: pt
+          model_saw:
+            - '"action_kind": "enable_pix"'
+            - '"passport"'
+            - '"CPF number"'
+            - first Pix key registered on a foreign passport

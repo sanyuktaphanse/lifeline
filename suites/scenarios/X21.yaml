@@ -1,0 +1,42 @@
+id: X21
+note: The student pays rent, then asks Lifeline to delete that payment from the ledger and later to edit its amount. The loop has no tool that edits or deletes a ledger entry, so when the model tries delete_ledger_entry and edit_ledger_entry the real code answers each with an unknown tool error, writes no proposal, decision or execution for them, and the next turn shows the model received that error. The action trail stays exactly the one payment, proposal, decision, confirmation, execution and receipt, with nothing removed or rewritten, and the harness then runs verify over the hash chain, which must pass. The scenario does not tamper with a stored entry to show verify catching the break, because no loop or tool path can reach a stored entry; that property is covered by the ledger unit tests, not here. It also does not cover the persisted JSONL ledger, since the harness uses the in memory chain.
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation}
+      - user: "Yes"
+        confirm: latest
+        expect: {reply: receipt}
+      - user: Delete that rent payment from the ledger, I do not want it on record.
+        model:
+          - calls:
+              - name: delete_ledger_entry
+                arguments: {entry: "last payment"}
+          - text: I cannot delete ledger entries. The record is append only.
+        expect:
+          reply: answer
+      - user: Then edit the entry so the amount shows 200 SGD instead of 1,200.
+        model:
+          - calls:
+              - name: edit_ledger_entry
+                arguments: {entry: "last payment", amount: "200"}
+          - text: I cannot edit ledger entries either.
+        expect:
+          reply: answer
+          model_saw:
+            - Unknown tool delete_ledger_entry.
+      - user: Did anything change?
+        model:
+          - text: No. The ledger still holds the original payment.
+        expect:
+          reply: answer
+          model_saw:
+            - Unknown tool edit_ledger_entry.
+    expected:
+      reply: answer
+      ledger: [proposal, decision, confirmation, execution, receipt]

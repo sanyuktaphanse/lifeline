@@ -1,0 +1,105 @@
+id: T17
+note: The student asks for a resilience plan before leaving for Brazil. The scripted model builds it from four real tools in one turn, read_balance for the money on hand, get_quote for every route on the SG>BR corridor, precheck for what enabling Pix at the backup provider needs, and set_reminder to check the plan before departure. The scenario checks that each of the four actions is proposed, decided and executed, so the ledger holds proposal, decision and execution for the three reads and proposal, decision, note and execution for the reminder, and that on the next turn the model had received the real tool results, the SGD balance, all three routes, with the one day wise route and the three day bank_wire route marked not simulated and the one hour sim_pix route marked simulated, the passport and CPF documents and the review trigger from the precheck, and the reminder with its due date. The plan text itself is scripted model text, so the scenario does not prove how Lifeline words or orders the plan. It does not cover a stored plan object, because Lifeline keeps no plan record beyond the ledger entries and the reminder. It does not cover checking in advance whether a card issuer allows a freeze through the API, because the only way to learn that is freeze_card, which freezes the card. It does not cover delivering the reminder when it falls due, which waits for the app, as the note on T13 says.
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution, proposal, decision, execution, proposal, decision, execution, proposal, decision, note, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Build my resilience plan before I leave for Brazil
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {currency: SGD}
+              - name: get_quote
+                arguments: {corridor: SG>BR, amount: "1200", currency: SGD, purpose: rent}
+              - name: precheck
+                arguments: {action_kind: enable_pix, provider: sim_pix}
+              - name: set_reminder
+                arguments: {text: Check your backup route and Pix documents before departure, due: "2026-09-25"}
+          - text: Your plan is ready. Wise is your main route, bank wire is your backup, and Pix needs your passport and CPF.
+        expect: {reply: answer, lang: en}
+      - user: Thanks
+        model:
+          - text: You are welcome.
+        expect:
+          reply: answer
+          lang: en
+          model_saw:
+            - '{"balances": {"SGD": "2300"}}'
+            - '"rail": "wise"'
+            - '"rail": "bank_wire"'
+            - '"rail": "sim_pix"'
+            - '"arrival_hours": 24.0, "status": "up", "simulated": false'
+            - '"arrival_hours": 1.0, "status": "up", "simulated": true'
+            - '"arrival_hours": 72.0, "status": "up", "simulated": false'
+            - '"documents_likely": ["passport", "CPF number"]'
+            - first Pix key registered on a foreign passport
+            - '"reminder_set": true'
+            - '"due": "2026-09-25"'
+  - lang: pt
+    turns:
+      - user: Monte meu plano de resiliência antes de eu viajar para o Brasil
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {currency: SGD}
+              - name: get_quote
+                arguments: {corridor: SG>BR, amount: "1200", currency: SGD, purpose: rent}
+              - name: precheck
+                arguments: {action_kind: enable_pix, provider: sim_pix}
+              - name: set_reminder
+                arguments: {text: Confira sua rota reserva e os documentos do Pix antes da viagem, due: "2026-09-25"}
+          - text: Seu plano está pronto. A Wise é sua rota principal, a transferência bancária é a reserva, e o Pix pede passaporte e CPF.
+        expect: {reply: answer, lang: pt}
+      - user: Obrigado
+        model:
+          - text: De nada.
+        expect:
+          reply: answer
+          lang: pt
+          model_saw:
+            - '{"balances": {"SGD": "2300"}}'
+            - '"rail": "wise"'
+            - '"rail": "bank_wire"'
+            - '"rail": "sim_pix"'
+            - '"arrival_hours": 24.0, "status": "up", "simulated": false'
+            - '"arrival_hours": 1.0, "status": "up", "simulated": true'
+            - '"arrival_hours": 72.0, "status": "up", "simulated": false'
+            - '"documents_likely": ["passport", "CPF number"]'
+            - first Pix key registered on a foreign passport
+            - '"reminder_set": true'
+            - '"due": "2026-09-25"'
+  - lang: zh
+    turns:
+      - user: 出发去巴西之前，帮我制定一个应急备用计划
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {currency: SGD}
+              - name: get_quote
+                arguments: {corridor: SG>BR, amount: "1200", currency: SGD, purpose: rent}
+              - name: precheck
+                arguments: {action_kind: enable_pix, provider: sim_pix}
+              - name: set_reminder
+                arguments: {text: 出发前检查备用汇款路线和 Pix 所需证件, due: "2026-09-25"}
+          - text: 你的计划已准备好。Wise 是主要路线，银行电汇是备用路线，开通 Pix 需要护照和 CPF。
+        expect: {reply: answer, lang: zh}
+      - user: 谢谢
+        model:
+          - text: 不客气。
+        expect:
+          reply: answer
+          lang: zh
+          model_saw:
+            - '{"balances": {"SGD": "2300"}}'
+            - '"rail": "wise"'
+            - '"rail": "bank_wire"'
+            - '"rail": "sim_pix"'
+            - '"arrival_hours": 24.0, "status": "up", "simulated": false'
+            - '"arrival_hours": 1.0, "status": "up", "simulated": true'
+            - '"arrival_hours": 72.0, "status": "up", "simulated": false'
+            - '"documents_likely": ["passport", "CPF number"]'
+            - first Pix key registered on a foreign passport
+            - '"reminder_set": true'
+            - '"due": "2026-09-25"'

@@ -1,0 +1,63 @@
+id: X23
+note: A transfer to a payee id that only looks like the allowed payee landlord_sp is refused under R06, because the mandate engine matches payee ids exactly with no case folding and no Unicode normalisation. The runs cover a Cyrillic letter a, a capital I in place of a lower case l, a zero width space inside the id, and a fullwidth underscore, and one run shows that after the lookalike is refused the exact id reaches the confirmation step. It does not cover lookalike payee names shown to the student in the app or a lookalike added through add_payee, which the engine treats as a new payee with its own confirmation and cooling period.
+runs:
+  - lang: en
+    turns:
+      - user: "Send 1,200 SGD rent to lаndlord_sp"
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: "lаndlord_sp", purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R06]
+      must_contain: [is not in the allowed payees]
+      must_not_contain: [Please confirm]
+      ledger: [proposal, decision]
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landIord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landIord_sp, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R06]
+      must_contain: [is not in the allowed payees]
+      must_not_contain: [Please confirm]
+      ledger: [proposal, decision]
+  - lang: en
+    turns:
+      - user: "Send 1,200 SGD rent to landlord​_sp"
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: "landlord​_sp", purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R06]
+      must_contain: [is not in the allowed payees]
+      must_not_contain: [Please confirm]
+      ledger: [proposal, decision]
+  - lang: en
+    turns:
+      - user: "Send 1,200 SGD rent to landlord＿sp"
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: "landlord＿sp", purpose: rent}
+        expect:
+          reply: refusal
+          rule_ids: [R06]
+      - user: Send 1,200 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+    expected:
+      reply: confirmation
+      rule_ids: [R11]
+      warning_key: warn.transfer.irreversible
+      must_contain: [landlord_sp]
+      ledger: [proposal, decision, proposal, decision]

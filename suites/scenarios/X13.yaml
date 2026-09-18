@@ -1,0 +1,38 @@
+id: X13
+note: The student asks to pay a payee who is not on the mandate just this once without adding them. The engine refuses the transfer under R06 and the refusal names the payee as not allowed, so nothing moves. The student then takes the add payee flow, which the code runs as a confirmation that states the 24 hour cooling period, adds the payee only after the student confirms, and still refuses an immediate transfer to the new payee under R14, so adding the payee is not a shortcut around the refusal. The code does not itself write an offer of the add payee flow into the refusal text, so the part of the entry that says the flow is offered is shown only by the flow being available and working, not by wording Lifeline produces.
+runs:
+  - lang: en
+    turns:
+      - user: Send 300 SGD rent to landlord_new just this once, do not add them as a payee
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "300", currency: SGD, corridor: SG>BR, payee_id: landlord_new, purpose: rent}
+        expect:
+          reply: refusal
+          rule_ids: [R06]
+          must_contain: [R06, Payee landlord_new is not in the allowed payees]
+          must_not_contain: [Please confirm, Done.]
+      - user: Then add landlord_new as a payee, the name is New Landlord
+        model:
+          - calls:
+              - name: add_payee
+                arguments: {payee_id: landlord_new, display_name: New Landlord}
+        expect:
+          reply: confirmation
+          must_contain: [add landlord_new (New Landlord) as a payee, only 24 hours after being added]
+      - user: "Yes"
+        confirm: latest
+        expect:
+          must_contain: [landlord_new (New Landlord) is now a payee]
+      - user: Now send the 300 SGD rent to landlord_new
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "300", currency: SGD, corridor: SG>BR, payee_id: landlord_new, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R14]
+      must_contain: [R14, was added less than 24 hours ago]
+      must_not_contain: [Done. 300 SGD]
+      ledger: [proposal, decision, proposal, decision, confirmation, execution, note, proposal, decision]

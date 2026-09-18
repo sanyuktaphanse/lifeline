@@ -1,0 +1,95 @@
+id: T01
+note: The student asks for balances and the scripted model calls read_balance, first with no currency and then with one currency. The scenario checks that each read passes the mandate engine and runs, so the ledger holds proposal, decision and execution twice, and that the model then received the real balances from the tool, every currency from the inline balances fixture on the first read and only the asked currency on the second. The wording of the balance summary is scripted model text, so the scenario does not prove how Lifeline phrases or formats the balances for the student.
+fixtures:
+  balances: {SGD: "2300", BRL: "150", CNY: "420.50"}
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution, proposal, decision, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Show my balances by currency
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {}
+          - text: You have 2,300 SGD, 150 BRL and 420.50 CNY.
+        expect: {reply: answer, lang: en}
+      - user: And just the BRL one?
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {currency: BRL}
+          - text: You have 150 BRL.
+        expect:
+          reply: answer
+          lang: en
+          model_saw:
+            - '"SGD": "2300"'
+            - '"BRL": "150"'
+            - '"CNY": "420.50"'
+      - user: Thanks
+        model:
+          - text: You are welcome.
+        expect:
+          model_saw:
+            - '{"balances": {"BRL": "150"}}'
+    expected: {lang: en}
+  - lang: pt
+    turns:
+      - user: Mostre meus saldos por moeda
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {}
+          - text: Você tem 2.300 SGD, 150 BRL e 420,50 CNY.
+        expect: {reply: answer, lang: pt}
+      - user: E só o saldo em reais?
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {currency: BRL}
+          - text: Você tem 150 BRL.
+        expect:
+          reply: answer
+          lang: pt
+          model_saw:
+            - '"SGD": "2300"'
+            - '"BRL": "150"'
+            - '"CNY": "420.50"'
+      - user: Obrigado
+        model:
+          - text: De nada.
+        expect:
+          model_saw:
+            - '{"balances": {"BRL": "150"}}'
+    expected: {lang: pt}
+  - lang: zh
+    turns:
+      - user: 按币种显示我的余额
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {}
+          - text: 你有 2300 新元、150 雷亚尔和 420.50 人民币。
+        expect: {reply: answer, lang: zh}
+      - user: 只看雷亚尔呢？
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {currency: BRL}
+          - text: 你有 150 雷亚尔。
+        expect:
+          reply: answer
+          lang: zh
+          model_saw:
+            - '"SGD": "2300"'
+            - '"BRL": "150"'
+            - '"CNY": "420.50"'
+      - user: 谢谢
+        model:
+          - text: 不客气。
+        expect:
+          model_saw:
+            - '{"balances": {"BRL": "150"}}'
+    expected: {lang: zh}
