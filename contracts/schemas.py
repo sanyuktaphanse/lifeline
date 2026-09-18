@@ -83,6 +83,7 @@ class Action(BaseModel):
     corridor: Corridor | None = None
     payee_id: str | None = None
     purpose: str | None = None
+    instrument_id: str | None = None
     confirmation_token: str | None = None
 
 
@@ -113,6 +114,9 @@ class Mandate(BaseModel):
     valid_from: AwareDatetime
     valid_until: AwareDatetime
     standing_mandates: list[StandingMandate] = Field(default_factory=list)
+    payee_added_at: dict[str, AwareDatetime] = Field(default_factory=dict)
+    # Source: docs/decisions.md, 18 September 2026. A new payee waits 24 hours by default.
+    cooling_hours: int = Field(default=24, ge=0)
 
 
 class Decision(BaseModel):

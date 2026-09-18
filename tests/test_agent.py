@@ -10,7 +10,7 @@ from core.agent import AgentLoop, PendingConfirmation, detect_lang
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
-from rails.fake_rail import FakeRail
+from rails.fake_rail import REVOLUT_FREEZE_DEEP_LINK, FakeRail
 from rails.fake_router import FakeRouter
 
 USER = "student_001"
@@ -39,6 +39,7 @@ class Setup:
     adapter: FakeModelAdapter
     ledger: HashChainLedger
     pending: dict[str, PendingConfirmation]
+    mandates: dict[str, Mandate]
 
 
 class InjectedRouter(FakeRouter):
@@ -79,17 +80,18 @@ def _setup(responses, *, ledger=None, rails=None, router=None) -> Setup:
     ledger = HashChainLedger() if ledger is None else ledger
     rails = _honest_rails() if rails is None else rails
     pending: dict[str, PendingConfirmation] = {}
+    mandates = {USER: _mandate()}
     loop = AgentLoop(
         adapter=adapter,
         engine=DeterministicMandateEngine(),
         ledger=ledger,
         router=FakeRouter() if router is None else router,
         rails=rails,
-        mandates={USER: _mandate()},
+        mandates=mandates,
         balances={USER: {"SGD": Decimal("2300"), "BRL": Decimal("150")}},
         pending=pending,
     )
-    return Setup(loop, adapter, ledger, pending)
+    return Setup(loop, adapter, ledger, pending, mandates)
 
 
 def _user(text: str, **fields) -> Message:
@@ -452,3 +454,108 @@ def test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it(
     )
     second.loop.handle(USER, _user("Where is my rent?"))
     assert '"in_transit"' in second.adapter.calls[1][0][-1].text
+
+
+FLATMATE = {"payee_id": "new_flatmate", "display_name": "Ana Souza"}
+ADD_FLATMATE = "Add new_flatmate, Ana Souza, as a payee"
+
+
+def _entries(ledger: HashChainLedger, kind: str) -> list[dict]:
+    return [entry.payload for entry in ledger.entries() if entry.kind == kind]
+
+
+def test_add_payee_needs_then_receives_confirmation_and_the_payee_appears_with_added_at():
+    s = _setup([_call("add_payee", FLATMATE)])
+
+    proposed = s.loop.handle(USER, _user(ADD_FLATMATE))
+
+    assert proposed.confirmation.warning_key == "warn.payee.new"
+    assert proposed.confirmation.routes == []
+    assert proposed.confirmation.selected_route is None
+    assert "new_flatmate" not in s.mandates[USER].allowed_payees
+    assert "24" in proposed.text
+
+    token = proposed.confirmation.confirmation_token
+    before = datetime.now(timezone.utc)
+    done = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    mandate = s.mandates[USER]
+    assert done.decision.rule_ids == ["R11"]
+    assert "new_flatmate" in mandate.allowed_payees
+    assert before <= mandate.payee_added_at["new_flatmate"] <= datetime.now(timezone.utc)
+    assert _kinds(s.ledger) == ["proposal", "decision", "confirmation", "execution", "note"]
+    note = s.ledger.entries()[-1].payload
+    assert (note["kind"], note["payee_id"], note["display_name"]) == ("payee_added", "new_flatmate", "Ana Souza")
+    assert token not in s.pending
+
+
+def test_a_transfer_to_a_new_payee_inside_the_cooling_window_is_refused_under_r14():
+    s = _setup(
+        [
+            _call("add_payee", FLATMATE),
+            _call("propose_transfer", {**RENT, "amount": "300", "payee_id": "new_flatmate"}),
+        ]
+    )
+    token = s.loop.handle(USER, _user(ADD_FLATMATE)).confirmation.confirmation_token
+    s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    reply = s.loop.handle(USER, _user("Send 300 SGD rent to new_flatmate"))
+
+    allowed_from = s.mandates[USER].payee_added_at["new_flatmate"] + timedelta(hours=24)
+    assert reply.decision.rule_ids == ["R14"]
+    assert reply.confirmation is None
+    assert allowed_from.isoformat(timespec="seconds") in reply.text
+
+
+def _freeze_setup(instrument_id: str) -> Setup:
+    rails = {**_honest_rails(), "revolut": FakeRail(name="revolut")}
+    return _setup([_call("freeze_card", {"instrument_id": instrument_id})], rails=rails)
+
+
+def _freeze_results(ledger: HashChainLedger) -> list[dict]:
+    return [payload["result"]["freeze"] for payload in _entries(ledger, "execution")]
+
+
+def test_freeze_card_on_wise_confirms_and_records_done():
+    s = _freeze_setup("wise:card_01")
+
+    proposed = s.loop.handle(USER, _user("I lost my card, freeze wise:card_01"))
+
+    assert proposed.confirmation.warning_key == "warn.freeze.card"
+    assert proposed.confirmation.action.instrument_id == "wise:card_01"
+    assert _freeze_results(s.ledger) == []
+
+    done = s.loop.handle(USER, _user("Yes"), confirmation_token=proposed.confirmation.confirmation_token)
+
+    assert _kinds(s.ledger) == ["proposal", "decision", "confirmation", "execution"]
+    assert _freeze_results(s.ledger) == [{"status": "done", "deep_link": None, "reason": None}]
+    assert "wise:card_01" in done.text
+    assert "frozen" in done.text
+
+
+def test_freeze_card_on_revolut_records_not_supported_with_a_deep_link_and_says_so_honestly():
+    s = _freeze_setup("revolut:card_01")
+    token = s.loop.handle(USER, _user("I lost my card, freeze revolut:card_01")).confirmation.confirmation_token
+
+    reply = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    [result] = _freeze_results(s.ledger)
+    assert result["status"] == "not_supported"
+    assert result["deep_link"] == REVOLUT_FREEZE_DEEP_LINK
+    assert "could not freeze" in reply.text
+    assert "issuer's app" in reply.text
+    assert REVOLUT_FREEZE_DEEP_LINK in reply.text
+
+
+def test_a_freeze_token_for_one_instrument_is_refused_for_another():
+    s = _freeze_setup("wise:card_01")
+    token = s.loop.handle(USER, _user("Freeze wise:card_01")).confirmation.confirmation_token
+    pending = s.pending[token]
+    pending.action = pending.action.model_copy(update={"instrument_id": "wise:card_02"})
+
+    reply = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    assert reply.decision.allowed is False
+    assert reply.decision.rule_ids == ["R11"]
+    assert _freeze_results(s.ledger) == []
+    assert "confirmation" not in _kinds(s.ledger)

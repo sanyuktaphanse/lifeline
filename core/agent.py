@@ -15,6 +15,8 @@ from contracts.schemas import (
     AgentReply,
     ConfirmationRequest,
     Decision,
+    FreezeResult,
+    FreezeStatus,
     Mandate,
     Message,
     Receipt,
@@ -59,6 +61,7 @@ SYSTEM_PROMPT = (
 )
 
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id")
 TEXT = {"type": "string"}
 
 
@@ -93,6 +96,18 @@ TOOLS = [
         ["action_kind", "provider"],
     ),
     _tool(
+        "add_payee",
+        "Add a payee. Nothing changes until the student confirms it, and a new payee waits out a cooling period.",
+        {"payee_id": TEXT, "display_name": TEXT},
+        ["payee_id", "display_name"],
+    ),
+    _tool(
+        "freeze_card",
+        "Freeze a card, written as issuer:card such as wise:card_01. Nothing changes until the student confirms it.",
+        {"instrument_id": TEXT},
+        ["instrument_id"],
+    ),
+    _tool(
         "change_limit",
         "Ask to change a limit. Limits change only in settings, never in chat.",
         {"limit": TEXT, "amount": TEXT},
@@ -107,9 +122,16 @@ TOOL_ACTIONS = {
     "set_reminder": ActionType.SET_REMINDER,
     "trace_transfer": ActionType.TRACE_TRANSFER,
     "precheck": ActionType.PRECHECK,
+    "add_payee": ActionType.ADD_PAYEE,
+    "freeze_card": ActionType.FREEZE_CARD,
     "change_limit": ActionType.CHANGE_LIMIT,
 }
-REQUIRED_ARGUMENTS = {"propose_transfer": ACTION_FIELDS, "get_quote": ("corridor", "amount")}
+REQUIRED_ARGUMENTS = {
+    "propose_transfer": ACTION_FIELDS,
+    "get_quote": ("corridor", "amount"),
+    "add_payee": ("payee_id",),
+    "freeze_card": ("instrument_id",),
+}
 
 TEXTS = {
     "en": {
@@ -123,6 +145,12 @@ TEXTS = {
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
         "too_many_steps": "I stopped before finishing. Please ask again.",
+        "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
+        "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
+        "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
+        "frozen": "Done. Card {instrument} is frozen.",
+        "freeze_not_supported": "Lifeline could not freeze card {instrument} directly, because the issuer does not allow it. Freeze it now in the issuer's app: {deep_link}",
+        "freeze_failed": "Lifeline could not freeze card {instrument}: {reason} Freeze it now in the issuer's app.",
     },
     "pt": {
         "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
@@ -135,6 +163,12 @@ TEXTS = {
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
+        "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
+        "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
+        "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
+        "frozen": "Pronto. O cartão {instrument} está bloqueado.",
+        "freeze_not_supported": "O Lifeline não conseguiu bloquear o cartão {instrument} diretamente, porque o emissor não permite. Bloqueie agora no app do emissor: {deep_link}",
+        "freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}: {reason} Bloqueie agora no app do emissor.",
     },
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
@@ -147,6 +181,12 @@ TEXTS = {
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
+        "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
+        "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
+        "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
+        "frozen": "已完成。卡片 {instrument} 已冻结。",
+        "freeze_not_supported": "Lifeline 无法直接冻结卡片 {instrument}，因为发卡机构不允许。请立即在发卡机构的应用中冻结：{deep_link}",
+        "freeze_failed": "Lifeline 无法冻结卡片 {instrument}：{reason} 请立即在发卡机构的应用中冻结。",
     },
 }
 
@@ -190,12 +230,13 @@ class PendingConfirmation:
     user_id: str
     action: Action
     warning_key: str
-    routes: list[Route]
-    selected_route: Route
     created_at: datetime
     turn: int
     provider: str | None
     model: str | None
+    routes: list[Route] = field(default_factory=list)
+    selected_route: Route | None = None
+    display_name: str | None = None
     failed_rails: set[str] = field(default_factory=set)
 
 
@@ -339,7 +380,7 @@ class AgentLoop:
                 requested_at=_now(),
                 **{
                     name: call.arguments[name]
-                    for name in ACTION_FIELDS
+                    for name in ACTION_ARGUMENTS
                     if call.arguments.get(name) not in (None, "")
                 },
             )
@@ -365,8 +406,8 @@ class AgentLoop:
             )
         if decision.tier is Tier.T3:
             return self._reply(trail, lang, _text(lang, "settings"), decision=decision)
-        if action.type is ActionType.TRANSFER:
-            return self._propose(user_id, lang, trail, action, decision)
+        if decision.tier is Tier.T2:
+            return self._propose(user_id, lang, trail, action, decision, call.arguments)
         if not decision.allowed:
             return decision, {"refused": True, "rule_ids": decision.rule_ids, "reasons": decision.reasons}
         result = self._run_now(user_id, action, call.arguments, trail)
@@ -413,41 +454,49 @@ class AgentLoop:
         return {"error": f"No runner for {action.type.value}."}
 
     def _propose(
-        self, user_id: str, lang: str, trail: _Trail, action: Action, decision: Decision
+        self,
+        user_id: str,
+        lang: str,
+        trail: _Trail,
+        action: Action,
+        decision: Decision,
+        arguments: dict[str, Any],
     ) -> AgentReply:
         token = decision.confirmation_token
         warning_key = decision.warning_key
         if not decision.allowed or not decision.requires_confirmation or not token or not warning_key:
             return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
-        routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-        selected = self._choose(routes, set())
-        if selected is None:
-            return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
-        self._pending[token] = PendingConfirmation(
+        pending = PendingConfirmation(
             user_id=user_id,
             action=action,
             warning_key=warning_key,
-            routes=routes,
-            selected_route=selected,
             created_at=_now(),
             turn=trail.turn,
             provider=trail.provider,
             model=trail.model,
         )
+        if action.type is ActionType.TRANSFER:
+            routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
+            selected = self._choose(routes, set())
+            if selected is None:
+                return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
+            pending.routes, pending.selected_route = routes, selected
+            text = _text(lang, "confirm", **_route_values(action, selected))
+        elif action.type is ActionType.ADD_PAYEE:
+            pending.display_name = str(arguments.get("display_name") or action.payee_id)
+            hours = self._mandates[user_id].cooling_hours
+            text = _text(lang, "confirm_payee", payee=action.payee_id, display_name=pending.display_name, hours=hours)
+        else:
+            text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
+        self._pending[token] = pending
         confirmation = ConfirmationRequest(
             action=action,
             confirmation_token=token,
             warning_key=warning_key,
-            routes=routes,
-            selected_route=selected,
+            routes=pending.routes,
+            selected_route=pending.selected_route,
         )
-        return self._reply(
-            trail,
-            lang,
-            _text(lang, "confirm", **_route_values(action, selected)),
-            decision=decision,
-            confirmation=confirmation,
-        )
+        return self._reply(trail, lang, text, decision=decision, confirmation=confirmation)
 
     def _confirm(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
         pending = self._pending.get(token)
@@ -464,7 +513,10 @@ class AgentLoop:
             del self._pending[token]
             self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
             return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
+        if action.type is not ActionType.TRANSFER:
+            return self._carry_out(user_id, mandate, lang, trail, token, pending, action, decision)
         route = pending.selected_route
+        assert route is not None, "A pending transfer always holds its selected route."
         self._write(
             trail,
             "confirmation",
@@ -517,11 +569,90 @@ class AgentLoop:
             text = f"{text} {_text(lang, 'simulated')}"
         return self._reply(trail, lang, text, decision=decision, receipt=receipt)
 
+    def _carry_out(
+        self,
+        user_id: str,
+        mandate: Mandate,
+        lang: str,
+        trail: _Trail,
+        token: str,
+        pending: PendingConfirmation,
+        action: Action,
+        decision: Decision,
+    ) -> AgentReply:
+        del self._pending[token]
+        self._write(
+            trail,
+            "confirmation",
+            {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)},
+        )
+        self._history.setdefault(user_id, []).append(action)
+        if action.type is ActionType.ADD_PAYEE:
+            text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
+        else:
+            text = self._freeze(lang, trail, action)
+        return self._reply(trail, lang, text, decision=decision)
+
+    def _add_payee(
+        self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
+    ) -> str:
+        payee = action.payee_id or ""
+        added_at = _now()
+        allowed_from = added_at + timedelta(hours=mandate.cooling_hours)
+        self._mandates[user_id] = mandate.model_copy(
+            update={
+                "allowed_payees": mandate.allowed_payees | {payee},
+                "payee_added_at": {**mandate.payee_added_at, payee: added_at},
+            }
+        )
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"payee_added": payee}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "payee_added",
+                "idempotency_key": action.idempotency_key,
+                "payee_id": payee,
+                "display_name": name,
+                "added_at": added_at.isoformat(),
+                "allowed_from": allowed_from.isoformat(),
+            },
+        )
+        return _text(
+            lang,
+            "payee_added",
+            payee=payee,
+            display_name=name or payee,
+            allowed_from=allowed_from.isoformat(timespec="seconds"),
+        )
+
+    def _freeze(self, lang: str, trail: _Trail, action: Action) -> str:
+        instrument = action.instrument_id or ""
+        issuer = instrument.partition(":")[0]
+        rail = self._rails.get(issuer)
+        if rail is None:
+            result = FreezeResult(
+                status=FreezeStatus.FAILED, reason=f"No rail can freeze cards from issuer {issuer!r}."
+            )
+        else:
+            result = rail.freeze(instrument)
+        self._write(
+            trail,
+            "execution",
+            {"action": _action_json(action), "result": {"freeze": result.model_dump(mode="json")}},
+        )
+        if result.status is FreezeStatus.DONE:
+            return _text(lang, "frozen", instrument=instrument)
+        if result.status is FreezeStatus.NOT_SUPPORTED:
+            return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link)
+        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason)
+
     def _offer_next_route(
         self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
     ) -> AgentReply:
         action = pending.action
         failed = pending.selected_route
+        assert failed is not None, "A rail fails only while paying a transfer's route."
         executed = any(
             past.idempotency_key == action.idempotency_key
             for past in self._history.get(pending.user_id, [])
