@@ -22,7 +22,7 @@ The server binds to `127.0.0.1` only, so no other machine can reach it. It has n
 
 ## Persistence and restarts
 
-The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each entry is made. The folder is ignored by git. When the API starts it reads the file and rebuilds, from the ledger alone:
+The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each entry is made, and the conversation to `data/conversations.jsonl`. The folder is ignored by git. When the API starts it reads both files and rebuilds:
 
 1. the executed history, so the daily limit and the replay rule still count earlier payments;
 2. every payee added through Lifeline, with the time it was added, so the cooling period still applies;
@@ -30,9 +30,9 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 4. every confirmation still waiting and less than 300 seconds old, so a token issued before a restart can still be confirmed once;
 5. every token already used or closed, so a replay after a restart is still refused and recorded;
 6. the receipts each fake rail issued, so receipt numbers continue and a trace still finds its receipt;
-7. the last twenty messages of each student's conversation, so the model keeps its context.
+7. the last twenty messages of each student's conversation, read from `data/conversations.jsonl`, so the model keeps its context.
 
-The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete `data/ledger.jsonl`. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
+The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete both files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
 
 ## Conventions
 
@@ -583,71 +583,81 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
 ]
 ```
 
-The entry kinds are `proposal`, `decision`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `conversation`. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
+The entry kinds are `proposal`, `decision`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `turn`. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
 
-Each `/chat` or `/confirm` call ends with one `conversation` entry holding the messages of that call: what the student typed, anything pasted, the model's tool calls, the tool results, and the reply the student saw. The API rebuilds each student's memory from these entries on start, and the model sees the last twenty messages on every call. They hold the student's own words, so show the ledger only to that student. They never hold a confirmation token. A `conversation` entry from a `/chat` call:
+Each `/chat` or `/confirm` call ends with one `turn` entry, which records only how many messages the call added to the student's conversation. The ledger never holds the student's words: they live in a separate store, `data/conversations.jsonl`, one line per call, which git ignores. The API rebuilds each student's memory from that store on start, and the model sees the last twenty messages on every call. A student's conversation can be erased with `AgentLoop.erase_conversation(user_id)`, which removes their lines from the store and from memory and leaves the ledger, and its hash chain, untouched. A `turn` entry:
 
 ```json
 {
   "seq": 3,
-  "ts": "2026-09-18T08:17:40.409565Z",
+  "ts": "2026-09-18T08:32:50.211111Z",
   "actor": "agent",
-  "kind": "conversation",
+  "kind": "turn",
   "payload": {
     "user_id": "student_001",
     "turn": 1,
-    "messages": [
-      {
-        "role": "user",
-        "text": "Send 1,200 SGD rent to landlord_sp in Brazil",
-        "lang": "en",
-        "source": "user_turn",
-        "tool_calls": [],
-        "tool_call_id": null
-      },
-      {
-        "role": "assistant",
-        "text": "",
-        "lang": "en",
-        "source": "user_turn",
-        "tool_calls": [
-          {
-            "id": "toolu_01",
-            "name": "propose_transfer",
-            "arguments": {
-              "amount": "1200",
-              "currency": "SGD",
-              "corridor": "SG>BR",
-              "payee_id": "landlord_sp",
-              "purpose": "rent"
-            }
-          }
-        ],
-        "tool_call_id": null
-      },
-      {
-        "role": "tool",
-        "text": "{\"turn_ended\": \"the reply to the student follows\"}",
-        "lang": "en",
-        "source": "tool_result",
-        "tool_calls": [],
-        "tool_call_id": "toolu_01"
-      },
-      {
-        "role": "assistant",
-        "text": "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD and exchange cost 0 SGD. Nothing moves until you confirm.",
-        "lang": "en",
-        "source": "user_turn",
-        "tool_calls": [],
-        "tool_call_id": null
-      }
-    ],
+    "messages": 4,
     "provider": "anthropic",
     "model": "claude-opus-5",
     "mandate_id": "mandate-student_001-v1"
   },
-  "prev_hash": "0349bfd4be9830741e89a30e6dec8215318b78386a95317422028c93511d3893",
-  "hash": "97b2b565a7d723dc60601f1dd3fdcdcddb3baa75195b662b03ae5d3828f59d1c"
+  "prev_hash": "bd5c3c7597133bd69533f4eba7b978d2871623dc3525ef18ea4dd369693ca1e6",
+  "hash": "15caecb15e1ab65bc378a464422a2eb1f14c2b76989a7e4b23003f68cef28467"
+}
+```
+
+A line of `data/conversations.jsonl`, which the API never returns:
+
+```json
+{
+  "user_id": "student_001",
+  "turn": 1,
+  "messages": [
+    {
+      "role": "user",
+      "text": "Send 1,200 SGD rent to landlord_sp in Brazil",
+      "lang": "en",
+      "source": "user_turn",
+      "tool_calls": [],
+      "tool_call_id": null
+    },
+    {
+      "role": "assistant",
+      "text": "",
+      "lang": "en",
+      "source": "user_turn",
+      "tool_calls": [
+        {
+          "id": "toolu_01",
+          "name": "propose_transfer",
+          "arguments": {
+            "amount": "1200",
+            "currency": "SGD",
+            "corridor": "SG>BR",
+            "payee_id": "landlord_sp",
+            "purpose": "rent"
+          }
+        }
+      ],
+      "tool_call_id": null
+    },
+    {
+      "role": "tool",
+      "text": "{\"turn_ended\": \"the reply to the student follows\"}",
+      "lang": "en",
+      "source": "tool_result",
+      "tool_calls": [],
+      "tool_call_id": "toolu_01"
+    },
+    {
+      "role": "assistant",
+      "text": "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD and exchange cost 0 SGD. Nothing moves until you confirm.",
+      "lang": "en",
+      "source": "user_turn",
+      "tool_calls": [],
+      "tool_call_id": null
+    }
+  ]
 }
 ```
 

@@ -21,6 +21,7 @@ FIRST_KEY = "student_001:t1:propose_transfer:1"
 def ledger_file(tmp_path, monkeypatch):
     path = tmp_path / "data" / "ledger.jsonl"
     monkeypatch.setattr(api.main, "LEDGER_PATH", path)
+    monkeypatch.setattr(api.main, "CONVERSATIONS_PATH", tmp_path / "data" / "conversations.jsonl")
     return path
 
 
@@ -35,7 +36,7 @@ def _call(name: str, arguments: dict) -> Message:
 
 
 def _trail_kinds(client: TestClient) -> list[str]:
-    return [entry["kind"] for entry in client.get(f"/ledger/{USER}").json() if entry["kind"] != "conversation"]
+    return [entry["kind"] for entry in client.get(f"/ledger/{USER}").json() if entry["kind"] != "turn"]
 
 
 def _client(responses=(), **overrides) -> TestClient:
@@ -136,7 +137,7 @@ def test_ledger_lists_only_that_users_entries_and_verify_finds_no_break():
     verify = client.get(f"/ledger/{USER}/verify")
 
     assert [entry["seq"] for entry in entries] == [1, 2, 3]
-    assert [entry["kind"] for entry in entries] == ["proposal", "decision", "conversation"]
+    assert [entry["kind"] for entry in entries] == ["proposal", "decision", "turn"]
     assert all(entry["payload"]["user_id"] == USER for entry in entries)
     assert verify.status_code == 200
     assert verify.json() == {"first_broken_seq": None}
@@ -274,7 +275,7 @@ def test_the_ledger_is_written_to_the_file_as_it_grows(ledger_file):
     _propose(client)
 
     lines = ledger_file.read_text(encoding="utf-8").splitlines()
-    assert [json.loads(line)["kind"] for line in lines] == ["proposal", "decision", "conversation"]
+    assert [json.loads(line)["kind"] for line in lines] == ["proposal", "decision", "turn"]
 
 
 def test_a_restarted_app_keeps_a_waiting_confirmation_and_pays_it_once():
@@ -341,3 +342,27 @@ def test_a_tampered_ledger_file_still_starts_and_verify_names_the_break(ledger_f
     ledger_file.write_text(ledger_file.read_text(encoding="utf-8").replace('"1200"', '"9999"', 1), encoding="utf-8")
 
     assert _client().get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": 1}
+
+
+
+def test_ledger_never_returns_the_students_words_and_the_store_file_holds_them(tmp_path):
+    client = _client([_call("propose_transfer", RENT)])
+    _propose(client)
+
+    ledger = client.get(f"/ledger/{USER}").text
+    stored = (tmp_path / "data" / "conversations.jsonl").read_text(encoding="utf-8")
+
+    assert RENT_REQUEST not in ledger
+    assert RENT_REQUEST in stored
+    assert [json.loads(line)["user_id"] for line in stored.splitlines()] == [USER]
+
+
+def test_a_restarted_app_rebuilds_memory_from_the_conversation_store():
+    adapter = FakeModelAdapter(["You have 2,300 SGD and 150 BRL."])
+    TestClient(create_app(adapter=adapter)).post("/chat", json={"user_id": USER, "text": "What is my balance?"})
+
+    later = FakeModelAdapter(["Still the same."])
+    TestClient(create_app(adapter=later)).post("/chat", json={"user_id": USER, "text": "And now?"})
+
+    texts = [message.text for message in later.calls[0][0][1:]]
+    assert texts == ["What is my balance?", "You have 2,300 SGD and 150 BRL.", "And now?"]

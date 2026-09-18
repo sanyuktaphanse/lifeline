@@ -28,6 +28,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
+from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.tiers import TIERS
 
 ACTOR = "agent"
@@ -41,7 +42,6 @@ CONFIRMATION_TTL = timedelta(
 MAX_MODEL_CALLS_PER_TURN = 8
 # Source: docs/decisions.md, 18 September 2026. The model sees at most this many earlier messages.
 MAX_HISTORY_MESSAGES = 20
-REMEMBERED_FIELDS = {"role", "text", "lang", "source", "tool_calls", "tool_call_id"}
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -367,6 +367,7 @@ class AgentLoop:
         mandates: dict[str, Mandate],
         balances: dict[str, dict[str, Decimal]],
         pending: dict[str, PendingConfirmation],
+        conversations: ConversationStore | None = None,
     ) -> None:
         self._adapter = adapter
         self._engine = engine
@@ -380,10 +381,17 @@ class AgentLoop:
         self._turns: dict[str, int] = {}
         self._receipt_rails: dict[str, dict[str, str]] = {}
         self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
+        self._store = ConversationStore() if conversations is None else conversations
         self._conversations: dict[str, list[Message]] = {}
         self._consumed: dict[str, tuple[str, Action]] = {}
         self._closed: dict[str, tuple[str, str, str]] = {}
         self._rebuild_from_ledger()
+        for user_id in self._store.users():
+            self._conversations[user_id] = _bounded(self._store.messages(user_id))
+
+    def erase_conversation(self, user_id: str) -> int:
+        self._conversations.pop(user_id, None)
+        return self._store.erase(user_id)
 
     def mandate_version(self, mandate_id: str) -> Mandate | None:
         version = self._versions.get(mandate_id)
@@ -475,11 +483,8 @@ class AgentLoop:
 
     def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
         remembered = [_remembered(message) for message in turn_messages]
-        self._write(
-            trail,
-            "conversation",
-            {"messages": [message.model_dump(mode="json", include=REMEMBERED_FIELDS) for message in remembered]},
-        )
+        self._store.append(trail.user_id, trail.turn, remembered)
+        self._write(trail, "turn", {"messages": len(remembered)})
         history = self._conversations.get(trail.user_id, [])
         self._conversations[trail.user_id] = _bounded([*history, *remembered])
 
@@ -941,9 +946,6 @@ class AgentLoop:
                     self._close(refused.user_id, refused.action, "refused")
                 elif key in proposals:
                     self._maybe_waiting(user_id, entry, proposals[key], waiting)
-            elif entry.kind == "conversation":
-                remembered = [Message.model_validate(message) for message in entry.payload["messages"]]
-                self._conversations[user_id] = _bounded([*self._conversations.get(user_id, []), *remembered])
             elif entry.kind == "confirmation":
                 key = entry.payload["idempotency_key"]
                 if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:

@@ -8,6 +8,7 @@ import pytest
 from contracts.schemas import Mandate, Message, ReceiptStatus, Role, Source, Tier, ToolCall, TraceResult
 from contracts.schemas import AgentReply
 from core.agent import AgentLoop, PendingConfirmation, detect_lang
+from core.conversation_store import ConversationStore
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
@@ -41,6 +42,7 @@ class Setup:
     ledger: HashChainLedger
     pending: dict[str, PendingConfirmation]
     mandates: dict[str, Mandate]
+    store: ConversationStore
 
 
 class InjectedRouter(FakeRouter):
@@ -76,9 +78,10 @@ def _honest_rails() -> dict[str, FakeRail]:
     }
 
 
-def _setup(responses, *, ledger=None, rails=None, router=None) -> Setup:
+def _setup(responses, *, ledger=None, rails=None, router=None, store=None) -> Setup:
     adapter = FakeModelAdapter(responses)
     ledger = HashChainLedger() if ledger is None else ledger
+    store = ConversationStore() if store is None else store
     rails = _honest_rails() if rails is None else rails
     pending: dict[str, PendingConfirmation] = {}
     mandates = {USER: _mandate()}
@@ -91,8 +94,9 @@ def _setup(responses, *, ledger=None, rails=None, router=None) -> Setup:
         mandates=mandates,
         balances={USER: {"SGD": Decimal("2300"), "BRL": Decimal("150")}},
         pending=pending,
+        conversations=store,
     )
-    return Setup(loop, adapter, ledger, pending, mandates)
+    return Setup(loop, adapter, ledger, pending, mandates, store)
 
 
 def _user(text: str, **fields) -> Message:
@@ -114,7 +118,7 @@ def _say(text: str) -> Message:
 
 
 def _trail(ledger: HashChainLedger) -> list:
-    return [entry for entry in ledger.entries() if entry.kind != "conversation"]
+    return [entry for entry in ledger.entries() if entry.kind != "turn"]
 
 
 def _kinds(ledger: HashChainLedger) -> list[str]:
@@ -837,8 +841,8 @@ def test_a_rebuilt_transfer_skips_a_rail_that_already_failed():
     assert second.pending[token].failed_rails == {"wise"}
 
 
-def _conversations(ledger: HashChainLedger) -> list[list[dict]]:
-    return [entry.payload["messages"] for entry in ledger.entries() if entry.kind == "conversation"]
+def _conversations(store: ConversationStore) -> list[list[dict]]:
+    return [record["messages"] for record in store.records(USER)]
 
 
 def _sent(setup: Setup, call: int) -> list[Message]:
@@ -866,14 +870,18 @@ def test_every_model_call_receives_the_earlier_turns_including_tool_results():
     assert second[5].text == "E em reais?"
 
 
-def test_each_call_writes_one_conversation_entry_last_and_never_the_token():
+def test_each_call_stores_its_messages_and_the_ledger_only_counts_them():
     s = _setup([_call("propose_transfer", RENT)])
     token = _propose_rent(s)
     s.loop.handle(USER, _user("Yes, send it"), confirmation_token=token)
 
     kinds = [entry.kind for entry in s.ledger.entries()]
-    assert kinds == ["proposal", "decision", "conversation", "confirmation", "execution", "receipt", "conversation"]
-    first, second = _conversations(s.ledger)
+    assert kinds == ["proposal", "decision", "turn", "confirmation", "execution", "receipt", "turn"]
+    turns = [entry.payload for entry in s.ledger.entries() if entry.kind == "turn"]
+    assert [turn["messages"] for turn in turns] == [4, 2]
+    ledger_text = json.dumps([entry.payload for entry in s.ledger.entries()], ensure_ascii=False)
+    assert RENT_REQUEST not in ledger_text and "Yes, send it" not in ledger_text
+    first, second = _conversations(s.store)
     assert [(m["role"], m["source"]) for m in first] == [
         ("user", "user_turn"), ("assistant", "user_turn"), ("tool", "tool_result"), ("assistant", "user_turn")
     ]
@@ -881,7 +889,8 @@ def test_each_call_writes_one_conversation_entry_last_and_never_the_token():
     assert first[3]["text"].startswith("Please confirm")
     assert [m["role"] for m in second] == ["user", "assistant"]
     assert second[1]["text"].startswith("Done.")
-    assert token not in json.dumps([entry.payload for entry in s.ledger.entries()])
+    assert token not in ledger_text
+    assert token not in json.dumps(s.store.records(USER))
 
 
 def test_a_call_that_ends_a_turn_still_gets_a_tool_result_for_every_call():
@@ -921,12 +930,12 @@ def test_history_is_bounded_to_twenty_messages_and_starts_with_the_student():
     assert remembered[-1].text == "Answer 13."
 
 
-def test_a_new_loop_rebuilds_the_conversation_from_the_ledger():
-    ledger = HashChainLedger()
-    first = _setup([_call("read_balance", {}), _say("You have 2,300 SGD and 150 BRL.")], ledger=ledger)
+def test_a_new_loop_rebuilds_the_conversation_from_the_store():
+    ledger, store = HashChainLedger(), ConversationStore()
+    first = _setup([_call("read_balance", {}), _say("You have 2,300 SGD and 150 BRL.")], ledger=ledger, store=store)
     first.loop.handle(USER, _user("What is my balance?"))
 
-    second = _setup([_say("Still 2,300 SGD.")], ledger=ledger)
+    second = _setup([_say("Still 2,300 SGD.")], ledger=ledger, store=store)
     second.loop.handle(USER, _user("And now?"))
 
     texts = [m.text for m in _sent(second, 0)[1:]]
@@ -1037,3 +1046,33 @@ def test_a_token_refused_at_confirmation_is_rejected_with_that_reason_when_tried
         "reason": "refused",
         "idempotency_key": FIRST_KEY,
     }
+
+
+
+def test_erasing_a_conversation_forgets_it_and_leaves_the_ledger_untouched():
+    s = _setup(
+        [_call("read_balance", {}), _say("You have 2,300 SGD and 150 BRL."), _say("I have no earlier messages.")]
+    )
+    s.loop.handle(USER, _user("What is my balance?"))
+    before = s.ledger.entries()
+
+    erased = s.loop.erase_conversation(USER)
+    s.loop.handle(USER, _user("What did I ask before?"))
+
+    assert erased == 1
+    assert s.ledger.entries()[: len(before)] == before
+    assert s.ledger.verify() is None
+    assert [m.text for m in _sent(s, 2)[1:]] == ["What did I ask before?"]
+    assert [record["messages"][0]["text"] for record in s.store.records(USER)] == ["What did I ask before?"]
+
+
+def test_erasing_one_student_keeps_the_others():
+    store = ConversationStore()
+    store.append("student_002", 1, [Message(role=Role.USER, text="Hello")])
+    s = _setup([_say("Hi.")], store=store)
+    s.loop.handle(USER, _user("Hello there"))
+
+    s.loop.erase_conversation(USER)
+
+    assert s.store.records(USER) == []
+    assert [record["messages"][0]["text"] for record in s.store.records("student_002")] == ["Hello"]

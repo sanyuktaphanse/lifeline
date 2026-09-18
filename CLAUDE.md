@@ -31,3 +31,4 @@ Lifeline never gives investment advice. If a request asks what to buy, hold, or 
 6. Write tests before code.
 7. Never run `git push --force` and never run `git reset --hard`.
 8. Documentation uses plain sentences. No dashes.
+9. Never write files outside the repository folder.

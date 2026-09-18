@@ -25,6 +25,7 @@ from contracts.schemas import (
     TraceResult,
 )
 from core.agent import AgentLoop
+from core.conversation_store import ConversationStore
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter
@@ -34,6 +35,7 @@ from rails.fake_router import FakeRouter
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
+CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
 # Source: this module. The Next.js app runs on localhost; any port is allowed, no other host is.
 LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 # Source: this module. A guard against oversized requests to the model, not a money rule.
@@ -138,6 +140,7 @@ def create_app(
     fixture_path: Path = DEMO_FIXTURE,
     rails: dict[str, FakeRail] | None = None,
     ledger_path: Path | None = None,
+    conversations_path: Path | None = None,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
@@ -153,6 +156,7 @@ def create_app(
         mandates={user_id: _demo_mandate(fixture, ledger)},
         balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
         pending={},
+        conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
     )
     users = {user_id}
 

@@ -27,8 +27,8 @@ PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
 TEXT_CHECKS = ("must_contain", "must_not_contain")
-# The ledger expectation lists the action trail; conversation entries hold the transcript and are not part of it.
-TRANSCRIPT_KIND = "conversation"
+# The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
+TURN_KIND = "turn"
 
 # Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
 USER = "student_001"
@@ -207,7 +207,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
-    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TRANSCRIPT_KIND]
+    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TURN_KIND]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
     ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
