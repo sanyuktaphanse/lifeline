@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, and then the conversation's own erasable store, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -13,18 +13,19 @@ Every Python excerpt below is copied exactly from the file it names. Read the fi
 5. The interfaces, `contracts/interfaces.py`
 6. The rail errors, `contracts/errors.py`
 7. The ledger, `core/ledger.py`
-8. The fake model adapter, `core/fake_adapter.py`
-9. The model adapter, `core/model_adapter.py`
-10. The fake router, `rails/fake_router.py`
-11. The fake rail, `rails/fake_rail.py`
-12. The agent loop, `core/agent.py`
-13. The evaluation harness, `core/harness.py`
-14. The API, `api/main.py`
-15. The tests
-16. The suites and their scenarios
-17. The knowledge base, `rails/knowledge/`
-18. Configuration files
-19. Commands used to build and check the repo
+8. The conversation store, `core/conversation_store.py`
+9. The fake model adapter, `core/fake_adapter.py`
+10. The model adapter, `core/model_adapter.py`
+11. The fake router, `rails/fake_router.py`
+12. The fake rail, `rails/fake_rail.py`
+13. The agent loop, `core/agent.py`
+14. The evaluation harness, `core/harness.py`
+15. The API, `api/main.py`
+16. The tests
+17. The suites and their scenarios
+18. The knowledge base, `rails/knowledge/`
+19. Configuration files
+20. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -930,6 +931,67 @@ class JsonlLedger(HashChainLedger):
 
 `JsonlLedger` keeps the chain in a file, one JSON entry per line, which is the format called JSON Lines. When it is created it reads every non empty line back into a `LedgerEntry` with `model_validate_json`, which parses and validates in one step. A file that does not exist yet is an empty ledger, and nothing is written until the first entry. `append` first turns the payload into plain JSON exactly as the hash reads it: `json.dumps` with `default=str` writes a time or a decimal as text, and `json.loads` reads it back as plain data. The payload that is hashed, the one kept, and the one written are therefore identical, so the chain verifies after a reload. `_store` creates the folder if needed, opens the file with `"a"`, which adds to the end, and writes the entry as one line before adding it to the list, so a failed write never leaves an entry that the file lacks. `super()` calls the parent class's version of the method.
 
+## The conversation store, `core/conversation_store.py`
+
+This file keeps each student's conversation apart from the ledger, so the ledger holds money events only and a student's words can be erased.
+
+```python
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+from contracts.schemas import Message
+
+# The parts of a message the memory keeps. Provider reasoning blocks and model names are left out.
+REMEMBERED_FIELDS = {"role", "text", "lang", "source", "tool_calls", "tool_call_id"}
+
+
+class ConversationStore:
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path
+        self._records: list[dict[str, Any]] = []
+        if path is not None and path.exists():
+            with path.open(encoding="utf-8") as handle:
+                self._records = [json.loads(line) for line in handle if line.strip()]
+
+    def append(self, user_id: str, turn: int, messages: list[Message]) -> None:
+        record = {
+            "user_id": user_id,
+            "turn": turn,
+            "messages": [message.model_dump(mode="json", include=REMEMBERED_FIELDS) for message in messages],
+        }
+        if self._path is not None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._records.append(record)
+
+    def records(self, user_id: str) -> list[dict[str, Any]]:
+        return [json.loads(json.dumps(record)) for record in self._records if record["user_id"] == user_id]
+
+    def messages(self, user_id: str) -> list[Message]:
+        return [Message.model_validate(message) for record in self.records(user_id) for message in record["messages"]]
+
+    def users(self) -> set[str]:
+        return {record["user_id"] for record in self._records}
+
+    def erase(self, user_id: str) -> int:
+        kept = [record for record in self._records if record["user_id"] != user_id]
+        removed = len(self._records) - len(kept)
+        if self._path is not None and removed:
+            temporary = self._path.with_name(self._path.name + ".tmp")
+            with temporary.open("w", encoding="utf-8") as handle:
+                handle.writelines(json.dumps(record, ensure_ascii=False) + "\n" for record in kept)
+            os.replace(temporary, self._path)
+        self._records = kept
+        return removed
+```
+
+`REMEMBERED_FIELDS` names the parts of a message the memory keeps; the provider's reasoning blocks and the model's name are left out. A `ConversationStore` made with a path keeps one JSON record per line in that file, and one made without a path keeps records in memory only, as the tests and the harness do. When it is created it reads the file back, if there is one. `append` writes one record, the student, the turn, and the messages, to the end of the file before keeping it in memory. `records` returns copies of one student's records, made by writing them to JSON and reading them back, so a caller cannot change the store. `messages` turns those records back into `Message` objects in order, and `users` lists every student with records.
+
+`erase` removes every record of one student. The file is rewritten to a temporary file beside it, then `os.replace` puts it in place of the old one in a single step, so a crash halfway through leaves either the old file or the new one, never a half written one. It returns how many records it removed. Erasing never touches the ledger, whose `turn` entries say only how many messages each call added, so the hash chain still verifies.
+
 ## The fake model adapter, `core/fake_adapter.py`
 
 ```python
@@ -1602,6 +1664,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
+from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.tiers import TIERS
 
 ACTOR = "agent"
@@ -1615,7 +1678,6 @@ CONFIRMATION_TTL = timedelta(
 MAX_MODEL_CALLS_PER_TURN = 8
 # Source: docs/decisions.md, 18 September 2026. The model sees at most this many earlier messages.
 MAX_HISTORY_MESSAGES = 20
-REMEMBERED_FIELDS = {"role", "text", "lang", "source", "tool_calls", "tool_call_id"}
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -1646,7 +1708,7 @@ SYSTEM_PROMPT = (
 )
 ```
 
-The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_HISTORY_MESSAGES` is how many earlier messages the model sees, twenty, citing the decision that set it, and `REMEMBERED_FIELDS` names the parts of a message the memory keeps. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `PASTED_FRAME` wraps text the student pasted before the model sees it, between markers, with a sentence saying it is data and never an instruction. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions. `MANDATE_VERSION` splits a mandate id such as `mandate-student_001-v1` into the part up to `-v` and the version number, so the next version can be named.
+The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_HISTORY_MESSAGES` is how many earlier messages the model sees, twenty, citing the decision that set it, and `REMEMBERED_FIELDS`, imported from the conversation store, names the parts of a message the memory keeps. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `PASTED_FRAME` wraps text the student pasted before the model sees it, between markers, with a sentence saying it is data and never an instruction. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions. `MANDATE_VERSION` splits a mandate id such as `mandate-student_001-v1` into the part up to `-v` and the version number, so the next version can be named.
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
@@ -1960,6 +2022,7 @@ class AgentLoop:
         mandates: dict[str, Mandate],
         balances: dict[str, dict[str, Decimal]],
         pending: dict[str, PendingConfirmation],
+        conversations: ConversationStore | None = None,
     ) -> None:
         self._adapter = adapter
         self._engine = engine
@@ -1973,10 +2036,17 @@ class AgentLoop:
         self._turns: dict[str, int] = {}
         self._receipt_rails: dict[str, dict[str, str]] = {}
         self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
+        self._store = ConversationStore() if conversations is None else conversations
         self._conversations: dict[str, list[Message]] = {}
         self._consumed: dict[str, tuple[str, Action]] = {}
         self._closed: dict[str, tuple[str, str, str]] = {}
         self._rebuild_from_ledger()
+        for user_id in self._store.users():
+            self._conversations[user_id] = _bounded(self._store.messages(user_id))
+
+    def erase_conversation(self, user_id: str) -> int:
+        self._conversations.pop(user_id, None)
+        return self._store.erase(user_id)
 
     def mandate_version(self, mandate_id: str) -> Mandate | None:
         version = self._versions.get(mandate_id)
@@ -2014,7 +2084,7 @@ class AgentLoop:
         return self._converse(user_id, mandate, lang, message, pasted)
 ```
 
-The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `self._conversations` holds each student's remembered messages, `self._consumed` the tokens already used to act, each with the student and the action it carried out, and `self._closed` the tokens that can no longer be confirmed, with the reason and the key. All three are filled before the ledger is read, because the rebuild fills them. `handle` takes an optional `pasted` message beside the student's own. A pasted message must carry a source other than `user_turn`, or `handle` raises before anything is written, because pasted text claiming to be the student's turn would defeat the provenance check. `handle` works out the language first, from the student's own words. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. A confirmation's reply goes through `_remember_confirmation`, so it is remembered like any turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy. `act` runs one of the `DIRECT_TOOLS` for an app, such as a trace button, without asking the model. Any other tool raises `ValueError` before anything is written, so nothing that moves money or changes the mandate can skip the model's proposal and the student's confirmation. It takes the next turn number and starts a trail with the current mandate, just as a conversation turn does, then runs the call through `_run_tool`, the same path a model's tool call takes. The action therefore passes the mandate engine and leaves `proposal`, `decision`, and `execution` in the ledger. With no model answering, the entries carry no provider or model. It returns the decision and the result. A read only tool never ends a turn, so a finished `AgentReply` coming back would mean something is wrong, and it raises instead of returning it.
+The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `conversations` is the `ConversationStore` that keeps the messages; without one, the loop keeps them in a store held in memory. `self._conversations` holds each student's remembered messages, bounded, and is filled from the store once the ledger has been read, `self._consumed` the tokens already used to act, each with the student and the action it carried out, and `self._closed` the tokens that can no longer be confirmed, with the reason and the key. All three are filled before the ledger is read, because the rebuild fills them. `handle` takes an optional `pasted` message beside the student's own. A pasted message must carry a source other than `user_turn`, or `handle` raises before anything is written, because pasted text claiming to be the student's turn would defeat the provenance check. `handle` works out the language first, from the student's own words. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. A confirmation's reply goes through `_remember_confirmation`, so it is remembered like any turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy. `act` runs one of the `DIRECT_TOOLS` for an app, such as a trace button, without asking the model. Any other tool raises `ValueError` before anything is written, so nothing that moves money or changes the mandate can skip the model's proposal and the student's confirmation. It takes the next turn number and starts a trail with the current mandate, just as a conversation turn does, then runs the call through `_run_tool`, the same path a model's tool call takes. The action therefore passes the mandate engine and leaves `proposal`, `decision`, and `execution` in the ledger. With no model answering, the entries carry no provider or model. It returns the decision and the result. A read only tool never ends a turn, so a finished `AgentReply` coming back would mean something is wrong, and it raises instead of returning it. `erase_conversation` forgets a student's conversation, both the history in memory and the records in the store, and returns how many records it removed. It never touches the ledger.
 
 ```python
     def _converse(
@@ -2076,11 +2146,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
 
     def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
         remembered = [_remembered(message) for message in turn_messages]
-        self._write(
-            trail,
-            "conversation",
-            {"messages": [message.model_dump(mode="json", include=REMEMBERED_FIELDS) for message in remembered]},
-        )
+        self._store.append(trail.user_id, trail.turn, remembered)
+        self._write(trail, "turn", {"messages": len(remembered)})
         history = self._conversations.get(trail.user_id, [])
         self._conversations[trail.user_id] = _bounded([*history, *remembered])
 
@@ -2092,7 +2159,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]})
 ```
 
-`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. `_remember` writes one `conversation` entry holding the messages as plain JSON, then adds them to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
+`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. `_remember` appends the messages to the conversation store as one record, then writes a `turn` entry to the ledger that holds only how many messages there were, so the ledger never holds the student's words. It then adds the messages to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
 
 ```python
     def _run_tool(
@@ -2582,9 +2649,6 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
                     self._close(refused.user_id, refused.action, "refused")
                 elif key in proposals:
                     self._maybe_waiting(user_id, entry, proposals[key], waiting)
-            elif entry.kind == "conversation":
-                remembered = [Message.model_validate(message) for message in entry.payload["messages"]]
-                self._conversations[user_id] = _bounded([*self._conversations.get(user_id, []), *remembered])
             elif entry.kind == "confirmation":
                 key = entry.payload["idempotency_key"]
                 if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
@@ -2612,7 +2676,7 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
                     self._new_version(user_id, payee, added_at, entry.payload.get("new_mandate_id"))
 ```
 
-`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id. The same pass rebuilds each student's conversation from `conversation` entries, bounded as it goes, and records the token of every executed T2 action as consumed, computing it again from the action with the engine. It also rebuilds the confirmations that were still waiting. `proposals` remembers every proposal by its idempotency key, and `waiting` holds the keys whose confirmation is still open. A decision opens one through `_maybe_waiting`, and a second decision for the same key, a refusal at confirmation, closes it and records its token as refused. A confirmation closes a payee or a freeze, which finish in the same step. A transfer stays open until its execution, because a rail can fail between the confirmation and the payment. A rail failure note adds the failed rail and restarts the waiting time.
+`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id. The same pass records the token of every executed T2 action as consumed, computing it again from the action with the engine. It also rebuilds the confirmations that were still waiting. `proposals` remembers every proposal by its idempotency key, and `waiting` holds the keys whose confirmation is still open. A decision opens one through `_maybe_waiting`, and a second decision for the same key, a refusal at confirmation, closes it and records its token as refused. A confirmation closes a payee or a freeze, which finish in the same step. A transfer stays open until its execution, because a rail can fail between the confirmation and the payment. A rail failure note adds the failed rail and restarts the waiting time.
 
 ```python
         for waited in waiting.values():
@@ -2705,8 +2769,8 @@ PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
 TEXT_CHECKS = ("must_contain", "must_not_contain")
-# The ledger expectation lists the action trail; conversation entries hold the transcript and are not part of it.
-TRANSCRIPT_KIND = "conversation"
+# The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
+TURN_KIND = "turn"
 
 # Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
 USER = "student_001"
@@ -2828,7 +2892,7 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
     return failures
 ```
 
-`TRANSCRIPT_KIND` is the entry kind the `ledger` expectation leaves out, because `conversation` entries hold the transcript rather than the action trail. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09.
+`TURN_KIND` is the entry kind the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and is not part of the action trail. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09.
 
 ```python
 def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]]], expect: dict[str, Any]) -> list[str]:
@@ -2906,7 +2970,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
-    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TRANSCRIPT_KIND]
+    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TURN_KIND]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
     ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
@@ -2919,7 +2983,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     return result
 ```
 
-`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `conversation`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger, and `verify` must find the hash chain intact.
+`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger, and `verify` must find the hash chain intact.
 
 ```python
 def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -> list[EntryResult]:
@@ -3081,6 +3145,7 @@ from contracts.schemas import (
     TraceResult,
 )
 from core.agent import AgentLoop
+from core.conversation_store import ConversationStore
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter
@@ -3090,6 +3155,7 @@ from rails.fake_router import FakeRouter
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
+CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
 # Source: this module. The Next.js app runs on localhost; any port is allowed, no other host is.
 LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 # Source: this module. A guard against oversized requests to the model, not a money rule.
@@ -3098,7 +3164,7 @@ MAX_TEXT_CHARS = 4000
 MAX_PASTED_CHARS = 20000
 ```
 
-The API imports the contracts, the agent loop, the file ledger, the engine, the real model adapter, and the fakes. `ROOT` is the folder above `api/`, so the paths work from any current directory. `DEMO_FIXTURE` is the demo student's file, and `LEDGER_PATH` is `data/ledger.jsonl`, which git ignores. `LOCAL_ORIGINS` is a regular expression for the origins CORS allows: `http://localhost` or `http://127.0.0.1`, with any port or none, and nothing else. `MAX_TEXT_CHARS` caps what the student types at 4,000 characters and `MAX_PASTED_CHARS` caps a paste at 20,000, and their comments say they guard against oversized requests to the model and are not money rules.
+The API imports the contracts, the agent loop, the file ledger, the engine, the real model adapter, and the fakes. `ROOT` is the folder above `api/`, so the paths work from any current directory. `DEMO_FIXTURE` is the demo student's file, and `LEDGER_PATH` is `data/ledger.jsonl` and `CONVERSATIONS_PATH` is `data/conversations.jsonl`, both ignored by git. `LOCAL_ORIGINS` is a regular expression for the origins CORS allows: `http://localhost` or `http://127.0.0.1`, with any port or none, and nothing else. `MAX_TEXT_CHARS` caps what the student types at 4,000 characters and `MAX_PASTED_CHARS` caps a paste at 20,000, and their comments say they guard against oversized requests to the model and are not money rules.
 
 ```python
 class ChatRequest(BaseModel):
@@ -3211,6 +3277,7 @@ def create_app(
     fixture_path: Path = DEMO_FIXTURE,
     rails: dict[str, FakeRail] | None = None,
     ledger_path: Path | None = None,
+    conversations_path: Path | None = None,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
@@ -3226,6 +3293,7 @@ def create_app(
         mandates={user_id: _demo_mandate(fixture, ledger)},
         balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
         pending={},
+        conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
     )
     users = {user_id}
 
@@ -3302,7 +3370,7 @@ def create_app(
     return app
 ```
 
-`create_app` builds one app with one agent loop over the file ledger. It takes the model adapter, the fixture, the rails, and the ledger path as arguments so the tests can pass a scripted model, chosen rails, and a temporary file; `make dev` passes nothing and gets the real `ProviderModelAdapter`, which reads `.env`, and `data/ledger.jsonl`. The rails get their receipts back from the ledger before the loop is built, and the loop then rebuilds the history, payees, mandate versions, and waiting confirmations from the same ledger. The loop and the ledger are kept on `app.state`, which the tests use to reach them. The CORS middleware answers browser preflight requests from local origins only.
+`create_app` builds one app with one agent loop over the file ledger and a conversation store kept in its file. It takes the model adapter, the fixture, the rails, and the ledger path as arguments so the tests can pass a scripted model, chosen rails, and a temporary file; `make dev` passes nothing and gets the real `ProviderModelAdapter`, which reads `.env`, and `data/ledger.jsonl`. The rails get their receipts back from the ledger before the loop is built, and the loop then rebuilds the history, payees, mandate versions, and waiting confirmations from the same ledger. The loop and the ledger are kept on `app.state`, which the tests use to reach them. The CORS middleware answers browser preflight requests from local origins only.
 
 A `ModelAdapterError`, such as a missing API key, becomes a `503` with the reason, through `exception_handler`. `known` answers `404` for any user other than the demo student. `direct` runs a read only tool through `AgentLoop.act`, turns a refusal into a `403` with the rules through `refused`, and answers `404` when the result holds an error instead of the expected key, such as a receipt this student never received.
 
@@ -3312,7 +3380,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 268 tests. Each was written before the code it checks and was seen to fail first.
+There are 276 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -3481,6 +3549,10 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_ledger.py` | `test_a_file_ledger_writes_one_json_line_per_entry_and_reloads_an_intact_chain` | Each entry is one line, a reload gives the same entries with an intact chain, and appending after a reload continues the chain |
 | `test_ledger.py` | `test_a_tampered_file_ledger_loads_and_verify_names_the_first_broken_entry` | An amount edited in the file still loads, and verify names entry 1 |
 | `test_ledger.py` | `test_a_missing_file_is_an_empty_ledger` | No file means no entries, and nothing is written until the first append |
+| `test_conversation_store.py` | `test_a_file_store_appends_one_line_per_turn_and_reloads` | Three calls give three lines, and a reload returns each student's messages in order |
+| `test_conversation_store.py` | `test_only_the_remembered_fields_are_stored` | The provider, model, and reasoning blocks are left out |
+| `test_conversation_store.py` | `test_erase_removes_one_students_lines_from_the_file_and_memory` | Erasing one student removes their lines, keeps the other's, and leaves no temporary file |
+| `test_conversation_store.py` | `test_an_in_memory_store_writes_nothing` | A store without a path keeps messages in memory, and erasing an unknown student removes nothing |
 | `test_model_adapter.py` | `test_fake_adapter_returns_scripted_responses_in_order` | The fake replays its script and stops at the end |
 | `test_model_adapter.py` | `test_scripted_two_step_tool_loop_with_the_fake_adapter` | A tool loop sends user, assistant, and tool turns in order |
 | `test_model_adapter.py` | `test_provider_defaults_to_anthropic_with_dashscope_fallback` | The defaults are Anthropic then DashScope |
@@ -3585,10 +3657,12 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_agent.py` | `test_a_rebuilt_transfer_skips_a_rail_that_already_failed` | A transfer whose Wise attempt failed is restored on the bank wire with Wise marked failed |
 | `test_agent.py` | `test_act_runs_a_read_only_tool_through_the_engine_and_the_ledger_without_the_model` | A precheck run directly passes the engine, cites R02, writes proposal, decision, and execution, and never calls the model |
 | `test_agent.py` | `test_every_model_call_receives_the_earlier_turns_including_tool_results` | The second turn's model call receives the first turn's message, tool call, tool result, and answer before the new message |
-| `test_agent.py` | `test_each_call_writes_one_conversation_entry_last_and_never_the_token` | A proposal and a confirmation each end with one conversation entry holding their messages, and the token appears in no entry |
+| `test_agent.py` | `test_each_call_stores_its_messages_and_the_ledger_only_counts_them` | A proposal and a confirmation each end with a `turn` entry holding only a count, their messages go to the store, the student's words are not in the ledger, and the token is in neither |
 | `test_agent.py` | `test_a_call_that_ends_a_turn_still_gets_a_tool_result_for_every_call` | Two calls in an answer whose first ends the turn both get tool results in the memory |
 | `test_agent.py` | `test_history_is_bounded_to_twenty_messages_and_starts_with_the_student` | After fifteen turns the model sees at most twenty earlier messages, starting with the student |
-| `test_agent.py` | `test_a_new_loop_rebuilds_the_conversation_from_the_ledger` | A new loop gives the model the conversation of the loop before it |
+| `test_agent.py` | `test_a_new_loop_rebuilds_the_conversation_from_the_store` | A new loop over the same store gives the model the conversation of the loop before it |
+| `test_agent.py` | `test_erasing_a_conversation_forgets_it_and_leaves_the_ledger_untouched` | After erasing, the model sees no earlier messages, the earlier ledger entries are unchanged, and the chain verifies |
+| `test_agent.py` | `test_erasing_one_student_keeps_the_others` | Erasing one student leaves another student's records |
 | `test_agent.py` | `test_a_payee_injected_in_an_earlier_turn_is_still_untrusted` | A payee and amount from an earlier turn's tool result are refused under R01 in a later turn |
 | `test_agent.py` | `test_details_the_student_typed_in_an_earlier_turn_stay_trusted` | An amount typed in one turn and a payee named in the next reach a confirmation |
 | `test_agent.py` | `test_a_replayed_token_goes_to_the_engine_which_refuses_it_under_r10` | A used token leaves a proposal marked `replayed_token` and a decision under R10, and one receipt only |
@@ -3620,6 +3694,8 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_api.py` | `test_a_restarted_app_rebuilds_history_payees_and_mandate_versions` | After a restart the earlier payment counts under R09, the added payee is still cooling under R14, and both mandate versions resolve |
 | `test_api.py` | `test_a_restarted_app_continues_receipt_numbers_and_traces_with_the_receipts_time` | After a restart the next receipt is `fake-0002` and the first receipt's trace carries its own time |
 | `test_api.py` | `test_a_tampered_ledger_file_still_starts_and_verify_names_the_break` | An edited file still starts the API, and verify names entry 1 |
+| `test_api.py` | `test_ledger_never_returns_the_students_words_and_the_store_file_holds_them` | The student's words are in `conversations.jsonl` and never in `/ledger` |
+| `test_api.py` | `test_a_restarted_app_rebuilds_memory_from_the_conversation_store` | A restarted app gives the model the conversation of the app before it |
 | `test_harness.py` | `test_a_scenario_that_should_pass_passes` | A scenario whose expectations match the loop's behaviour passes with no failures |
 | `test_harness.py` | `test_a_scenario_that_should_fail_fails_with_the_reason` | Wrong rule ids and a wrong ledger fail, and the failures name both what happened and what was expected |
 | `test_harness.py` | `test_a_scenario_that_raises_is_a_failure_not_a_crash` | A scenario that runs out of scripted answers is reported as failed with the error |
@@ -3632,7 +3708,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_harness.py` | `test_a_scenario_file_that_cannot_be_read_fails_its_entry_without_stopping_the_others` | A malformed scenario fails its entry with the parse error while the other entries still run |
 | `test_agent.py` | `test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it` | A rail named `wise_backend` behind the `wise` route names the receipt and the reply, and a new loop over the ledger still traces the receipt through the right rail |
 
-Twenty parametrized tests add forty extra runs, which is how 228 test functions become 268 tests.
+Twenty parametrized tests add forty extra runs, which is how 236 test functions become 276 tests.
 
 ## The suites and their scenarios
 
@@ -3689,7 +3765,7 @@ runs:
       ledger: [proposal, decision, confirmation_rejected]
 ```
 
-`runs` lists one or more conversations, each with the language its turns default to. Each turn has the student's text under `user`, an optional `lang` and `source`, and the model's scripted answers under `model`, each either `text` or a list of `calls` with a tool `name` and `arguments`. A turn with `confirm: latest` confirms the newest confirmation, `confirm: 1` confirms the one from turn 1, and `token:` sends a literal string, such as a confirmation from yesterday that was never issued. `expect` on a turn may also list `model_saw`, strings the model must have received in that turn's first call, which is how memory across turns is checked. `expect` on a turn checks that turn's reply. `expected` checks the final reply and the whole run. It can sit on the scenario for every run, on a run, or on both, and a run's `must_contain` and `must_not_contain` add to the scenario's while its other keys replace them. The keys are `reply`, the kind of reply (`receipt`, `freeze`, `confirmation`, `refusal`, or `answer`); `rule_ids`, exactly and in order; `warning_key`; `lang`; `ledger`, the entry kinds of the action trail in order, leaving out the `conversation` entries that hold the transcript; `must_contain`, strings the final reply must include; and `must_not_contain`, strings no reply and no ledger entry may include. `fixtures` can override the mandate or the balances, and `note` says what part of the entry the scenario does not cover, and appears in the report.
+`runs` lists one or more conversations, each with the language its turns default to. Each turn has the student's text under `user`, an optional `lang` and `source`, and the model's scripted answers under `model`, each either `text` or a list of `calls` with a tool `name` and `arguments`. A turn with `confirm: latest` confirms the newest confirmation, `confirm: 1` confirms the one from turn 1, and `token:` sends a literal string, such as a confirmation from yesterday that was never issued. `expect` on a turn may also list `model_saw`, strings the model must have received in that turn's first call, which is how memory across turns is checked. `expect` on a turn checks that turn's reply. `expected` checks the final reply and the whole run. It can sit on the scenario for every run, on a run, or on both, and a run's `must_contain` and `must_not_contain` add to the scenario's while its other keys replace them. The keys are `reply`, the kind of reply (`receipt`, `freeze`, `confirmation`, `refusal`, or `answer`); `rule_ids`, exactly and in order; `warning_key`; `lang`; `ledger`, the entry kinds of the action trail in order, leaving out the `turn` entries that only count a call's messages; `must_contain`, strings the final reply must include; and `must_not_contain`, strings no reply and no ledger entry may include. `fixtures` can override the mandate or the balances, and `note` says what part of the entry the scenario does not cover, and appears in the report.
 
 Quote a bare yes or no. YAML reads an unquoted `Yes` as the value true, not as the word, which is why the scenarios write `user: "Yes"`. The harness fails such a run with a validation error rather than guessing.
 
@@ -3770,13 +3846,17 @@ httpx==0.28.1
 [pytest]
 testpaths = tests
 pythonpath = .
+# Keeps pytest's temporary files inside the repository, as CLAUDE.md rule 9 requires.
+addopts = --basetemp=.pytest_tmp
 ```
 
 `testpaths` tells pytest to look for tests in `tests/`. `pythonpath = .` adds the repository root to the import path, which is what lets tests write `from core.mandate import check`.
 
+
+`addopts` adds options to every run. `--basetemp=.pytest_tmp` makes pytest keep the files tests write through `tmp_path` in `.pytest_tmp/` inside the repository, instead of the system's temporary folder, because rule 9 of `CLAUDE.md` forbids writing files outside the repository. pytest empties that folder at the start of every run.
 ### .gitignore and .env.example
 
-`.gitignore` lists `.venv/`, `.env`, `__pycache__/`, `.pytest_cache/`, `evidence/`, and `data/`, so the virtual environment, the secrets file, generated caches, the generated evidence report, and the API's ledger file are never committed. A committed report would always name the commit before the one that holds it, so the report is built fresh by `make evidence` and by CI instead. `.env.example` lists every variable the code reads, with no values: `LIFELINE_CONFIRM_SECRET`, `LIFELINE_ENV`, `MODEL_PROVIDER`, `FALLBACK_MODEL_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DASHSCOPE_API_KEY`, and `DASHSCOPE_MODEL`. Copy it to `.env` and fill in the values to run against real providers.
+`.gitignore` lists `.venv/`, `.env`, `__pycache__/`, `.pytest_cache/`, `evidence/`, `data/`, and `.pytest_tmp/`, so the virtual environment, the secrets file, generated caches, the generated evidence report, the API's ledger and conversation files, and pytest's temporary files are never committed. A committed report would always name the commit before the one that holds it, so the report is built fresh by `make evidence` and by CI instead. `.env.example` lists every variable the code reads, with no values: `LIFELINE_CONFIRM_SECRET`, `LIFELINE_ENV`, `MODEL_PROVIDER`, `FALLBACK_MODEL_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DASHSCOPE_API_KEY`, and `DASHSCOPE_MODEL`. Copy it to `.env` and fill in the values to run against real providers.
 
 ### .github/workflows/ci.yml
 
