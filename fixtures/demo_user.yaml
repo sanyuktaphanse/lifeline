@@ -1,0 +1,25 @@
+# Demo fixture for the API, not a real student and not published limits. Source: this file.
+user_id: student_001
+mandate:
+  id: mandate-student_001-v1
+  currency: SGD
+  per_txn_limit: "1500"
+  daily_limit: "2500"
+  allowed_payees: [landlord_sp]
+  allowed_corridors: [SG>BR]
+  allowed_purposes: [rent]
+  cooling_hours: 24
+# The mandate is valid from the moment the API starts for this many days.
+valid_days: 365
+balances:
+  SGD: "2300"
+  BRL: "150"
+# Scripted traces per rail, so a trace of the first Wise receipt has an answer.
+traces:
+  wise:
+    - receipt_id: fake-0001
+      status: in_transit
+      typical_duration_hours: 24
+      typical_duration_source: fixture
+      next_steps: [Wait for the recipient bank to credit the payment.]
+      warnings: []

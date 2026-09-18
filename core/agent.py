@@ -127,6 +127,8 @@ TOOL_ACTIONS = {
     "freeze_card": ActionType.FREEZE_CARD,
     "change_limit": ActionType.CHANGE_LIMIT,
 }
+# Tools an app may run directly, without the model: they only read, so they are tier T0.
+DIRECT_TOOLS = ("trace_transfer", "precheck")
 REQUIRED_ARGUMENTS = {
     "propose_transfer": ACTION_FIELDS,
     "get_quote": ("corridor", "amount"),
@@ -331,6 +333,21 @@ class AgentLoop:
     def mandate_version(self, mandate_id: str) -> Mandate | None:
         version = self._versions.get(mandate_id)
         return None if version is None else version.model_copy(deep=True)
+
+    def act(
+        self, user_id: str, tool: str, arguments: dict[str, Any]
+    ) -> tuple[Decision | None, dict[str, Any]]:
+        if tool not in DIRECT_TOOLS:
+            raise ValueError(f"{tool} cannot run without the model; only {', '.join(DIRECT_TOOLS)} can.")
+        mandate = self._mandates[user_id]
+        turn = self._turns.get(user_id, 0) + 1
+        self._turns[user_id] = turn
+        trail = _Trail(user_id, turn, mandate_id=mandate.id)
+        call = ToolCall(id=f"direct_{turn}", name=tool, arguments=arguments)
+        outcome = self._run_tool(user_id, mandate, "en", trail, call, 1)
+        if isinstance(outcome, AgentReply):
+            raise RuntimeError(f"{tool} ended the turn, which a read only tool never does.")
+        return outcome
 
     def handle(
         self, user_id: str, message: Message, confirmation_token: str | None = None

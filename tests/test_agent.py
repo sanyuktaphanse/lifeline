@@ -702,3 +702,26 @@ def test_an_executed_freeze_fills_the_reply_freeze_field_without_the_token(instr
     assert token not in reply.freeze.model_dump_json()
     if status == "not_supported":
         assert reply.freeze.deep_link == REVOLUT_FREEZE_DEEP_LINK
+
+
+def test_act_runs_a_read_only_tool_through_the_engine_and_the_ledger_without_the_model():
+    s = _setup([])
+
+    decision, result = s.loop.act(USER, "precheck", {"action_kind": "enable_pix", "provider": "sim_pix"})
+
+    assert decision.allowed is True
+    assert decision.rule_ids == ["R02"]
+    assert result["precheck"]["documents_likely"] == ["passport", "CPF number"]
+    assert _kinds(s.ledger) == ["proposal", "decision", "execution"]
+    assert s.adapter.calls == []
+    assert s.ledger.entries()[0].payload["action"]["idempotency_key"] == "student_001:t1:precheck:1"
+
+
+@pytest.mark.parametrize("tool", ["propose_transfer", "add_payee", "freeze_card", "change_limit", "set_reminder"])
+def test_act_refuses_every_tool_that_is_not_read_only(tool):
+    s = _setup([])
+
+    with pytest.raises(ValueError, match=tool):
+        s.loop.act(USER, tool, {})
+
+    assert s.ledger.entries() == []
