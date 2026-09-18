@@ -211,14 +211,34 @@ def test_failure_leaves_no_receipt_behind():
     assert other.receipt_id != retry.receipt_id
 
 
-def test_status_returns_the_scripted_trace():
-    scripted = _trace("fake-0001")
+def test_status_returns_the_scripted_trace_stamped_with_the_receipts_stage_time():
+    scripted = _trace("fake-0001").model_copy(update={"stage_entered_at": datetime(2026, 1, 1, tzinfo=timezone.utc)})
     rail = FakeRail(traces={"fake-0001": scripted})
 
     receipt = _execute(rail, "txn-0700-rent")
 
     assert receipt.receipt_id == "fake-0001"
-    assert rail.status(receipt.receipt_id) == scripted
+    assert rail.status(receipt.receipt_id) == scripted.model_copy(update={"stage_entered_at": receipt.stage_entered_at})
+
+
+def test_a_scripted_trace_for_a_receipt_not_yet_issued_keeps_its_scripted_time():
+    scripted = _trace("fake-0009")
+
+    assert FakeRail(traces={"fake-0009": scripted}).status("fake-0009") == scripted
+
+
+def test_a_restored_receipt_numbers_the_next_one_and_counts_as_already_paid():
+    first = FakeRail()
+    original = _execute(first, "txn-0700-rent")
+
+    rail = FakeRail(traces={"fake-0001": _trace("fake-0001")})
+    rail.restore(original, _route(), MANDATE_REF)
+
+    assert _execute(rail, "txn-0700-rent") == original
+    assert _execute(rail, "txn-0800-rent").receipt_id == "fake-0002"
+    assert rail.status("fake-0001").stage_entered_at == original.stage_entered_at
+    with pytest.raises(RailError):
+        _execute(rail, "txn-0700-rent", amount="999")
 
 
 def test_status_results_do_not_share_state():

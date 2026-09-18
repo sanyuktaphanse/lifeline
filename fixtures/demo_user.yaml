@@ -15,6 +15,7 @@ balances:
   SGD: "2300"
   BRL: "150"
 # Scripted traces per rail, so a trace of the first Wise receipt has an answer.
+# The rail stamps stage_entered_at from its own receipt, so the fixture gives no time.
 traces:
   wise:
     - receipt_id: fake-0001

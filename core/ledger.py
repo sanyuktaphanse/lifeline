@@ -1,6 +1,7 @@
 import hashlib
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from contracts.interfaces import Ledger
@@ -42,8 +43,11 @@ class HashChainLedger(Ledger):
             hash="",
         )
         entry.hash = _hash_of(entry)
-        self._entries.append(entry)
+        self._store(entry)
         return entry
+
+    def _store(self, entry: LedgerEntry) -> None:
+        self._entries.append(entry)
 
     def verify(self) -> int | None:
         prev_hash = GENESIS_PREV_HASH
@@ -58,3 +62,22 @@ class HashChainLedger(Ledger):
 
     def head(self) -> str:
         return self._entries[-1].hash if self._entries else GENESIS_PREV_HASH
+
+
+class JsonlLedger(HashChainLedger):
+    def __init__(self, path: Path) -> None:
+        super().__init__()
+        self._path = path
+        if path.exists():
+            with path.open(encoding="utf-8") as handle:
+                self._entries = [LedgerEntry.model_validate_json(line) for line in handle if line.strip()]
+
+    def append(self, actor: str, kind: str, payload: dict[str, Any]) -> LedgerEntry:
+        stored = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
+        return super().append(actor, kind, stored)
+
+    def _store(self, entry: LedgerEntry) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with self._path.open("a", encoding="utf-8") as handle:
+            handle.write(entry.model_dump_json() + "\n")
+        super()._store(entry)
