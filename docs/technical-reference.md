@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. A second set followed the same day: every T2 action needs the confirmation round trip, untrusted payment details reach the engine as data so the engine refuses them under R01, suspected injections are their own ledger entry kind, and a receipt names the rail that executed it. A third set added the T2 tools: `Action` gained `instrument_id`, `Mandate` gained `payee_added_at` and `cooling_hours`, rule R14 holds back transfers to a new payee during the cooling period, and the agent loop can add a payee and freeze a card, with an honest reply when the issuer does not allow the freeze. A fourth set made mandates versioned, rebuilt added payees and the version history from the ledger, made re adding a payee a no op, extended the provenance check to new payees, refused a freeze with no card, and gave `AgentReply` a structured `freeze` field. A fifth set added the evaluation harness, which runs suite entries as scripted scenarios and writes an evidence report. At that point there are 199 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. A second set followed the same day: every T2 action needs the confirmation round trip, untrusted payment details reach the engine as data so the engine refuses them under R01, suspected injections are their own ledger entry kind, and a receipt names the rail that executed it. A third set added the T2 tools: `Action` gained `instrument_id`, `Mandate` gained `payee_added_at` and `cooling_hours`, rule R14 holds back transfers to a new payee during the cooling period, and the agent loop can add a payee and freeze a card, with an honest reply when the issuer does not allow the freeze. A fourth set made mandates versioned, rebuilt added payees and the version history from the ledger, made re adding a payee a no op, extended the provenance check to new payees, refused a freeze with no card, and gave `AgentReply` a structured `freeze` field. A fifth set added the evaluation harness, which runs suite entries as scripted scenarios and writes an evidence report. A sixth set added the HTTP API the Next.js app builds against. At that point there are 229 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -21,9 +21,10 @@ Lifeline is a cross border finance agent for students studying abroad. It has tw
 13. [The fake router and fake rail](#the-fake-router-and-fake-rail)
 14. [Decisions of 14 September](#decisions-of-14-september)
 15. [The evaluation harness](#the-evaluation-harness)
-16. [Testing and CI](#testing-and-ci)
-17. [Commit history](#commit-history)
-18. [Open items](#open-items)
+16. [The API](#the-api)
+17. [Testing and CI](#testing-and-ci)
+18. [Commit history](#commit-history)
+19. [Open items](#open-items)
 
 ## How the pieces fit
 
@@ -59,6 +60,7 @@ Not every box exists yet. This table shows what is implemented.
 | Fake rail | `rails/fake_rail.py` | Implemented for tests and the agent loop, with scripted receipts, traces, and freezes |
 | Rail errors | `contracts/errors.py` | `RailError`, shared by every rail |
 | Agent loop | `core/agent.py` | Implemented as `AgentLoop`, tested with the fake adapter, router, and rail |
+| HTTP API for the app | `api/main.py` | FastAPI over one `AgentLoop` with the fake router and rails and a demo student; described in `docs/api.md` |
 | Anchor, Council, Translator, real routers and rails | none yet | Interfaces only |
 
 ## The rules that shape the code
@@ -775,6 +777,30 @@ Thirteen entries have scenarios: T06, T07, T08, T10, T13, T22, X01, X06, X07, X0
 | X17 | A student who says they confirmed yesterday still gets a confirmation, and nothing moves | |
 | X24 | Negative and zero amounts rejected when the action is built, with nothing written | A very large amount passes the schema and is refused under R08 and R09 instead |
 
+## The API
+
+`api/main.py` serves Lifeline over HTTP for the Next.js app in lane C. `docs/api.md` describes every endpoint with real requests and responses, so lane C can build against it without asking. `make dev` starts it on port 8000.
+
+| Endpoint | Does |
+| --- | --- |
+| `POST /chat` | One student message through `AgentLoop.handle`; returns an `AgentReply` |
+| `POST /confirm` | The student's yes, by token; returns an `AgentReply` |
+| `GET /ledger/{user_id}` | That student's ledger entries |
+| `GET /ledger/{user_id}/verify` | The first broken sequence number of the whole chain, or null |
+| `POST /trace` | A `TraceResult` for one of the student's receipts |
+| `POST /precheck` | A `PrecheckResult` for an action at a provider |
+| `GET /health` | `{"status": "ok"}` |
+
+The app holds one `AgentLoop` with the real mandate engine and ledger, the fake router, and four fake rails named after the routes. The model is the real `ProviderModelAdapter`, which reads its keys from `.env`; only `/chat` calls it, and a missing key or an unreachable provider becomes a `503` with the reason. The demo student `student_001` comes from `fixtures/demo_user.yaml`, with a mandate valid from the moment the API starts for 365 days, balances, and a scripted trace for the first Wise receipt. Everything lives in memory.
+
+`/trace` and `/precheck` go through `AgentLoop.act`, which runs a read only tool without the model along the same path a model's tool call takes. The action passes the mandate engine and leaves `proposal`, `decision`, and `execution` in the ledger, so a button in the app leaves the same record as a question in chat. `act` accepts only `trace_transfer` and `precheck`, the two tier T0 tools, and raises for any other before writing anything. Nothing that moves money or changes the mandate can skip the model's proposal and the student's confirmation.
+
+A confirmation token appears only in `confirmation.confirmation_token` of a `/chat` response. The API clears it from every decision and from the action inside a confirmation. On `/confirm` it also empties the confirmation's own token, which appears only when a rail failed and the next route is offered under the token the app already holds. The ledger never held it. A test checks that the token is absent from `/confirm` responses and from `/ledger`, and that it appears exactly once in the `/chat` response.
+
+Requests are pydantic models, so a missing field or a wrong type is a `422`, and chat text must be 1 to 4,000 characters. The 4,000 limit guards against oversized requests to the model and is not a money rule. An unknown user is a `404` on every endpoint. A refusal by the mandate engine is not an HTTP error, because the student needs to read why: `/chat` and `/confirm` return it as `200` with `decision.allowed` false. CORS allows `http://localhost` and `http://127.0.0.1` on any port, for `GET` and `POST`, and no other origin.
+
+FastAPI 0.141.1, Starlette 1.6.0, uvicorn 0.52.4, and httpx 0.28.1 are pinned in `requirements.txt` under the ten day rule. uvicorn 0.53.0 came out on 14 September, inside the window, so the release before it is used. Starlette is pinned because FastAPI sets only a lower bound on it.
+
 ## Testing and CI
 
 Every change was written test first. The test was run and seen to fail before the code existed, then the code was written until it passed. A test that has never failed might be passing for the wrong reason, so the red run is part of the method, not a formality.
@@ -786,13 +812,14 @@ Every change was written test first. The test was run and seen to fail before th
 | `tests/test_schemas.py` | 23 | The optional freeze field on `AgentReply`, Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers including `get_quote`, the mandate id, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits and selected route |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
 | `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
-| `tests/test_agent.py` | 38 | The confirmation round trip and its ledger trail, mandate versions and a receipt that still resolves to v1, copies of versions, a restart that rebuilds added payees and the version history, re adding a payee as a no op at the proposal and at the confirmation, a payee id from a tool result or pasted text refused under R01, the freeze field on the reply, adding a payee and the cooling refusal that follows, freezing a Wise card and a Revolut card with the honest not supported reply, a freeze token refused for another card, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused by the engine under R01 with an `injection_suspected` entry and the same details allowed when typed, a receipt naming its rail and traced by a new loop, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
+| `tests/test_agent.py` | 44 | The confirmation round trip and its ledger trail, `act` running a read only tool through the engine and refusing every other tool, mandate versions and a receipt that still resolves to v1, copies of versions, a restart that rebuilds added payees and the version history, re adding a payee as a no op at the proposal and at the confirmation, a payee id from a tool result or pasted text refused under R01, the freeze field on the reply, adding a payee and the cooling refusal that follows, freezing a Wise card and a Revolut card with the honest not supported reply, a freeze token refused for another card, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused by the engine under R01 with an `injection_suspected` entry and the same details allowed when typed, a receipt naming its rail and traced by a new loop, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
 | `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
+| `tests/test_api.py` | 24 | Every endpoint: health, chat with the token only in its confirmation, languages on chat and confirm, the confirmation round trip with the token absent from `/confirm` and `/ledger`, a rail failure retried without repeating the token, the ledger filtered by student, verify intact and broken, trace found and not found, precheck, an unknown user on every endpoint, text limits, a missing model key, CORS, and the demo fixture |
 | `tests/test_harness.py` | 8 | A scenario that should pass passes, one that should fail fails with its reasons, one that raises fails, a missing scenario is not automated, the report's counts, commit, and time, text checks that add up across levels, every real scenario passing, and no orphan scenario files |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 199 | |
+| Total | 229 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -802,7 +829,7 @@ The adapter tests replace the two SDK entry points, `anthropic.Anthropic` and `d
 
 ### Continuous integration
 
-`.github/workflows/ci.yml` runs one job named `python` on every pull request and every push to `main`. It sets up Python 3.12, installs `requirements.txt`, runs `pytest`, then runs `make evidence` and uploads `evidence/report.md` as an artifact named `evidence-report`, with read only repository permissions. The upload runs even when an earlier step failed, so a failing report can still be read, and it fails if no report was written. The one warning in every run comes from the DashScope package announcing that its own Assistants module is deprecated, and it does not come from Lifeline code.
+`.github/workflows/ci.yml` runs one job named `python` on every pull request and every push to `main`. It sets up Python 3.12, installs `requirements.txt`, runs `pytest`, then runs `make evidence` and uploads `evidence/report.md` as an artifact named `evidence-report`, with read only repository permissions. The upload runs even when an earlier step failed, so a failing report can still be read, and it fails if no report was written. Two warnings appear in every run, and neither comes from Lifeline code. The DashScope package announces that its own Assistants module is deprecated, and Starlette's test client uses an alias that the installed anyio has deprecated.
 
 `.github/pull_request_template.md` asks every pull request for What this does, Lane, Tests, Facts, Safety, and a Checklist that repeats the project rules.
 
@@ -853,10 +880,12 @@ All times are local time.
 | `fe728b4` | 18 Sep 04:19 | Merge pull request #5 from sanyuktaphanse/lane-a/t2-tools |
 | `c957afd` | 18 Sep 15:29 | Mandate versions, ledger rebuild of payees, provenance for payees, structured freeze result |
 | `7b8b674` | 18 Sep 04:31 | Merge pull request #6 from sanyuktaphanse/lane-a/mandate-versions |
+| `ef74587` | 18 Sep 15:40 | Evaluation harness: suites run as scenarios, evidence report generated |
+| `b425719` | 18 Sep 04:44 | Merge pull request #7 from sanyuktaphanse/lane-a/evidence-harness |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
-From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them reached `main` through pull request 6, merged as `7b8b674`. The evaluation harness is on the branch `lane-a/evidence-harness`.
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them reached `main` through pull request 6, merged as `7b8b674`. The evaluation harness reached `main` through pull request 7, merged as `b425719`. The API is on the branch `lane-a/api`.
 
 ## Open items
 
@@ -895,3 +924,7 @@ From `97a6211` onward every change goes on its own branch and reaches `main` thr
 33. Reminders are written to the ledger but nothing delivers them when they fall due.
 34. Nothing offers to call the bank number on file when a student is under pressure, as attack X01 expects.
 35. A very large amount passes the schema, which has no upper bound, and is refused by the limits. Attack X24 expects rejection at schema validation.
+36. `/chat` has no `source` field, so everything the app sends is treated as the student's own typing. Text the student pastes, such as a landlord's message, needs to reach the loop marked `pasted_text`, or the provenance check and R01 cannot tell it apart. Attacks X02, X03, and X18 depend on it.
+37. The API serves one demo student from a fixture, with no sign in. Any caller that can reach it can act as that student, so it must only run on a developer's machine until authentication exists.
+38. The API keeps everything in memory, so a restart loses the ledger, the waiting confirmations, and every added payee.
+39. The scripted trace in the demo fixture is stamped with the time the API started, which can be earlier than the payment it traces.

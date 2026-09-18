@@ -1,0 +1,230 @@
+import json
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from api.main import DEMO_FIXTURE, create_app, demo_rails
+from contracts.schemas import Message, Role, ToolCall
+from core.fake_adapter import FakeModelAdapter
+from core.model_adapter import MissingApiKey
+from rails.fake_rail import FakeRail
+
+USER = "student_001"
+RENT = {"amount": "1200", "currency": "SGD", "corridor": "SG>BR", "payee_id": "landlord_sp", "purpose": "rent"}
+RENT_REQUEST = "Send 1,200 SGD rent to landlord_sp in Brazil"
+FIRST_KEY = "student_001:t1:propose_transfer:1"
+
+
+def _call(name: str, arguments: dict) -> Message:
+    return Message(
+        role=Role.ASSISTANT,
+        text="",
+        tool_calls=[ToolCall(id="toolu_01", name=name, arguments=arguments)],
+        provider="fake",
+        model="fake-model",
+    )
+
+
+def _client(responses=(), **overrides) -> TestClient:
+    return TestClient(create_app(adapter=FakeModelAdapter(list(responses)), **overrides))
+
+
+def _propose(client: TestClient) -> str:
+    reply = client.post("/chat", json={"user_id": USER, "text": RENT_REQUEST}).json()
+    return reply["confirmation"]["confirmation_token"]
+
+
+def test_health():
+    response = _client().get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_chat_returns_the_token_only_inside_the_confirmation_request():
+    client = _client([_call("propose_transfer", RENT)])
+
+    response = client.post("/chat", json={"user_id": USER, "text": RENT_REQUEST})
+
+    body = response.json()
+    token = body["confirmation"]["confirmation_token"]
+    assert response.status_code == 200
+    assert body["confirmation"]["warning_key"] == "warn.transfer.irreversible"
+    assert body["confirmation"]["selected_route"]["rail"] == "wise"
+    assert body["decision"]["confirmation_token"] is None
+    assert body["confirmation"]["action"]["confirmation_token"] is None
+    assert response.text.count(token) == 1
+    assert body["receipt"] is None
+
+
+def test_chat_answers_in_the_language_it_is_given():
+    client = _client(["O seu saldo é 2.300 SGD."])
+
+    body = client.post("/chat", json={"user_id": USER, "text": "Qual é o meu saldo?", "lang": "pt"}).json()
+
+    assert body["lang"] == "pt"
+    assert body["text"] == "O seu saldo é 2.300 SGD."
+
+
+def test_the_confirmation_round_trip_pays_once_and_the_token_never_reaches_the_ledger():
+    client = _client([_call("propose_transfer", RENT)])
+    token = _propose(client)
+
+    response = client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+    again = client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["receipt"]["rail"] == "wise"
+    assert body["receipt"]["idempotency_key"] == FIRST_KEY
+    assert body["decision"]["rule_ids"] == ["R11"]
+    assert token not in response.text
+    assert again.json()["receipt"] is None
+    assert "not found" in again.json()["text"]
+    ledger = client.get(f"/ledger/{USER}")
+    assert [entry["kind"] for entry in ledger.json()] == ["proposal", "decision", "confirmation", "execution", "receipt"]
+    assert token not in ledger.text
+
+
+def test_confirm_replies_in_the_language_it_is_given():
+    client = _client([_call("propose_transfer", RENT)])
+    token = _propose(client)
+
+    body = client.post("/confirm", json={"user_id": USER, "confirmation_token": token, "lang": "pt"}).json()
+
+    assert body["lang"] == "pt"
+    assert body["text"].startswith("Pronto")
+
+
+def test_a_rail_failure_offers_the_next_route_without_repeating_the_token():
+    rails = demo_rails()
+    rails["wise"] = FakeRail(name="wise", simulated=False, fail_once_keys={FIRST_KEY})
+    client = _client([_call("propose_transfer", RENT)], rails=rails)
+    token = _propose(client)
+
+    response = client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+    retry = client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+
+    assert response.json()["confirmation"]["selected_route"]["rail"] == "bank_wire"
+    assert response.json()["confirmation"]["confirmation_token"] == ""
+    assert token not in response.text
+    assert retry.json()["receipt"]["rail"] == "bank_wire"
+    assert token not in retry.text
+
+
+def test_ledger_lists_only_that_users_entries_and_verify_finds_no_break():
+    client = _client([_call("propose_transfer", RENT)])
+    _propose(client)
+
+    entries = client.get(f"/ledger/{USER}").json()
+    verify = client.get(f"/ledger/{USER}/verify")
+
+    assert [entry["seq"] for entry in entries] == [1, 2]
+    assert all(entry["payload"]["user_id"] == USER for entry in entries)
+    assert verify.status_code == 200
+    assert verify.json() == {"first_broken_seq": None}
+
+
+def test_verify_reports_the_first_broken_seq():
+    app = create_app(adapter=FakeModelAdapter([_call("propose_transfer", RENT)]))
+    client = TestClient(app)
+    _propose(client)
+    app.state.ledger._entries[0].payload["user_id"] = "someone_else"
+
+    assert client.get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": 1}
+
+
+def test_trace_returns_the_trace_of_a_receipt_this_student_holds():
+    client = _client([_call("propose_transfer", RENT)])
+    token = _propose(client)
+    receipt_id = client.post("/confirm", json={"user_id": USER, "confirmation_token": token}).json()["receipt"]["receipt_id"]
+
+    response = client.post("/trace", json={"user_id": USER, "receipt_id": receipt_id})
+
+    assert response.status_code == 200
+    assert response.json()["receipt_id"] == "fake-0001"
+    assert response.json()["status"] == "in_transit"
+    kinds = [entry["kind"] for entry in client.get(f"/ledger/{USER}").json()]
+    assert kinds[-3:] == ["proposal", "decision", "execution"]
+
+
+def test_trace_of_an_unknown_receipt_is_404():
+    response = _client().post("/trace", json={"user_id": USER, "receipt_id": "fake-0404"})
+
+    assert response.status_code == 404
+    assert "fake-0404" in response.json()["detail"]
+
+
+def test_precheck_returns_the_precheck_result():
+    client = _client()
+
+    response = client.post("/precheck", json={"user_id": USER, "action_kind": "enable_pix", "provider": "sim_pix"})
+
+    assert response.status_code == 200
+    assert response.json()["documents_likely"] == ["passport", "CPF number"]
+    assert [entry["kind"] for entry in client.get(f"/ledger/{USER}").json()] == ["proposal", "decision", "execution"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("post", "/chat", {"user_id": "nobody", "text": "hi"}),
+        ("post", "/confirm", {"user_id": "nobody", "confirmation_token": "x"}),
+        ("get", "/ledger/nobody", None),
+        ("get", "/ledger/nobody/verify", None),
+        ("post", "/trace", {"user_id": "nobody", "receipt_id": "fake-0001"}),
+        ("post", "/precheck", {"user_id": "nobody", "action_kind": "enable_pix", "provider": "sim_pix"}),
+    ],
+)
+def test_an_unknown_user_is_404_on_every_endpoint(method, path, body):
+    client = _client()
+
+    response = client.request(method.upper(), path, json=body)
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("text", ["", "x" * 4001])
+def test_chat_rejects_empty_or_oversized_text(text):
+    response = _client().post("/chat", json={"user_id": USER, "text": text})
+
+    assert response.status_code == 422
+
+
+def test_a_model_that_cannot_answer_is_a_503_with_the_reason():
+    class NoKeys(FakeModelAdapter):
+        def complete(self, messages, tools):
+            raise MissingApiKey("ANTHROPIC_API_KEY is not set. Add it to .env to use anthropic.")
+
+    client = TestClient(create_app(adapter=NoKeys([])))
+
+    response = client.post("/chat", json={"user_id": USER, "text": "hi"})
+
+    assert response.status_code == 503
+    assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("origin", "allowed"),
+    [("http://localhost:3000", True), ("http://127.0.0.1:3000", True), ("https://evil.example", False)],
+)
+def test_cors_is_open_to_localhost_only(origin, allowed):
+    response = _client().options(
+        "/chat",
+        headers={"Origin": origin, "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type"},
+    )
+
+    assert (response.headers.get("access-control-allow-origin") == origin) is allowed
+
+
+def test_the_demo_user_comes_from_the_fixture():
+    assert Path(DEMO_FIXTURE).name == "demo_user.yaml"
+    client = _client([_call("read_balance", {}), "You have 2,300 SGD and 150 BRL."])
+
+    client.post("/chat", json={"user_id": USER, "text": "What is my balance?"})
+
+    execution = client.get(f"/ledger/{USER}").json()[-1]
+    assert execution["payload"]["result"] == {"balances": {"SGD": "2300", "BRL": "150"}}
+    assert execution["payload"]["mandate_id"] == "mandate-student_001-v1"
+    assert json.dumps(execution).count("student_001") >= 1

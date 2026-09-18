@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, and then the evaluation harness that runs the suites as scenarios, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, and then the HTTP API for the app, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -19,11 +19,12 @@ Every Python excerpt below is copied exactly from the file it names. Read the fi
 11. The fake rail, `rails/fake_rail.py`
 12. The agent loop, `core/agent.py`
 13. The evaluation harness, `core/harness.py`
-14. The tests
-15. The suites and their scenarios
-16. The knowledge base, `rails/knowledge/`
-17. Configuration files
-18. Commands used to build and check the repo
+14. The API, `api/main.py`
+15. The tests
+16. The suites and their scenarios
+17. The knowledge base, `rails/knowledge/`
+18. Configuration files
+19. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -1664,6 +1665,8 @@ TOOL_ACTIONS = {
     "freeze_card": ActionType.FREEZE_CARD,
     "change_limit": ActionType.CHANGE_LIMIT,
 }
+# Tools an app may run directly, without the model: they only read, so they are tier T0.
+DIRECT_TOOLS = ("trace_transfer", "precheck")
 REQUIRED_ARGUMENTS = {
     "propose_transfer": ACTION_FIELDS,
     "get_quote": ("corridor", "amount"),
@@ -1672,7 +1675,7 @@ REQUIRED_ARGUMENTS = {
 }
 ```
 
-`ACTION_FIELDS` lists the tool arguments that become fields of an `Action`. `_tool` builds one tool definition in the shape the model adapter expects: a name, a description, and a JSON schema of the arguments. Every argument is typed as text, and pydantic converts text such as `"1200"` into a `Decimal` when the `Action` is built. `ACTION_ARGUMENTS` adds `instrument_id`, the one argument that becomes an `Action` field without being a transfer field. There are nine tools. The first eight are the ones the student uses, and `change_limit` exists so that a limit change becomes an action the mandate engine can refuse, instead of text the model makes up. `{name: TEXT for name in ACTION_FIELDS}` is a dictionary comprehension that gives each transfer field the text type. `TOOL_ACTIONS` maps each tool name to its action type, which is also how the tool's tier is found. `REQUIRED_ARGUMENTS` names the arguments a call cannot run without. A transfer needs all five fields, a quote needs a corridor and an amount, adding a payee needs the payee id, and freezing a card needs the card. The two new tools describe themselves to the model honestly: nothing changes until the student confirms, and a new payee waits out a cooling period.
+`ACTION_FIELDS` lists the tool arguments that become fields of an `Action`. `_tool` builds one tool definition in the shape the model adapter expects: a name, a description, and a JSON schema of the arguments. Every argument is typed as text, and pydantic converts text such as `"1200"` into a `Decimal` when the `Action` is built. `ACTION_ARGUMENTS` adds `instrument_id`, the one argument that becomes an `Action` field without being a transfer field. There are nine tools. The first eight are the ones the student uses, and `change_limit` exists so that a limit change becomes an action the mandate engine can refuse, instead of text the model makes up. `{name: TEXT for name in ACTION_FIELDS}` is a dictionary comprehension that gives each transfer field the text type. `TOOL_ACTIONS` maps each tool name to its action type, which is also how the tool's tier is found. `DIRECT_TOOLS` names the two tools an app may run without the model, through `act` below; both only read, so both are tier T0. `REQUIRED_ARGUMENTS` names the arguments a call cannot run without. A transfer needs all five fields, a quote needs a corridor and an amount, adding a payee needs the payee id, and freezing a card needs the card. The two new tools describe themselves to the model honestly: nothing changes until the student confirms, and a new payee waits out a cooling period.
 
 ```python
 TEXTS = {
@@ -1884,6 +1887,21 @@ class AgentLoop:
         version = self._versions.get(mandate_id)
         return None if version is None else version.model_copy(deep=True)
 
+    def act(
+        self, user_id: str, tool: str, arguments: dict[str, Any]
+    ) -> tuple[Decision | None, dict[str, Any]]:
+        if tool not in DIRECT_TOOLS:
+            raise ValueError(f"{tool} cannot run without the model; only {', '.join(DIRECT_TOOLS)} can.")
+        mandate = self._mandates[user_id]
+        turn = self._turns.get(user_id, 0) + 1
+        self._turns[user_id] = turn
+        trail = _Trail(user_id, turn, mandate_id=mandate.id)
+        call = ToolCall(id=f"direct_{turn}", name=tool, arguments=arguments)
+        outcome = self._run_tool(user_id, mandate, "en", trail, call, 1)
+        if isinstance(outcome, AgentReply):
+            raise RuntimeError(f"{tool} ended the turn, which a read only tool never does.")
+        return outcome
+
     def handle(
         self, user_id: str, message: Message, confirmation_token: str | None = None
     ) -> AgentReply:
@@ -1894,7 +1912,7 @@ class AgentLoop:
         return self._converse(user_id, mandate, lang, message)
 ```
 
-The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `handle` works out the language first. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy.
+The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `handle` works out the language first. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy. `act` runs one of the `DIRECT_TOOLS` for an app, such as a trace button, without asking the model. Any other tool raises `ValueError` before anything is written, so nothing that moves money or changes the mandate can skip the model's proposal and the student's confirmation. It takes the next turn number and starts a trail with the current mandate, just as a conversation turn does, then runs the call through `_run_tool`, the same path a model's tool call takes. The action therefore passes the mandate engine and leaves `proposal`, `decision`, and `execution` in the ledger. With no model answering, the entries carry no provider or model. It returns the decision and the result. A read only tool never ends a turn, so a finished `AgentReply` coming back would mean something is wrong, and it raises instead of returning it.
 
 ```python
     def _converse(self, user_id: str, mandate: Mandate, lang: str, message: Message) -> AgentReply:
@@ -2732,9 +2750,245 @@ if __name__ == "__main__":
 
 `_commit` asks git for the current commit, and adds that the working tree had uncommitted changes when `git status --porcelain` lists any, so a report made from edited files says so. If git fails, the report says the commit is unknown and why, instead of inventing one. `main` evaluates, writes `evidence/report.md`, prints a one line summary, and returns 1 when any scenario failed. `sys.exit(main())` turns that into the exit code, so `make evidence` and CI fail when a scenario fails. The block under `if __name__ == "__main__":` runs only when the file is started as a program, as `python -m core.harness` does, and not when a test imports it.
 
+## The API, `api/main.py`
+
+This file serves Lifeline over HTTP for the Next.js app. `docs/api.md` describes every endpoint with real requests and responses; this section explains the code. `api/__init__.py` is empty and only makes `api` a package.
+
+```python
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import yaml
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+from contracts.interfaces import ModelAdapter
+from contracts.schemas import (
+    AgentReply,
+    Decision,
+    LedgerEntry,
+    Mandate,
+    Message,
+    PrecheckResult,
+    Role,
+    TraceResult,
+)
+from core.agent import AgentLoop
+from core.ledger import HashChainLedger
+from core.mandate import DeterministicMandateEngine
+from core.model_adapter import ModelAdapterError, ProviderModelAdapter
+from rails.fake_rail import FakeRail
+from rails.fake_router import FakeRouter
+
+DEMO_FIXTURE = Path(__file__).resolve().parent.parent / "fixtures" / "demo_user.yaml"
+# Source: this module. The Next.js app runs on localhost; any port is allowed, no other host is.
+LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+# Source: this module. A guard against oversized requests to the model, not a money rule.
+MAX_TEXT_CHARS = 4000
+```
+
+The API imports the contracts, the agent loop, the ledger, the engine, the real model adapter, and the fakes. `DEMO_FIXTURE` is the demo student's file. `LOCAL_ORIGINS` is a regular expression for the origins CORS allows: `http://localhost` or `http://127.0.0.1`, with any port or none, and nothing else. `MAX_TEXT_CHARS` caps one chat message at 4,000 characters, and its comment says it guards against oversized requests to the model and is not a money rule.
+
+```python
+class ChatRequest(BaseModel):
+    user_id: str
+    text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+    lang: str | None = None
+
+
+class ConfirmRequest(BaseModel):
+    user_id: str
+    confirmation_token: str
+    lang: str | None = None
+
+
+class TraceRequest(BaseModel):
+    user_id: str
+    receipt_id: str
+
+
+class PrecheckRequest(BaseModel):
+    user_id: str
+    action_kind: str
+    provider: str
+
+
+class VerifyResult(BaseModel):
+    first_broken_seq: int | None
+
+
+class Health(BaseModel):
+    status: str
+```
+
+Each request body is a pydantic model, so FastAPI rejects a missing field, a wrong type, or chat text that is empty or too long with a `422` before any code runs. `lang` is optional on `/chat` and `/confirm`. `VerifyResult` wraps the first broken sequence number in an object, so an intact ledger answers `{"first_broken_seq": null}` rather than a bare `null`.
+
+```python
+def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, FakeRail]:
+    now = datetime.now(timezone.utc)
+    scripted = {
+        rail: {
+            trace["receipt_id"]: TraceResult.model_validate({"stage_entered_at": now, **trace})
+            for trace in rail_traces
+        }
+        for rail, rail_traces in (traces or {}).items()
+    }
+    return {
+        "wise": FakeRail(scripted.get("wise"), name="wise", simulated=False),
+        "bank_wire": FakeRail(scripted.get("bank_wire"), name="bank_wire", simulated=False),
+        "sim_pix": FakeRail(scripted.get("sim_pix"), name="sim_pix", simulated=True),
+        "revolut": FakeRail(scripted.get("revolut"), name="revolut", simulated=False),
+    }
+```
+
+`demo_rails` builds the same four fake rails as the harness, named after the routes they stand for, and gives each the traces the fixture scripts for it. A scripted trace has no time in the fixture, so `stage_entered_at` is set to the moment the API starts. A test passes its own rails, such as a Wise rail that fails once.
+
+```python
+def _load_fixture(path: Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def _demo_mandate(fixture: dict[str, Any]) -> Mandate:
+    now = datetime.now(timezone.utc)
+    return Mandate.model_validate(
+        {
+            "user_id": fixture["user_id"],
+            "valid_from": now,
+            "valid_until": now + timedelta(days=fixture["valid_days"]),
+            **fixture["mandate"],
+        }
+    )
+
+
+def _without_tokens
+```
+
+`_load_fixture` reads the YAML. `_demo_mandate` builds the demo mandate from it, valid from the moment the API starts for `valid_days` days, so the demo never runs on an expired mandate however long after it was written it starts. The fixture's own fields are laid over the dates, and `model_validate` checks them against the `Mandate` schema.
+
+```python
+def _without_tokens(reply: AgentReply, keep_confirmation_token: bool) -> AgentReply:
+    update: dict[str, Any] = {}
+    if reply.decision is not None:
+        update["decision"] = reply.decision.model_copy(update={"confirmation_token": None})
+    if reply.confirmation is not None:
+        confirmation = reply.confirmation.model_copy(
+            update={"action": reply.confirmation.action.model_copy(update={"confirmation_token": None})}
+        )
+        if not keep_confirmation_token:
+            confirmation = confirmation.model_copy(update={"confirmation_token": ""})
+        update["confirmation"] = confirmation
+    return reply.model_copy(update=update)
+```
+
+`_without_tokens` enforces the rule that a confirmation token appears only in `/chat`'s `ConfirmationRequest`. It clears the token from the decision, where the engine puts it, and from the action inside a confirmation. With `keep_confirmation_token` false, which is how `/confirm` calls it, it also replaces the confirmation's own token with an empty string. `/confirm` returns a confirmation only when a rail failed and the next route is offered under the same token, which the app already holds. The field is required by the contract, so it is emptied rather than removed.
+
+```python
+def create_app(
+    adapter: ModelAdapter | None = None,
+    fixture_path: Path = DEMO_FIXTURE,
+    rails: dict[str, FakeRail] | None = None,
+) -> FastAPI:
+    fixture = _load_fixture(fixture_path)
+    user_id = fixture["user_id"]
+    ledger = HashChainLedger()
+    loop = AgentLoop(
+        adapter=adapter if adapter is not None else ProviderModelAdapter(),
+        engine=DeterministicMandateEngine(),
+        ledger=ledger,
+        router=FakeRouter(),
+        rails=rails if rails is not None else demo_rails(fixture.get("traces")),
+        mandates={user_id: _demo_mandate(fixture)},
+        balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
+        pending={},
+    )
+    users = {user_id}
+
+    app = FastAPI(title="Lifeline API")
+    app.state.loop = loop
+    app.state.ledger = ledger
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=LOCAL_ORIGINS,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+    )
+
+    @app.exception_handler(ModelAdapterError)
+    async def model_unavailable(request: Request, error: ModelAdapterError) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(error)})
+
+    def known(user: str) -> str:
+        if user not in users:
+            raise HTTPException(status_code=404, detail=f"No user {user}.")
+        return user
+
+    def direct(user: str, tool: str, arguments: dict[str, Any], key: str) -> dict[str, Any]:
+        decision, result = loop.act(known(user), tool, arguments)
+        refused(decision)
+        if key not in result:
+            raise HTTPException(status_code=404, detail=result.get("error", f"No {key} result."))
+        return result[key]
+
+    def refused(decision: Decision | None) -> None:
+        if decision is not None and not decision.allowed:
+            raise HTTPException(status_code=403, detail={"rule_ids": decision.rule_ids, "reasons": decision.reasons})
+
+    @app.get("/health")
+    def health() -> Health:
+        return Health(status="ok")
+
+    @app.post("/chat")
+    def chat(request: ChatRequest) -> AgentReply:
+        fields = {"lang": request.lang} if request.lang else {}
+        message = Message(role=Role.USER, text=request.text, **fields)
+        return _without_tokens(loop.handle(known(request.user_id), message), keep_confirmation_token=True)
+
+    @app.post("/confirm")
+    def confirm(request: ConfirmRequest) -> AgentReply:
+        fields = {"lang": request.lang} if request.lang else {}
+        message = Message(role=Role.USER, text="", **fields)
+        reply = loop.handle(known(request.user_id), message, confirmation_token=request.confirmation_token)
+        return _without_tokens(reply, keep_confirmation_token=False)
+
+    @app.get("/ledger/{user}")
+    def entries(user: str) -> list[LedgerEntry]:
+        known(user)
+        return [entry for entry in ledger.entries() if entry.payload.get("user_id") == user]
+
+    @app.get("/ledger/{user}/verify")
+    def verify(user: str) -> VerifyResult:
+        known(user)
+        return VerifyResult(first_broken_seq=ledger.verify())
+
+    @app.post("/trace")
+    def trace(request: TraceRequest) -> TraceResult:
+        result = direct(request.user_id, "trace_transfer", {"receipt_id": request.receipt_id}, "trace")
+        return TraceResult.model_validate(result)
+
+    @app.post("/precheck")
+    def precheck(request: PrecheckRequest) -> PrecheckResult:
+        arguments = {"action_kind": request.action_kind, "provider": request.provider}
+        return PrecheckResult.model_validate(direct(request.user_id, "precheck", arguments, "precheck"))
+
+    return app
+```
+
+`create_app` builds one app with one agent loop over one in memory ledger. It takes the model adapter, the fixture, and the rails as arguments so the tests can pass a scripted model and chosen rails; `make dev` passes nothing and gets the real `ProviderModelAdapter`, which reads `.env`. The loop and the ledger are kept on `app.state`, which the tests use to reach the ledger. The CORS middleware answers browser preflight requests from local origins only.
+
+A `ModelAdapterError`, such as a missing API key, becomes a `503` with the reason, through `exception_handler`. `known` answers `404` for any user other than the demo student. `direct` runs a read only tool through `AgentLoop.act`, turns a refusal into a `403` with the rules through `refused`, and answers `404` when the result holds an error instead of the expected key, such as a receipt this student never received.
+
+Each endpoint is a function under a decorator that names its method and path, and its return type is the response model FastAPI checks and documents. `/chat` builds the student's `Message`, setting `lang` only when the request gives one so the loop's detection still works, and returns the reply with the confirmation token kept only in its `ConfirmationRequest`. `/confirm` passes the token to the loop with an empty message and returns the reply with every token removed. `/ledger/{user}` returns only the entries whose payload names that student. `/ledger/{user}/verify` checks the whole chain, because one broken entry anywhere breaks every hash after it. `/trace` and `/precheck` run through `direct` and return the contract's `TraceResult` and `PrecheckResult`.
+
+The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate without its dates, `valid_days`, the balances as strings, and scripted traces per rail. Its first line says it is a demo fixture and names itself as the source of its limits.
+
 ## The tests
 
-There are 199 tests. Each was written before the code it checks and was seen to fail first.
+There are 229 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -2989,6 +3243,24 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_agent.py` | `test_a_payee_id_seen_only_in_a_tool_result_is_refused_by_the_engine` | A payee id that appears only in a tool result is proposed as `tool_result`, refused under R01, and never added |
 | `test_agent.py` | `test_a_payee_id_seen_only_in_pasted_text_is_refused_by_the_engine` | The same in pasted text is refused under R01 with proposal, decision, and `injection_suspected` |
 | `test_agent.py` | `test_an_executed_freeze_fills_the_reply_freeze_field_without_the_token` | Runs for Wise and Revolut; the confirming reply carries the same `FreezeResult` as the ledger, without the token, and the proposing reply carries none |
+| `test_agent.py` | `test_act_runs_a_read_only_tool_through_the_engine_and_the_ledger_without_the_model` | A precheck run directly passes the engine, cites R02, writes proposal, decision, and execution, and never calls the model |
+| `test_agent.py` | `test_act_refuses_every_tool_that_is_not_read_only` | Runs for five tools; each raises before anything is written |
+| `test_api.py` | `test_health` | `/health` answers ok |
+| `test_api.py` | `test_chat_returns_the_token_only_inside_the_confirmation_request` | A rent request returns the confirmation with Wise selected, and the token appears exactly once in the body, never in the decision or the action |
+| `test_api.py` | `test_chat_answers_in_the_language_it_is_given` | `lang` pt gets a Portuguese reply |
+| `test_api.py` | `test_the_confirmation_round_trip_pays_once_and_the_token_never_reaches_the_ledger` | Confirming pays once over Wise citing R11, a second confirm is not found, the ledger shows the five entries, and the token appears in neither the confirm response nor the ledger |
+| `test_api.py` | `test_confirm_replies_in_the_language_it_is_given` | `lang` pt on `/confirm` gets a Portuguese receipt reply |
+| `test_api.py` | `test_a_rail_failure_offers_the_next_route_without_repeating_the_token` | A failing Wise rail offers the bank wire with an empty token, and the retry pays over the bank wire, with the token absent from both responses |
+| `test_api.py` | `test_ledger_lists_only_that_users_entries_and_verify_finds_no_break` | The ledger lists only the student's entries, and verify answers null |
+| `test_api.py` | `test_verify_reports_the_first_broken_seq` | An edited first entry is reported as sequence 1 |
+| `test_api.py` | `test_trace_returns_the_trace_of_a_receipt_this_student_holds` | A paid receipt is traced through the fixture's scripted trace, and the trace is written to the ledger |
+| `test_api.py` | `test_trace_of_an_unknown_receipt_is_404` | An unknown receipt is a 404 naming it |
+| `test_api.py` | `test_precheck_returns_the_precheck_result` | Enabling Pix returns its documents and is written to the ledger |
+| `test_api.py` | `test_an_unknown_user_is_404_on_every_endpoint` | Runs for all six user endpoints; each answers 404 |
+| `test_api.py` | `test_chat_rejects_empty_or_oversized_text` | Runs for empty text and 4,001 characters; both are 422 |
+| `test_api.py` | `test_a_model_that_cannot_answer_is_a_503_with_the_reason` | A missing key becomes a 503 naming the variable |
+| `test_api.py` | `test_cors_is_open_to_localhost_only` | Runs for localhost, 127.0.0.1, and another host; only the local origins are allowed |
+| `test_api.py` | `test_the_demo_user_comes_from_the_fixture` | The balances and the mandate id come from `fixtures/demo_user.yaml` |
 | `test_harness.py` | `test_a_scenario_that_should_pass_passes` | A scenario whose expectations match the loop's behaviour passes with no failures |
 | `test_harness.py` | `test_a_scenario_that_should_fail_fails_with_the_reason` | Wrong rule ids and a wrong ledger fail, and the failures name both what happened and what was expected |
 | `test_harness.py` | `test_a_scenario_that_raises_is_a_failure_not_a_crash` | A scenario that runs out of scripted answers is reported as failed with the error |
@@ -2999,7 +3271,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_harness.py` | `test_a_runs_text_checks_add_to_the_scenarios_instead_of_replacing_them` | A string the scenario requires is still checked in a run that adds its own |
 | `test_agent.py` | `test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it` | A rail named `wise_backend` behind the `wise` route names the receipt and the reply, and a new loop over the ledger still traces the receipt through the right rail |
 
-Fourteen parametrized tests add twenty six extra runs, which is how 173 test functions become 199 tests.
+Eighteen parametrized tests add thirty eight extra runs, which is how 191 test functions become 229 tests.
 
 ## The suites and their scenarios
 
@@ -3114,9 +3386,16 @@ pyyaml
 anthropic==1.3.0
 dashscope==1.27.3
 python-dotenv==1.2.3
+# Pinned to releases older than the 10 day freshness window as of 18 September 2026.
+# uvicorn 0.53.0 was released on 14 September, inside the window, so 0.52.4 is used.
+# starlette is pinned because fastapi only sets a lower bound on it; httpx is needed by the test client.
+fastapi==0.141.1
+starlette==1.6.0
+uvicorn==0.52.4
+httpx==0.28.1
 ```
 
-`pip install -r requirements.txt` installs each line. `==` pins an exact version. The three SDK packages are pinned so that a release published in the last ten days, before any problem in it could come to light, is never installed automatically.
+`pip install -r requirements.txt` installs each line. `==` pins an exact version. The three SDK packages are pinned so that a release published in the last ten days, before any problem in it could come to light, is never installed automatically. The API added four pins on 18 September. FastAPI 0.141.1 was the newest release older than ten days. uvicorn 0.53.0 came out on 14 September, inside the window, so 0.52.4 of 19 August is used. Starlette is pinned at 1.6.0 because FastAPI sets only a lower bound on it, so a fresh install would otherwise take whatever is newest. httpx 0.28.1 is what FastAPI's test client uses to make its requests.
 
 ### pytest.ini
 
@@ -3171,13 +3450,16 @@ GitHub Actions reads this file. `on` lists the events that start a run: every pu
 ```make
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python)
 
-.PHONY: evidence
+.PHONY: evidence dev
 
 evidence:
 	$(PYTHON) -m core.harness
+
+dev:
+	$(PYTHON) -m uvicorn --factory api.main:create_app --reload --port 8000
 ```
 
-`make evidence` runs the harness. `PYTHON ?=` sets a default that a caller can override: the project's `.venv` Python when it exists, and plain `python` otherwise, which is what CI has. `.PHONY` says `evidence` is a command, not a file for make to look for. The command line under the target must start with a tab.
+`make evidence` runs the harness. `PYTHON ?=` sets a default that a caller can override: the project's `.venv` Python when it exists, and plain `python` otherwise, which is what CI has. `make dev` starts the API on port 8000. `--factory` tells uvicorn that `api.main:create_app` is a function that builds the app, and `--reload` restarts it when a file changes. `.PHONY` says `evidence` and `dev` are commands, not files for make to look for. The command line under the target must start with a tab.
 
 ### .github/pull_request_template.md
 
@@ -3212,6 +3494,13 @@ make evidence
 ```
 
 `make evidence` runs every scenario and writes `evidence/report.md`, printing how many entries passed, failed, and are not automated.
+
+```bash
+make dev
+curl -s localhost:8000/health
+```
+
+`make dev` starts the API, and `curl` sends it a request from the terminal.
 
 ### Git
 
