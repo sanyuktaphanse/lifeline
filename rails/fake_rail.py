@@ -25,7 +25,11 @@ class FakeRail(Rail):
         self,
         traces: Mapping[str, TraceResult] | None = None,
         fail_once_keys: Iterable[str] = (FAIL_ONCE_KEY,),
+        name: str = "fake",
+        simulated: bool = True,
     ) -> None:
+        self._name = name
+        self._simulated = simulated
         self._traces = {
             receipt_id: trace.model_copy(deep=True)
             for receipt_id, trace in (traces or {}).items()
@@ -37,11 +41,11 @@ class FakeRail(Rail):
 
     @property
     def name(self) -> str:
-        return "fake"
+        return self._name
 
     @property
     def simulated(self) -> bool:
-        return True
+        return self._simulated
 
     def execute(
         self,
@@ -71,7 +75,7 @@ class FakeRail(Rail):
             stage_entered_at=now,
             mandate_ref=mandate_ref,
             idempotency_key=idempotency_key,
-            simulated=True,
+            simulated=self._simulated,
             executed_at=now,
         )
         self._receipts[idempotency_key] = receipt

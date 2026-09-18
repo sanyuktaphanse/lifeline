@@ -12,6 +12,10 @@ from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
 TRANSFER_WARNING_KEY = "warn.transfer.irreversible"
+# Source: the order of evaluation table in docs/technical-reference.md. An allowed
+# T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
+# confirmation rule R11, before and after the student confirms.
+ALLOWED_RULE = {Tier.T0: "R02", Tier.T1: "R02", Tier.T2: "R11"}
 
 
 def _confirm_secret() -> bytes:
@@ -119,12 +123,24 @@ class DeterministicMandateEngine(MandateEngine):
                     tier=tier,
                 )
 
-            if action.currency != mandate.currency:
-                rule_ids.append("R04")
+            missing = [
+                name
+                for name, value in (("amount", action.amount), ("currency", action.currency))
+                if value is None
+            ]
+            if missing:
+                reasons.append(
+                    "A transfer needs an amount and a currency, and this one has "
+                    + " and ".join(f"no {name}" for name in missing)
+                    + "."
+                )
+            elif action.currency != mandate.currency:
                 reasons.append(
                     f"Currency {action.currency} does not match the mandate currency "
                     f"{mandate.currency}."
                 )
+            if missing or action.currency != mandate.currency:
+                rule_ids.append("R04")
 
             if action.payee_id not in mandate.allowed_payees:
                 rule_ids.append("R06")
@@ -166,19 +182,19 @@ class DeterministicMandateEngine(MandateEngine):
                     "The confirmation token does not belong to this exact action."
                 )
 
-        needs_token = (
-            not rule_ids
-            and action.type is ActionType.TRANSFER
-            and action.confirmation_token is None
-        )
+        if rule_ids:
+            return Decision(allowed=False, reasons=reasons, rule_ids=rule_ids, tier=tier)
+
+        is_transfer = action.type is ActionType.TRANSFER
+        needs_token = is_transfer and action.confirmation_token is None
 
         return Decision(
-            allowed=not rule_ids,
-            reasons=reasons,
-            rule_ids=rule_ids,
+            allowed=True,
+            reasons=[],
+            rule_ids=[ALLOWED_RULE[tier]],
             tier=tier,
             requires_confirmation=needs_token,
-            warning_key=TRANSFER_WARNING_KEY if needs_token else None,
+            warning_key=TRANSFER_WARNING_KEY if is_transfer else None,
             confirmation_token=(
                 self.confirmation_token_for(action, mandate) if needs_token else None
             ),

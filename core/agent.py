@@ -2,7 +2,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from pydantic import ValidationError
@@ -25,6 +25,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
+from core.tiers import TIERS
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -37,6 +38,10 @@ CONFIRMATION_TTL = timedelta(
 MAX_MODEL_CALLS_PER_TURN = 8
 
 HAN = re.compile(r"[一-鿿]")
+IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
+NUMBER = re.compile(r"\d(?:[\d.,]*\d)?")
+DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
+DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
     {
@@ -111,6 +116,7 @@ TEXTS = {
     "en": {
         "confirm": "Please confirm: send {amount} {currency} to {payee} for {purpose} over {rail}, fee {fee} {currency} and exchange cost {spread} {currency}. Nothing moves until you confirm.",
         "sent": "Done. {amount} {currency} was sent over {rail}. Receipt {receipt_id}.",
+        "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
@@ -122,6 +128,7 @@ TEXTS = {
     "pt": {
         "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
         "sent": "Pronto. {amount} {currency} enviados via {rail}. Recibo {receipt_id}.",
+        "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
@@ -133,6 +140,7 @@ TEXTS = {
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
         "sent": "已完成。{amount} {currency} 已通过 {rail} 发出。回执 {receipt_id}。",
+        "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
@@ -142,6 +150,30 @@ TEXTS = {
         "too_many_steps": "我在完成之前停止了。请重新提问。",
     },
 }
+
+
+def _amounts_in(text: str) -> set[Decimal]:
+    amounts: set[Decimal] = set()
+    for number in NUMBER.findall(text):
+        readings = [number.replace(",", "")]
+        if DOTTED_THOUSANDS.fullmatch(number) or DECIMAL_COMMA.fullmatch(number):
+            readings.append(number.replace(".", "").replace(",", "."))
+        for reading in readings:
+            try:
+                amounts.add(Decimal(reading))
+            except InvalidOperation:
+                continue
+    return amounts
+
+
+@dataclass
+class _Details:
+    payee_ids: set[str] = field(default_factory=set)
+    amounts: set[Decimal] = field(default_factory=set)
+
+    def add(self, text: str) -> None:
+        self.payee_ids.update(token.casefold() for token in IDENTIFIER.findall(text))
+        self.amounts.update(_amounts_in(text))
 
 
 def detect_lang(text: str) -> str:
@@ -173,6 +205,8 @@ class _Trail:
     provider: str | None = None
     model: str | None = None
     seqs: list[int] = field(default_factory=list)
+    from_user: _Details = field(default_factory=_Details)
+    from_data: _Details = field(default_factory=_Details)
 
 
 def _now() -> datetime:
@@ -201,6 +235,17 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
         "fee": route.fee,
         "spread": route.spread_cost,
     }
+
+
+def _untrusted_fields(trail: _Trail, action: Action) -> list[str]:
+    untrusted = []
+    payee = (action.payee_id or "").casefold()
+    if payee and payee not in trail.from_user.payee_ids and payee in trail.from_data.payee_ids:
+        untrusted.append("payee_id")
+    amount = action.amount
+    if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
+        untrusted.append("amount")
+    return untrusted
 
 
 class AgentLoop:
@@ -241,6 +286,10 @@ class AgentLoop:
         turn = self._turns.get(user_id, 0) + 1
         self._turns[user_id] = turn
         trail = _Trail(user_id, turn)
+        if message.role is Role.USER and message.source is Source.USER_TURN:
+            trail.from_user.add(message.text)
+        else:
+            trail.from_data.add(message.text)
         messages = [Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)), message]
         decision: Decision | None = None
         calls = 0
@@ -256,10 +305,12 @@ class AgentLoop:
                 if isinstance(outcome, AgentReply):
                     return outcome
                 decision, result = outcome
+                text = json.dumps(result, ensure_ascii=False, default=str)
+                trail.from_data.add(text)
                 messages.append(
                     Message(
                         role=Role.TOOL,
-                        text=json.dumps(result, ensure_ascii=False, default=str),
+                        text=text,
                         source=Source.TOOL_RESULT,
                         tool_call_id=call.id,
                     )
@@ -293,6 +344,10 @@ class AgentLoop:
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
+        if action.type is ActionType.TRANSFER:
+            untrusted = _untrusted_fields(trail, action)
+            if untrusted:
+                return self._refuse_untrusted(lang, trail, call, action, untrusted)
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         self._write(trail, "decision", {"idempotency_key": key, "decision": _decision_json(decision)})
@@ -306,6 +361,33 @@ class AgentLoop:
         self._history.setdefault(user_id, []).append(action)
         self._write(trail, "execution", {"action": _action_json(action), "result": result})
         return decision, result
+
+    def _refuse_untrusted(
+        self, lang: str, trail: _Trail, call: ToolCall, action: Action, untrusted: list[str]
+    ) -> AgentReply:
+        decision = Decision(
+            allowed=False,
+            reasons=[
+                f"The {' and '.join(untrusted)} of this transfer appeared only in tool output "
+                "or pasted text, never in the student's own message. Payment details from "
+                "data are never instructions."
+            ],
+            rule_ids=["R01"],
+            tier=TIERS[action.type],
+        )
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "injection_suspected",
+                "rule_id": "R01",
+                "fields": untrusted,
+                "tool": call.name,
+                "arguments": call.arguments,
+                "action": _action_json(action),
+            },
+        )
+        return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
 
     def _run_now(
         self, user_id: str, action: Action, arguments: dict[str, Any], trail: _Trail
@@ -425,6 +507,19 @@ class AgentLoop:
             },
         )
         self._write(trail, "receipt", {"receipt": receipt.model_dump(mode="json")})
+        if route.simulated != receipt.simulated:
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "simulated_mismatch",
+                    "idempotency_key": action.idempotency_key,
+                    "rail": route.rail,
+                    "receipt_id": receipt.receipt_id,
+                    "route_simulated": route.simulated,
+                    "receipt_simulated": receipt.simulated,
+                },
+            )
         text = _text(
             lang,
             "sent",
@@ -433,6 +528,8 @@ class AgentLoop:
             rail=receipt.rail,
             receipt_id=receipt.receipt_id,
         )
+        if receipt.simulated:
+            text = f"{text} {_text(lang, 'simulated')}"
         return self._reply(trail, lang, text, decision=decision, receipt=receipt)
 
     def _offer_next_route(

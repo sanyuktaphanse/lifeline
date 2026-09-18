@@ -147,7 +147,7 @@ def test_transfer_within_mandate_is_allowed():
     decision = check(action, _mandate())
 
     assert decision.allowed is True
-    assert decision.rule_ids == []
+    assert decision.rule_ids == ["R11"]
 
 
 def test_replayed_idempotency_key_is_refused_on_its_own():
@@ -249,8 +249,18 @@ def test_read_balance_is_allowed_under_an_expired_mandate():
     decision = check(action, _expired_mandate())
 
     assert decision.allowed is True
-    assert decision.rule_ids == []
+    assert decision.rule_ids == ["R02"]
     assert decision.tier is Tier.T0
+
+
+def test_allowed_reminder_cites_r02_as_tier_one():
+    action = Action(type=ActionType.SET_REMINDER, idempotency_key="txn-0303-test")
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is True
+    assert decision.rule_ids == ["R02"]
+    assert decision.tier is Tier.T1
 
 
 def test_transfer_under_an_expired_mandate_is_refused():
@@ -306,6 +316,7 @@ def test_transfer_without_a_token_is_allowed_but_needs_confirmation():
     decision = check(action, _mandate())
 
     assert decision.allowed is True
+    assert decision.rule_ids == ["R11"]
     assert decision.requires_confirmation is True
     assert decision.tier is Tier.T2
     assert decision.warning_key == "warn.transfer.irreversible"
@@ -319,7 +330,10 @@ def test_transfer_carrying_its_own_token_needs_no_further_confirmation():
     decision = check(_executed_today("txn-0401-test", "1200", token), mandate)
 
     assert decision.allowed is True
+    assert decision.rule_ids == ["R11"]
     assert decision.requires_confirmation is False
+    assert decision.warning_key == "warn.transfer.irreversible"
+    assert decision.confirmation_token is None
 
 
 def test_token_issued_for_one_amount_is_refused_on_another():
@@ -350,4 +364,17 @@ def test_transfer_within_daily_limit_with_history_is_allowed():
     decision = check(action, _mandate(), history)
 
     assert decision.allowed is True
-    assert decision.rule_ids == []
+    assert decision.rule_ids == ["R11"]
+
+
+@pytest.mark.parametrize("missing", ["amount", "currency"])
+def test_transfer_without_an_amount_or_a_currency_is_refused_under_r04(missing):
+    action = Action(**_transfer_fields(idempotency_key="txn-0601-test", **{missing: None}))
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]
+    assert f"no {missing}" in decision.reasons[0]
+    assert decision.requires_confirmation is False
+    assert decision.confirmation_token is None
