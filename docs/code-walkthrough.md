@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, and then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, and then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -385,6 +385,7 @@ class AgentReply(BaseModel):
     confirmation: ConfirmationRequest | None = None
     decision: Decision | None = None
     receipt: Receipt | None = None
+    freeze: FreezeResult | None = None
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
@@ -392,7 +393,7 @@ class AgentReply(BaseModel):
 
 `ConfirmationRequest` is what the student sees before a transfer goes ahead: the `Action` being approved, the token the mandate engine issued for it, the warning key, and the routes with their fees. `selected_route` is the one route the agent chose from them, while `routes` keeps the full list so the student can compare. `Field(default=300, gt=0)` gives `expires_in_seconds` a default of 300 and rejects zero or any negative number.
 
-`AgentReply` is everything one agent turn sends to the frontend. Its optional parts default to `None`, so a simple answer needs only `text`, `lang`, and `ledger_seqs`. `list[Annotated[int, Field(ge=1)]]` applies the limit to each item, so `[1, 0]` fails on the second item alone, and `ledger_seqs` follows the same rule as `LedgerEntry.seq`, which also starts at 1. Both classes come after `Message` because every model they refer to is defined above them.
+`AgentReply` is everything one agent turn sends to the frontend. Its optional parts default to `None`, so a simple answer needs only `text`, `lang`, and `ledger_seqs`. `list[Annotated[int, Field(ge=1)]]` applies the limit to each item, so `[1, 0]` fails on the second item alone, and `ledger_seqs` follows the same rule as `LedgerEntry.seq`, which also starts at 1. Both classes come after `Message` because every model they refer to is defined above them. `freeze` holds the `FreezeResult` when the turn executed a freeze, so the frontend can read the status and the issuer's deep link as data instead of from the reply text. It stays `None` on every other reply, the one that asks to confirm a freeze included.
 
 ## The tier table, `core/tiers.py`
 
@@ -559,9 +560,13 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
         if action.type is ActionType.ADD_PAYEE and not action.payee_id:
             rule_ids.append("R04")
             reasons.append("Adding a payee needs a payee id, and this one has none.")
+
+        if action.type is ActionType.FREEZE_CARD and not action.instrument_id:
+            rule_ids.append("R04")
+            reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
 ```
 
-From here on, failures are collected instead of returned. R02 refuses tier T3, because a mandate cannot authorise changing itself. R03 checks the validity window using a chained comparison, `a <= b <= c`, which Python reads as `a <= b and b <= c`. Tier T0 is exempt, so an expired mandate never stops the student from reading their balance. R04 also covers adding a payee: `not action.payee_id` is true for both `None` and an empty string, so a request to add nobody is refused.
+From here on, failures are collected instead of returned. R02 refuses tier T3, because a mandate cannot authorise changing itself. R03 checks the validity window using a chained comparison, `a <= b <= c`, which Python reads as `a <= b and b <= c`. Tier T0 is exempt, so an expired mandate never stops the student from reading their balance. R04 also covers adding a payee: `not action.payee_id` is true for both `None` and an empty string, so a request to add nobody is refused. The same check refuses a request to freeze a card that names no card.
 
 ```python
         if action.type is ActionType.TRANSFER:
@@ -1570,6 +1575,7 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 NUMBER = re.compile(r"\d(?:[\d.,]*\d)?")
 DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
+MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
     {
@@ -1588,7 +1594,7 @@ SYSTEM_PROMPT = (
 )
 ```
 
-The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions.
+The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions. `MANDATE_VERSION` splits a mandate id such as `mandate-student_001-v1` into the part up to `-v` and the version number, so the next version can be named.
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
@@ -1683,6 +1689,7 @@ TEXTS = {
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
+        "payee_exists": "{payee} is already a payee, so nothing changed.",
         "frozen": "Done. Card {instrument} is frozen.",
         "freeze_not_supported": "Lifeline could not freeze card {instrument} directly, because the issuer does not allow it. Freeze it now in the issuer's app: {deep_link}",
         "freeze_failed": "Lifeline could not freeze card {instrument}: {reason} Freeze it now in the issuer's app.",
@@ -1701,6 +1708,7 @@ TEXTS = {
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
+        "payee_exists": "{payee} já é um destinatário, então nada mudou.",
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
         "freeze_not_supported": "O Lifeline não conseguiu bloquear o cartão {instrument} diretamente, porque o emissor não permite. Bloqueie agora no app do emissor: {deep_link}",
         "freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}: {reason} Bloqueie agora no app do emissor.",
@@ -1719,6 +1727,7 @@ TEXTS = {
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
+        "payee_exists": "{payee} 已经是收款人，因此没有任何更改。",
         "frozen": "已完成。卡片 {instrument} 已冻结。",
         "freeze_not_supported": "Lifeline 无法直接冻结卡片 {instrument}，因为发卡机构不允许。请立即在发卡机构的应用中冻结：{deep_link}",
         "freeze_failed": "Lifeline 无法冻结卡片 {instrument}：{reason} 请立即在发卡机构的应用中冻结。",
@@ -1726,7 +1735,7 @@ TEXTS = {
 }
 ```
 
-`TEXTS` holds every fixed reply in English, Portuguese, and Chinese. The loop writes these itself instead of asking the model, because a refusal, a confirmation, or a receipt must say exactly what happened. The words in braces are filled in by `format`. Replies the model writes, such as an answer about a balance, come from the model in the language the system prompt names. The English refusal also lists the engine's reasons, which are written in English, while the other two languages give the rule ids. `simulated` is added after the `sent` reply whenever the receipt is simulated, so the student is never told money moved when it did not. The six newer replies confirm and report adding a payee and freezing a card. `freeze_not_supported` says plainly that Lifeline could not freeze the card itself and gives the issuer's link, because a student with a lost card must not believe it is frozen when it is not.
+`TEXTS` holds every fixed reply in English, Portuguese, and Chinese. The loop writes these itself instead of asking the model, because a refusal, a confirmation, or a receipt must say exactly what happened. The words in braces are filled in by `format`. Replies the model writes, such as an answer about a balance, come from the model in the language the system prompt names. The English refusal also lists the engine's reasons, which are written in English, while the other two languages give the rule ids. `simulated` is added after the `sent` reply whenever the receipt is simulated, so the student is never told money moved when it did not. The six newer replies confirm and report adding a payee and freezing a card. `freeze_not_supported` says plainly that Lifeline could not freeze the card itself and gives the issuer's link, because a student with a lost card must not believe it is frozen when it is not. `payee_exists` answers a request to add a payee who is already allowed, and says that nothing changed.
 
 ```python
 def _amounts_in(text: str) -> set[Decimal]:
@@ -1789,9 +1798,17 @@ class _Trail:
     turn: int
     provider: str | None = None
     model: str | None = None
+    mandate_id: str | None = None
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+
+
+def _next_version(mandate_id: str) -> str:
+    match = MANDATE_VERSION.fullmatch(mandate_id)
+    if match is None:
+        return f"{mandate_id}-v2"
+    return f"{match['base']}{int(match['number']) + 1}"
 
 
 def _now() -> datetime:
@@ -1833,7 +1850,7 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 ```
 
-`detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. Its name starts with an underscore because nothing outside this module uses it. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine.
+`detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. Its name starts with an underscore because nothing outside this module uses it. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine.
 
 ```python
 class AgentLoop:
@@ -1859,7 +1876,12 @@ class AgentLoop:
         self._history: dict[str, list[Action]] = {}
         self._turns: dict[str, int] = {}
         self._receipt_rails: dict[str, dict[str, str]] = {}
+        self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
         self._rebuild_from_ledger()
+
+    def mandate_version(self, mandate_id: str) -> Mandate | None:
+        version = self._versions.get(mandate_id)
+        return None if version is None else version.model_copy(deep=True)
 
     def handle(
         self, user_id: str, message: Message, confirmation_token: str | None = None
@@ -1871,13 +1893,13 @@ class AgentLoop:
         return self._converse(user_id, mandate, lang, message)
 ```
 
-The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `handle` works out the language first. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn.
+The constructor keeps every collaborator it is given. `pending` is passed in rather than made here, so the caller, and a test, can see the waiting confirmations. Three dictionaries are kept per user: the executed history the mandate engine needs, the last turn number, and the rail that issued each receipt. They are filled from the ledger at once, so a new loop over an existing ledger carries on where the old one stopped. `handle` works out the language first. `model_fields_set` is the set of fields the caller passed when the `Message` was made, so a message whose `lang` is only the default English is detected instead of trusted. A call with a token is a confirmation, and any other call is a conversation turn. `_versions` holds every version of every mandate by id, starting with the versions the loop was given, and is filled before the ledger is read, because rebuilding adds versions to it. `mandate_version` returns a deep copy of the version with that id, or `None`, so a caller can look up exactly what a receipt's `mandate_ref` authorised without being able to change the loop's copy.
 
 ```python
     def _converse(self, user_id: str, mandate: Mandate, lang: str, message: Message) -> AgentReply:
         turn = self._turns.get(user_id, 0) + 1
         self._turns[user_id] = turn
-        trail = _Trail(user_id, turn)
+        trail = _Trail(user_id, turn, mandate_id=mandate.id)
         if message.role is Role.USER and message.source is Source.USER_TURN:
             trail.from_user.add(message.text, Source.USER_TURN)
         else:
@@ -1911,7 +1933,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
         return self._reply(trail, lang, _text(lang, "too_many_steps"), decision=decision)
 ```
 
-A conversation turn takes the next turn number and starts a trail. The student's message is read into `from_user` when it is the student's own typing, and into `from_data`, under its own source, when it is anything else. A message that claims to be the student's typing without the `user` role is treated as pasted text, so nothing reaches `from_user` by accident. The model sees the system prompt, the student's message, and the tools. The loop then asks the model at most `MAX_MODEL_CALLS_PER_TURN` times. `for _ in range(...)` repeats a block a fixed number of times, and `_` says the counter itself is not needed. An answer with no tool calls ends the turn with the model's text. Otherwise the answer joins the conversation and each tool call runs in order. `calls` counts every tool call in the turn and becomes the last part of the idempotency key. A call can end the turn early by returning a finished reply, which is how transfers, refusals of transfers, and tier T3 requests stop the loop, and `isinstance` checks which kind of result came back. Every other result goes back to the model as a `Message` with role `tool`, source `tool_result`, and the id of the call it answers, which is the only form in which tool output ever reaches the model. `json.dumps` with `default=str` writes values such as amounts as text. The same text is read into `from_data`, so a payee or an amount that first appears in a tool result is known to have come from data.
+A conversation turn takes the next turn number and starts a trail. The student's message is read into `from_user` when it is the student's own typing, and into `from_data`, under its own source, when it is anything else. A message that claims to be the student's typing without the `user` role is treated as pasted text, so nothing reaches `from_user` by accident. The model sees the system prompt, the student's message, and the tools. The loop then asks the model at most `MAX_MODEL_CALLS_PER_TURN` times. `for _ in range(...)` repeats a block a fixed number of times, and `_` says the counter itself is not needed. An answer with no tool calls ends the turn with the model's text. Otherwise the answer joins the conversation and each tool call runs in order. `calls` counts every tool call in the turn and becomes the last part of the idempotency key. A call can end the turn early by returning a finished reply, which is how transfers, refusals of transfers, and tier T3 requests stop the loop, and `isinstance` checks which kind of result came back. Every other result goes back to the model as a `Message` with role `tool`, source `tool_result`, and the id of the call it answers, which is the only form in which tool output ever reaches the model. `json.dumps` with `default=str` writes values such as amounts as text. The same text is read into `from_data`, so a payee or an amount that first appears in a tool result is known to have come from data. The trail starts with the id of the student's current mandate, so every entry of the turn records the version it was checked against.
 
 ```python
     def _run_tool(
@@ -1941,7 +1963,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        untrusted = _untrusted_fields(trail, action) if action.type is ActionType.TRANSFER else {}
+        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE)
+        untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
@@ -1970,7 +1993,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return decision, result
 ```
 
-`_run_tool` turns one tool call into an `Action` and puts it through the mandate engine before anything runs. An unknown tool or a missing argument goes back to the model as an error and creates no action. The idempotency key joins the user, the turn, the tool, and the call number, as in `student_001:t1:propose_transfer:1`, so it differs in every turn and is never supplied by the model. The `Action` starts with source `user_turn`, because a tool call is the model acting on the student's own request, and `requested_at` is now. `**{...}` passes only the action fields the call actually gave. When pydantic rejects an argument, such as a negative amount, the error names the fields and nothing is written. For a transfer, `_untrusted_fields` then looks for a payee or an amount the student never typed. If it finds one, `model_copy` makes a copy of the action with its source changed to where that detail first appeared, `tool_result` or `pasted_text`, the payee's source when both are untrusted. `next(iter(...))` takes the first value of a dictionary, and dictionaries keep the order their keys were added. The loop does not refuse anything itself. The proposal is written, the engine checks the action against the mandate and the history, and the decision is written. Three paths follow. A tier T3 decision ends the turn with the settings reply, so a T3 action never reaches a tool. Every T2 action, a transfer, a new payee, or a freeze, goes to `_propose`. Anything else that was refused goes back to the model with its rule ids and reasons. An allowed action runs at once, joins the history, and is written as an execution with its result.
+`_run_tool` turns one tool call into an `Action` and puts it through the mandate engine before anything runs. An unknown tool or a missing argument goes back to the model as an error and creates no action. The idempotency key joins the user, the turn, the tool, and the call number, as in `student_001:t1:propose_transfer:1`, so it differs in every turn and is never supplied by the model. The `Action` starts with source `user_turn`, because a tool call is the model acting on the student's own request, and `requested_at` is now. `**{...}` passes only the action fields the call actually gave. When pydantic rejects an argument, such as a negative amount, the error names the fields and nothing is written. For a transfer or a new payee, `_untrusted_fields` then looks for a payee or an amount the student never typed; a new payee has no amount, so only its payee id can be untrusted. If it finds one, `model_copy` makes a copy of the action with its source changed to where that detail first appeared, `tool_result` or `pasted_text`, the payee's source when both are untrusted. `next(iter(...))` takes the first value of a dictionary, and dictionaries keep the order their keys were added. The loop does not refuse anything itself. The proposal is written, the engine checks the action against the mandate and the history, and the decision is written. Three paths follow. A tier T3 decision ends the turn with the settings reply, so a T3 action never reaches a tool. Every T2 action, a transfer, a new payee, or a freeze, goes to `_propose`. Anything else that was refused goes back to the model with its rule ids and reasons. An allowed action runs at once, joins the history, and is written as an execution with its result.
 
 When the source was changed, the engine refuses the action under R01, exactly as it refuses any action from data, and after the decision the loop writes an `injection_suspected` entry naming the key, each untrusted field with its source, and the tool call. The loop proposes and the engine decides. Keeping every refusal in the engine means every refusal in the ledger carries a rule from the one place that makes them. `injection_suspected` is its own entry kind, not a `note`, so security events can be counted without reminders mixed in. This stops a payment to a payee who is already on the mandate, which would otherwise have passed every other rule and reached a confirmation.
 
@@ -2047,6 +2070,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
             pending.routes, pending.selected_route = routes, selected
             text = _text(lang, "confirm", **_route_values(action, selected))
         elif action.type is ActionType.ADD_PAYEE:
+            if action.payee_id in self._mandates[user_id].allowed_payees:
+                return self._reply(trail, lang, _text(lang, "payee_exists", payee=action.payee_id), decision=decision)
             pending.display_name = str(arguments.get("display_name") or action.payee_id)
             hours = self._mandates[user_id].cooling_hours
             text = _text(lang, "confirm_payee", payee=action.payee_id, display_name=pending.display_name, hours=hours)
@@ -2063,7 +2088,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
         return self._reply(trail, lang, text, decision=decision, confirmation=confirmation)
 ```
 
-`_propose` handles every T2 action after its decision. Anything the engine did not allow, or did not ask to confirm, ends the turn with the refusal and nothing else. `not token` is true for `None` and for an empty string. The waiting confirmation is built first, with what every T2 action shares. A transfer then gets its routes: the router quotes every route and `_choose` picks one, and the confirm reply names the rail, fee, and spread. Adding a payee keeps the display name the model passed, or the payee id when there is none, and the reply names the cooling period from the student's mandate. A freeze names the card. The waiting confirmation is stored under the token, and the reply carries a `ConfirmationRequest`; for a payee or a freeze its `routes` is empty and `selected_route` is `None`. Nothing executes here, and the ledger holds only the proposal and the decision.
+`_propose` handles every T2 action after its decision. Anything the engine did not allow, or did not ask to confirm, ends the turn with the refusal and nothing else. `not token` is true for `None` and for an empty string. The waiting confirmation is built first, with what every T2 action shares. A transfer then gets its routes: the router quotes every route and `_choose` picks one, and the confirm reply names the rail, fee, and spread. Adding a payee keeps the display name the model passed, or the payee id when there is none, and the reply names the cooling period from the student's mandate. A freeze names the card. The waiting confirmation is stored under the token, and the reply carries a `ConfirmationRequest`; for a payee or a freeze its `routes` is empty and `selected_route` is `None`. Nothing executes here, and the ledger holds only the proposal and the decision. Before any of that, a request to add a payee who is already on the student's current mandate ends with the `payee_exists` reply: nothing is stored, nothing waits for confirmation, and the payee's addition time is untouched.
 
 ```python
     def _confirm(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
@@ -2074,7 +2099,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
             del self._pending[token]
             minutes = int(CONFIRMATION_TTL.total_seconds() // 60)
             return AgentReply(text=_text(lang, "expired", minutes=minutes), lang=lang, ledger_seqs=[])
-        trail = _Trail(user_id, pending.turn, pending.provider, pending.model)
+        trail = _Trail(user_id, pending.turn, pending.provider, pending.model, mandate.id)
         action = pending.action.model_copy(update={"confirmation_token": token})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         if not decision.allowed or decision.requires_confirmation:
@@ -2138,7 +2163,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
         return self._reply(trail, lang, text, decision=decision, receipt=receipt)
 ```
 
-`_confirm` is the second half of a transfer. A token that is not waiting, or that belongs to another student, is refused and nothing is written. A token older than `CONFIRMATION_TTL` is removed and refused. `total_seconds() // 60` turns the limit into whole minutes for the reply, because `//` divides and drops the remainder. Otherwise the trail continues the turn that proposed the transfer, with its provider and model. The action is rebuilt exactly as it was proposed, with only the token added, and the engine checks it again. This second check is what turns the token into permission: R11 confirms the token belongs to this exact action, and the engine now reports it allowed without asking for another confirmation. If the check fails, the waiting confirmation is removed and the refusal is written as a decision. A payee or a freeze then goes to `_carry_out`. For a transfer, `assert` states that the pending confirmation holds its route; an `assert` raises an error if its condition is ever false, so a broken assumption fails loudly instead of paying over no route. The loop writes the confirmation, then calls the rail named by the selected route with that route, the mandate's `id` as `mandate_ref`, the action's idempotency key, and the token. A `RailError` goes to `_offer_next_route`. When the rail returns a receipt, the waiting confirmation is removed, the action joins the history, the key of the rail that paid is remembered for tracing, and the execution and the receipt are written, in that order. The receipt entry carries that key as `rail` beside the receipt, because the receipt names the rail by its own name, which need not match its key in `rails`. The receipt's `simulated` flag is the rail's truth, because only the rail that executed knows whether money moved. When it differs from the route's flag, which is what the router expected, a `note` whose `kind` is `simulated_mismatch` records both flags, the key, the rail, and the receipt id. Whenever the receipt is simulated, the reply adds the `simulated` text in the student's language.
+`_confirm` is the second half of a transfer. A token that is not waiting, or that belongs to another student, is refused and nothing is written. A token older than `CONFIRMATION_TTL` is removed and refused. `total_seconds() // 60` turns the limit into whole minutes for the reply, because `//` divides and drops the remainder. Otherwise the trail continues the turn that proposed the transfer, with its provider and model. The action is rebuilt exactly as it was proposed, with only the token added, and the engine checks it again. This second check is what turns the token into permission: R11 confirms the token belongs to this exact action, and the engine now reports it allowed without asking for another confirmation. If the check fails, the waiting confirmation is removed and the refusal is written as a decision. A payee or a freeze then goes to `_carry_out`. For a transfer, `assert` states that the pending confirmation holds its route; an `assert` raises an error if its condition is ever false, so a broken assumption fails loudly instead of paying over no route. The loop writes the confirmation, then calls the rail named by the selected route with that route, the mandate's `id` as `mandate_ref`, the action's idempotency key, and the token. A `RailError` goes to `_offer_next_route`. When the rail returns a receipt, the waiting confirmation is removed, the action joins the history, the key of the rail that paid is remembered for tracing, and the execution and the receipt are written, in that order. The receipt entry carries that key as `rail` beside the receipt, because the receipt names the rail by its own name, which need not match its key in `rails`. The receipt's `simulated` flag is the rail's truth, because only the rail that executed knows whether money moved. When it differs from the route's flag, which is what the router expected, a `note` whose `kind` is `simulated_mismatch` records both flags, the key, the rail, and the receipt id. Whenever the receipt is simulated, the reply adds the `simulated` text in the student's language. The trail carries the id of the mandate the confirmation is checked against, which is the version that authorises the payment and the one the receipt names.
 
 ```python
     def _carry_out(
@@ -2159,24 +2184,22 @@ When the source was changed, the engine refuses the action under R01, exactly as
             {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)},
         )
         self._history.setdefault(user_id, []).append(action)
+        freeze: FreezeResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
         else:
-            text = self._freeze(lang, trail, action)
-        return self._reply(trail, lang, text, decision=decision)
+            text, freeze = self._freeze(lang, trail, action)
+        return self._reply(trail, lang, text, decision=decision, freeze=freeze)
 
     def _add_payee(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
     ) -> str:
         payee = action.payee_id or ""
+        if payee in mandate.allowed_payees:
+            return _text(lang, "payee_exists", payee=payee)
         added_at = _now()
         allowed_from = added_at + timedelta(hours=mandate.cooling_hours)
-        self._mandates[user_id] = mandate.model_copy(
-            update={
-                "allowed_payees": mandate.allowed_payees | {payee},
-                "payee_added_at": {**mandate.payee_added_at, payee: added_at},
-            }
-        )
+        version = self._new_version(user_id, payee, added_at)
         self._write(trail, "execution", {"action": _action_json(action), "result": {"payee_added": payee}})
         self._write(
             trail,
@@ -2188,6 +2211,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
                 "display_name": name,
                 "added_at": added_at.isoformat(),
                 "allowed_from": allowed_from.isoformat(),
+                "new_mandate_id": version.id,
             },
         )
         return _text(
@@ -2198,7 +2222,22 @@ When the source was changed, the engine refuses the action under R01, exactly as
             allowed_from=allowed_from.isoformat(timespec="seconds"),
         )
 
-    def _freeze(self, lang: str, trail: _Trail, action: Action) -> str:
+    def _new_version(
+        self, user_id: str, payee: str, added_at: datetime, version_id: str | None = None
+    ) -> Mandate:
+        current = self._mandates[user_id]
+        version = current.model_copy(
+            update={
+                "id": version_id or _next_version(current.id),
+                "allowed_payees": current.allowed_payees | {payee},
+                "payee_added_at": {**current.payee_added_at, payee: added_at},
+            }
+        )
+        self._versions[version.id] = version
+        self._mandates[user_id] = version
+        return version
+
+    def _freeze(self, lang: str, trail: _Trail, action: Action) -> tuple[str, FreezeResult]:
         instrument = action.instrument_id or ""
         issuer = instrument.partition(":")[0]
         rail = self._rails.get(issuer)
@@ -2214,13 +2253,13 @@ When the source was changed, the engine refuses the action under R01, exactly as
             {"action": _action_json(action), "result": {"freeze": result.model_dump(mode="json")}},
         )
         if result.status is FreezeStatus.DONE:
-            return _text(lang, "frozen", instrument=instrument)
+            return _text(lang, "frozen", instrument=instrument), result
         if result.status is FreezeStatus.NOT_SUPPORTED:
-            return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link)
-        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason)
+            return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
+        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
 ```
 
-`_carry_out` finishes a confirmed payee or freeze. The waiting confirmation is removed first, so the same token cannot be used twice, the confirmation is written with the engine's decision, and the action joins the history. `_add_payee` adds the payee to the student's mandate and records the time as `payee_added_at`, which is what R14 reads. `model_copy(update=...)` builds a new mandate with the changed fields rather than editing the old one, and `|` joins two sets. The new mandate replaces the old one in `self._mandates`, so the next turn is checked against it. The execution entry records the action, and a `note` of kind `payee_added` records the payee, the display name, when it was added, and when it can first receive money. The reply tells the student that time. `_freeze` finds the rail by the issuer, the part of the card id before the colon, so `wise:card_01` goes to the rail stored under `wise`. With no such rail the result is a `failed` `FreezeResult` with a reason, not an error, because a freeze that cannot happen is something the student must be told. The whole `FreezeResult` is written in the execution entry, so `not_supported` and its deep link are kept in the ledger. The reply depends on the status: `done` says the card is frozen, `not_supported` says Lifeline could not do it directly and gives the issuer's link, and `failed` gives the reason and tells the student to use the issuer's app.
+`_carry_out` finishes a confirmed payee or freeze. The waiting confirmation is removed first, so the same token cannot be used twice, the confirmation is written with the engine's decision, and the action joins the history. `_add_payee` adds the payee to the student's mandate and records the time as `payee_added_at`, which is what R14 reads. `model_copy(update=...)` builds a new mandate with the changed fields rather than editing the old one, and `|` joins two sets. The new mandate replaces the old one in `self._mandates`, so the next turn is checked against it. The execution entry records the action, and a `note` of kind `payee_added` records the payee, the display name, when it was added, and when it can first receive money. The reply tells the student that time. `_freeze` finds the rail by the issuer, the part of the card id before the colon, so `wise:card_01` goes to the rail stored under `wise`. With no such rail the result is a `failed` `FreezeResult` with a reason, not an error, because a freeze that cannot happen is something the student must be told. The whole `FreezeResult` is written in the execution entry, so `not_supported` and its deep link are kept in the ledger. The reply depends on the status: `done` says the card is frozen, `not_supported` says Lifeline could not do it directly and gives the issuer's link, and `failed` gives the reason and tells the student to use the issuer's app. `_add_payee` first checks whether the payee became allowed while the confirmation waited; if so it only replies `payee_exists`, and writes no execution and no new version. Otherwise `_new_version` makes the change. It copies the current mandate with the next version id, the payee added, and the addition time recorded, stores it in `_versions`, and makes it current. The `payee_added` note records `new_mandate_id`, while the entry itself carries the version that authorised the change. `version_id` lets the rebuild reuse the id the ledger recorded instead of computing one. `_freeze` now returns the text and the `FreezeResult` together as a tuple, and `_carry_out` passes the result to `_reply` as `freeze`.
 
 ```python
     def _offer_next_route(
@@ -2287,6 +2326,8 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
             body["provider"] = trail.provider
         if trail.model is not None:
             body["model"] = trail.model
+        if trail.mandate_id is not None:
+            body["mandate_id"] = trail.mandate_id
         trail.seqs.append(self._ledger.append(ACTOR, kind, body).seq)
 
     def _reply(
@@ -2298,6 +2339,7 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
         decision: Decision | None = None,
         confirmation: ConfirmationRequest | None = None,
         receipt: Receipt | None = None,
+        freeze: FreezeResult | None = None,
     ) -> AgentReply:
         return AgentReply(
             text=text,
@@ -2305,13 +2347,14 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
             confirmation=confirmation,
             decision=decision,
             receipt=receipt,
+            freeze=freeze,
             ledger_seqs=list(trail.seqs),
             provider=trail.provider,
             model=trail.model,
         )
 ```
 
-`_choose` keeps the routes that are not blocked, are within limits, are not down, and have a rail in `rails` that has not failed. `min` with a `key` picks the smallest item by that key, and `default=None` is returned when nothing is left. The key is a tuple, and tuples compare item by item, so every real route comes before every simulated one, because `False` sorts before `True`, and among those the lowest fee plus spread wins. For SG>BR that gives Wise first, then the bank wire, then simulated Pix. `_refusal` fills the refused reply with the rule ids and reasons. `_write` adds the user and the turn to every payload, adds the provider and model whenever a model answered, appends the entry, and records its sequence number on the trail. `_reply` builds the `AgentReply`. The bare `*` makes the last three parameters keyword only, so a call must name them. `list(trail.seqs)` copies the list so the reply does not share it with the trail.
+`_choose` keeps the routes that are not blocked, are within limits, are not down, and have a rail in `rails` that has not failed. `min` with a `key` picks the smallest item by that key, and `default=None` is returned when nothing is left. The key is a tuple, and tuples compare item by item, so every real route comes before every simulated one, because `False` sorts before `True`, and among those the lowest fee plus spread wins. For SG>BR that gives Wise first, then the bank wire, then simulated Pix. `_refusal` fills the refused reply with the rule ids and reasons. `_write` adds the user and the turn to every payload, adds the provider and model whenever a model answered, appends the entry, and records its sequence number on the trail. `_reply` builds the `AgentReply`. The bare `*` makes the last three parameters keyword only, so a call must name them. `list(trail.seqs)` copies the list so the reply does not share it with the trail. `_write` also adds the trail's mandate id, and `_reply` passes on the freeze result when there is one.
 
 ```python
     def _rebuild_from_ledger(self) -> None:
@@ -2325,13 +2368,19 @@ When a rail fails, the loop first checks the history for the idempotency key. Th
             elif entry.kind == "receipt":
                 receipt_id = entry.payload["receipt"]["receipt_id"]
                 self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
+            elif entry.kind == "note" and entry.payload.get("kind") == "payee_added":
+                mandate = self._mandates.get(user_id)
+                payee = entry.payload["payee_id"]
+                if mandate is not None and payee not in mandate.payee_added_at:
+                    added_at = datetime.fromisoformat(entry.payload["added_at"])
+                    self._new_version(user_id, payee, added_at, entry.payload.get("new_mandate_id"))
 ```
 
-`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail.
+`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id.
 
 ## The tests
 
-There are 178 tests. Each was written before the code it checks and was seen to fail first.
+There are 191 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -2454,6 +2503,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_mandate.py` | `test_transfer_to_a_payee_inside_the_cooling_window_is_refused_under_r14` | A payee added two hours ago is refused under R14, and the reason gives the exact time the transfer becomes allowed |
 | `test_mandate.py` | `test_transfer_to_a_payee_after_the_cooling_window_is_allowed` | A payee added 25 hours ago can be paid |
 | `test_mandate.py` | `test_cooling_hours_can_be_set_per_mandate` | A mandate with a one hour cooling period lets a payee added two hours ago be paid |
+| `test_mandate.py` | `test_freeze_card_without_an_instrument_id_is_refused_under_r04` | Runs for no card and an empty one; each freeze is refused under R04 alone |
 | `test_mandate.py` | `test_transfer_over_daily_limit_with_history_is_denied` | R09 counts earlier transfers today |
 | `test_mandate.py` | `test_transfer_within_daily_limit_with_history_is_allowed` | R09 allows a running total under the limit |
 | `test_mandate.py` | `test_transfer_without_an_amount_or_a_currency_is_refused_under_r04` | Runs for a missing amount and a missing currency; each is refused under R04 alone, with a reason naming what is missing |
@@ -2476,7 +2526,8 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_schemas.py` | `test_confirmation_request_validates_with_a_default_expiry` | A confirmation validates and expires after 300 seconds by default |
 | `test_schemas.py` | `test_confirmation_request_carries_an_optional_selected_route` | The selected route is optional and sits beside the full list |
 | `test_schemas.py` | `test_agent_reply_validates_with_every_part` | A reply with a confirmation, decision, receipt, ledger entries, provider, and model validates |
-| `test_schemas.py` | `test_agent_reply_validates_with_only_the_required_parts` | A reply needs only text, language, and ledger entries |
+| `test_schemas.py` | `test_agent_reply_validates_with_only_the_required_parts` | A reply needs only text, language, and ledger entries, and has no freeze result by default |
+| `test_schemas.py` | `test_agent_reply_carries_an_optional_freeze_result` | A reply can carry a `FreezeResult` |
 | `test_schemas.py` | `test_confirmation_request_rejects_an_expiry_that_is_not_positive` | An expiry of zero fails on `expires_in_seconds` only |
 | `test_schemas.py` | `test_agent_reply_rejects_a_ledger_seq_below_one` | A ledger sequence of 0 fails on that item only |
 | `test_interfaces.py` | `test_interface_declares_exactly_its_frozen_members` | Runs for all eight interfaces; none can change silently |
@@ -2575,9 +2626,18 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_agent.py` | `test_freeze_card_on_wise_confirms_and_records_done` | Freezing a Wise card needs confirmation with `warn.freeze.card`, then records `done` in the execution entry and says the card is frozen |
 | `test_agent.py` | `test_freeze_card_on_revolut_records_not_supported_with_a_deep_link_and_says_so_honestly` | Freezing a Revolut card records `not_supported` with the deep link, and the reply says Lifeline could not do it and points to the issuer's app |
 | `test_agent.py` | `test_a_freeze_token_for_one_instrument_is_refused_for_another` | When the waiting action's card is changed, the engine refuses the token under R11 and nothing is frozen |
+| `test_agent.py` | `test_a_receipt_issued_under_v1_still_resolves_to_v1_after_a_payee_makes_v2` | After rent is paid under v1 and a payee makes v2, the receipt's `mandate_ref` still resolves to v1 without the payee, the entries record their versions, and an unknown id gives `None` |
+| `test_agent.py` | `test_a_returned_mandate_version_is_a_copy` | Editing a returned version leaves the stored one unchanged |
+| `test_agent.py` | `test_a_restart_rebuilds_added_payees_and_the_version_history_from_the_ledger` | A new loop over the ledger is at the same version id, has the payee with the same addition time, still resolves v1, and still refuses the payee under R14 |
+| `test_agent.py` | `test_adding_a_payee_who_is_already_allowed_is_a_no_op_and_says_so` | Adding the landlord again asks for no confirmation, says so, and leaves the mandate at v1 |
+| `test_agent.py` | `test_re_adding_a_new_payee_never_resets_added_at` | Adding a new payee a second time keeps its first addition time and its version |
+| `test_agent.py` | `test_a_payee_that_becomes_allowed_before_confirmation_is_a_no_op_at_confirmation` | A confirmation that arrives after the payee was already added changes nothing |
+| `test_agent.py` | `test_a_payee_id_seen_only_in_a_tool_result_is_refused_by_the_engine` | A payee id that appears only in a tool result is proposed as `tool_result`, refused under R01, and never added |
+| `test_agent.py` | `test_a_payee_id_seen_only_in_pasted_text_is_refused_by_the_engine` | The same in pasted text is refused under R01 with proposal, decision, and `injection_suspected` |
+| `test_agent.py` | `test_an_executed_freeze_fills_the_reply_freeze_field_without_the_token` | Runs for Wise and Revolut; the confirming reply carries the same `FreezeResult` as the ledger, without the token, and the proposing reply carries none |
 | `test_agent.py` | `test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it` | A rail named `wise_backend` behind the `wise` route names the receipt and the reply, and a new loop over the ledger still traces the receipt through the right rail |
 
-Twelve parametrized tests add twenty four extra runs, which is how 154 test functions become 178 tests.
+Fourteen parametrized tests add twenty six extra runs, which is how 165 test functions become 191 tests.
 
 ## The suites
 

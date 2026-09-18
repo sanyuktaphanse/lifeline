@@ -389,6 +389,7 @@ def _t2_action(action_type: ActionType, payee_id: str | None = None, token: str 
         type=action_type,
         idempotency_key="txn-0700-test",
         payee_id=payee_id,
+        instrument_id="wise:card_01" if action_type is ActionType.FREEZE_CARD else None,
         confirmation_token=token,
     )
 
@@ -488,3 +489,15 @@ def test_cooling_hours_can_be_set_per_mandate():
     mandate = _cooling_mandate(added_hours_ago=2).model_copy(update={"cooling_hours": 1})
 
     assert check(Action(**_transfer_fields(payee_id="new_flatmate")), mandate).allowed is True
+
+
+@pytest.mark.parametrize("instrument_id", [None, ""])
+def test_freeze_card_without_an_instrument_id_is_refused_under_r04(instrument_id):
+    action = Action(type=ActionType.FREEZE_CARD, idempotency_key="txn-0802-test", instrument_id=instrument_id)
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]
+    assert "card" in decision.reasons[0]
+    assert decision.confirmation_token is None

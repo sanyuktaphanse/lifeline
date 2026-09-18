@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. A second set followed the same day: every T2 action needs the confirmation round trip, untrusted payment details reach the engine as data so the engine refuses them under R01, suspected injections are their own ledger entry kind, and a receipt names the rail that executed it. A third set added the T2 tools: `Action` gained `instrument_id`, `Mandate` gained `payee_added_at` and `cooling_hours`, rule R14 holds back transfers to a new payee during the cooling period, and the agent loop can add a payee and freeze a card, with an honest reply when the issuer does not allow the freeze. At that point there are 178 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. A second set followed the same day: every T2 action needs the confirmation round trip, untrusted payment details reach the engine as data so the engine refuses them under R01, suspected injections are their own ledger entry kind, and a receipt names the rail that executed it. A third set added the T2 tools: `Action` gained `instrument_id`, `Mandate` gained `payee_added_at` and `cooling_hours`, rule R14 holds back transfers to a new payee during the cooling period, and the agent loop can add a payee and freeze a card, with an honest reply when the issuer does not allow the freeze. A fourth set made mandates versioned, rebuilt added payees and the version history from the ledger, made re adding a payee a no op, extended the provenance check to new payees, refused a freeze with no card, and gave `AgentReply` a structured `freeze` field. At that point there are 191 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -207,7 +207,7 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | `ToolCall` | One tool call requested by the model: id, name, and arguments |
 | `Message` | One turn in a conversation; see the field table below |
 | `ConfirmationRequest` | What the student must approve before a transfer: the action, its token, the warning, the routes, the selected route, and how long the request lasts |
-| `AgentReply` | Everything one agent turn returns to the frontend: text and language, plus any confirmation, decision, receipt, ledger entries, provider, and model |
+| `AgentReply` | Everything one agent turn returns to the frontend: text and language, plus any confirmation, decision, receipt, the result of an executed freeze, ledger entries, provider, and model |
 
 `Route` carries `fee_source_url` and `rate_source` so that every figure shown to the student can cite where it came from, which is rule four applied to data.
 
@@ -302,7 +302,7 @@ A test checks that every `ActionType` has a tier, so a new action type cannot be
 | 2 | R02 | The tier is not T3 | Adds a reason and continues |
 | 3 | R03 | The mandate is valid at the request time; T0 is exempt | Adds a reason and continues |
 | 4 | R10 | The idempotency key has not already been executed (transfers only) | Refuses immediately and stops |
-| 5 | R04 | Adding a payee names a payee; a transfer has an amount and a currency, and the currency matches the mandate | Adds a reason and continues |
+| 5 | R04 | Adding a payee names a payee; freezing a card names a card; a transfer has an amount and a currency, and the currency matches the mandate | Adds a reason and continues |
 | 6 | R06 | Payee is in the allowed payees | Adds a reason and continues |
 | 7 | R14 | A payee added through Lifeline was added at least `cooling_hours` ago | Adds a reason and continues |
 | 8 | R05 | Corridor is in the allowed corridors | Adds a reason and continues |
@@ -313,7 +313,7 @@ A test checks that every `ActionType` has a tier, so a new action type cannot be
 
 Two rules stop evaluation early, and for different reasons. R01 stops because an injected instruction should not be evaluated at all. R10 stops because a replayed payment already appears in the history, so running the money rules on it would count it twice and give a wrong answer. Every other rule collects its failure and keeps going, so a transfer that breaks three rules reports all three in one refusal.
 
-R04 refuses a transfer that has no amount or no currency, and its reason names what is missing. Without it, a transfer with no amount would pass R08 and R09, which only compare an amount that is present. R04 is recorded once even when the currency is both missing and therefore different from the mandate's. R04 also refuses a request to add a payee that names no payee, whether the id is missing or empty. The rule is checked before the transfer rules, because adding a payee is not a transfer.
+R04 refuses a transfer that has no amount or no currency, and its reason names what is missing. Without it, a transfer with no amount would pass R08 and R09, which only compare an amount that is present. R04 is recorded once even when the currency is both missing and therefore different from the mandate's. R04 also refuses a request to add a payee that names no payee, and a request to freeze a card that names no card, whether the id is missing or empty. The rule is checked before the transfer rules, because adding a payee is not a transfer.
 
 R14 is the cooling period for a new payee. A scammer who talks a student into adding their account usually wants the money at once, so a payee added through Lifeline cannot receive a transfer until `cooling_hours` have passed since it was added, 24 hours unless the mandate sets another value. The reason states the exact time, in UTC, when the transfer becomes allowed. A payee that was on the mandate from the start has no entry in `payee_added_at` and is never held back. The ids R12 and R13 are not used.
 
@@ -609,7 +609,7 @@ Every tool call becomes an `Action` with source `user_turn`, the current time, a
 | A payee proposed and then confirmed | `proposal`, `decision`, then on confirmation `confirmation`, `execution`, and a `note` of kind `payee_added` |
 | A card freeze proposed and then confirmed | `proposal`, `decision`, then on confirmation `confirmation` and an `execution` holding the whole `FreezeResult` |
 
-Every entry carries the user id and the turn, and the provider and model whenever a model answered. Entries written during a confirmation carry the provider and model of the turn that proposed the transfer. The confirmation token never enters the ledger, because anyone who could read it there could confirm the payment.
+Every entry carries the user id, the turn, and the id of the mandate version in force when it was written, and the provider and model whenever a model answered. Entries written during a confirmation carry the provider and model of the turn that proposed the transfer. The confirmation token never enters the ledger, because anyone who could read it there could confirm the payment.
 
 ### Confirmation
 
@@ -619,11 +619,13 @@ When `handle` is called with the token, the loop refuses a token that is missing
 
 ### Adding a payee and freezing a card
 
-Adding a payee and freezing a card are T2, because they are the steps a scammer wants. A student can be talked into adding a stranger's account, and a thief wants a lost card to stay live. Both use the same confirmation round trip as a transfer, with the warning keys `warn.payee.new` and `warn.freeze.card`, and the confirming reply comes back with no routes.
+Adding a payee and freezing a card are T2, because they are the steps a scammer wants. A student can be talked into adding a stranger's account, and a thief wants a lost card to stay live. Both use the same confirmation round trip as a transfer, with the warning keys `warn.payee.new` and `warn.freeze.card`, and the confirming reply comes back with no routes. A payee id that appears only in tool output or pasted text is treated as a transfer's payee is: the action carries that source, the engine refuses it under R01, and an `injection_suspected` entry follows. A scammer's instruction to add their account is the first step of the attack, so it is stopped there.
 
-When the student confirms a new payee, the loop adds the payee to the mandate's allowed payees and records the time in `payee_added_at`. It writes the confirmation, an execution, and a note of kind `payee_added` with the display name, the time it was added, and the time it can first receive money. The reply tells the student that time. A transfer to that payee before then is refused by the engine under R14, and the refusal gives the time again. Task T09 and attack `X12` depend on this.
+Adding a payee who is already allowed is a no op. When the loop sees it at the proposal, the reply says the payee is already allowed and nothing changed, and nothing waits for confirmation. When the payee became allowed between the proposal and the confirmation, the confirmation says the same. Either way `payee_added_at` is never reset, so re adding the landlord never holds rent back for a day.
 
-When the student confirms a freeze, the loop finds the rail named by the issuer, the part of the card id before the colon, and calls `Rail.freeze`. The whole `FreezeResult` is written in the execution entry, including `not_supported` and its deep link. The reply depends on the result. For `done` it says the card is frozen. For `not_supported` it says Lifeline could not freeze the card directly because the issuer does not allow it, and tells the student to freeze it now in the issuer's app, with the link. For `failed`, including an issuer with no rail, it gives the reason and sends the student to the issuer's app. A student with a lost card must never believe a card is frozen when it is not. Tasks T14 and T15 depend on this.
+When the student confirms a new payee, the loop makes a new version of the mandate with the payee in its allowed payees and the time in `payee_added_at`. It writes the confirmation, an execution, and a note of kind `payee_added` with the display name, the time it was added, the time it can first receive money, and the id of the new mandate version. The reply tells the student that time. A transfer to that payee before then is refused by the engine under R14, and the refusal gives the time again. Task T09 and attack `X12` depend on this.
+
+When the student confirms a freeze, the loop finds the rail named by the issuer, the part of the card id before the colon, and calls `Rail.freeze`. The whole `FreezeResult` is written in the execution entry, including `not_supported` and its deep link, and returned in the reply's `freeze` field, so the frontend can offer the issuer's link as a button without reading the reply text. The field is filled only when a freeze was executed; it holds no token, because a `FreezeResult` has no place for one. The reply depends on the result. For `done` it says the card is frozen. For `not_supported` it says Lifeline could not freeze the card directly because the issuer does not allow it, and tells the student to freeze it now in the issuer's app, with the link. For `failed`, including an issuer with no rail, it gives the reason and sends the student to the issuer's app. A student with a lost card must never believe a card is frozen when it is not. Tasks T14 and T15 depend on this.
 
 ### Rail failure
 
@@ -645,9 +647,13 @@ Amounts are compared as numbers, so `1,400`, `1400`, and `1400.00` match, and a 
 
 A receipt's `simulated` flag is the executing rail's truth. The route's flag is what the router expected; only the rail knows whether money moved. A receipt's `rail` is likewise the name of the rail that executed it, taken from `rail.name`, never the route's label. When the two simulated flags differ, the loop writes a `note` of kind `simulated_mismatch` after the receipt, recording the key, the rail, the receipt id, and both flags. Whenever a receipt is simulated, the reply adds a sentence in the student's language saying that it was a simulation and no real money moved.
 
+### Mandate versions
+
+Any change to a mandate produces a new version with the next id suffix, so `mandate-student_001-v1` becomes `mandate-student_001-v2`. An id with no `-vN` ending gains `-v2`. The loop keeps every version and returns a copy of any of them from `mandate_version(id)`, which gives `None` for an id it never saw. The current version is the one in the loop's mandates. A receipt's `mandate_ref`, and the `mandate_id` on every ledger entry, keep the version that was in force at the time, so a receipt paid under v1 still resolves to v1 after a payee makes v2. Today the only change a loop makes is adding a payee.
+
 ### Rebuilding from the ledger
 
-A new loop reads the ledger once. Every `execution` entry becomes an action in that student's history, every `receipt` entry records the key of the rail in the `rails` dictionary that issued it, so a trace still finds the right rail even when that rail's own name differs from its key, and the highest turn number per student sets the next turn. A new loop over the same ledger therefore still counts earlier payments against the daily limit, and still gives fresh keys.
+A new loop reads the ledger once. Every `execution` entry becomes an action in that student's history, every `receipt` entry records the key of the rail in the `rails` dictionary that issued it, so a trace still finds the right rail even when that rail's own name differs from its key, and the highest turn number per student sets the next turn. Every `payee_added` note is replayed onto the mandate the new loop was given, in ledger order, with the recorded time and the recorded version id, unless that mandate already holds the payee's addition time. After a restart the mandate is therefore at the same version id as before, every earlier version still resolves by id, and a new payee is still inside its cooling period. A new loop over the same ledger also still counts earlier payments against the daily limit, and still gives fresh keys.
 
 ### Decisions of 15 September, afternoon
 
@@ -737,17 +743,17 @@ Every change was written test first. The test was run and seen to fail before th
 
 | Test file | Tests | Covers |
 | --- | --- | --- |
-| `tests/test_mandate.py` | 38 | Every rule R01 to R11 and R14, the cooling period inside and after the window and set per mandate, a freeze token bound to its card, adding a payee with no payee id, the rule each allowed tier cites, a warning key for every T2 type, the round trip for adding a payee and freezing a card, a token for one new payee refused for another, a transfer with no amount or no currency, schema rejection of bad actions, tier coverage |
+| `tests/test_mandate.py` | 40 | Every rule R01 to R11 and R14, a freeze with no card, the cooling period inside and after the window and set per mandate, a freeze token bound to its card, adding a payee with no payee id, the rule each allowed tier cites, a warning key for every T2 type, the round trip for adding a payee and freezing a card, a token for one new payee refused for another, a transfer with no amount or no currency, schema rejection of bad actions, tier coverage |
 | `tests/test_fake_rail.py` | 26 | Receipts carrying both references, a chosen name and simulated flag, the receipt taking its name and flag from the rail, a reused key with the same details and with each kind of difference, a fresh quote, the scripted failure, a retry on another route after a failure, chosen fail once keys, traces, copies, and all three freeze results |
-| `tests/test_schemas.py` | 22 | Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers including `get_quote`, the mandate id, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits and selected route |
+| `tests/test_schemas.py` | 23 | The optional freeze field on `AgentReply`, Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers including `get_quote`, the mandate id, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits and selected route |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
 | `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
-| `tests/test_agent.py` | 28 | The confirmation round trip and its ledger trail, adding a payee and the cooling refusal that follows, freezing a Wise card and a Revolut card with the honest not supported reply, a freeze token refused for another card, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused by the engine under R01 with an `injection_suspected` entry and the same details allowed when typed, a receipt naming its rail and traced by a new loop, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
+| `tests/test_agent.py` | 38 | The confirmation round trip and its ledger trail, mandate versions and a receipt that still resolves to v1, copies of versions, a restart that rebuilds added payees and the version history, re adding a payee as a no op at the proposal and at the confirmation, a payee id from a tool result or pasted text refused under R01, the freeze field on the reply, adding a payee and the cooling refusal that follows, freezing a Wise card and a Revolut card with the honest not supported reply, a freeze token refused for another card, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused by the engine under R01 with an `injection_suspected` entry and the same details allowed when typed, a receipt naming its rail and traced by a new loop, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
 | `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 178 | |
+| Total | 191 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -804,10 +810,12 @@ All times are local time.
 | `e373a82` | 18 Sep 03:50 | Merge pull request #3 from sanyuktaphanse/lane-a/engine-and-provenance |
 | `9dd85dc` | 18 Sep 14:58 | Every T2 action confirms; provenance routed through the engine; injection events are first class |
 | `003ab4c` | 18 Sep 03:59 | Merge pull request #4 from sanyuktaphanse/lane-a/t2-everywhere |
+| `f3f601e` | 18 Sep 15:12 | T2 tools: add payee with cooling period, freeze card with honest not supported path |
+| `fe728b4` | 18 Sep 04:19 | Merge pull request #5 from sanyuktaphanse/lane-a/t2-tools |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
-From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools are on the branch `lane-a/t2-tools`.
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them are on the branch `lane-a/mandate-versions`.
 
 ## Open items
 
@@ -833,9 +841,11 @@ From `97a6211` onward every change goes on its own branch and reaches `main` thr
 20. Closed. The agent loop has `add_payee` and `freeze_card` tools, and a waiting confirmation holds a route only for a transfer.
 21. Closed. `Action` has `instrument_id`, and the confirmation token signs it, so a freeze token for one card is refused for another.
 22. Closed. The engine refuses adding a payee with no payee id under R04.
-23. Adding a payee changes the mandate but not its `id`, so a later receipt's `mandate_ref` names a mandate that has changed since it was first issued. A new version id on every change would keep the reference exact.
-24. A payee added through Lifeline lives only in the loop's mandates. A new loop rebuilt from the ledger does not replay `payee_added` notes, so after a restart the payee and its cooling time are gone until the mandate store keeps them.
-25. Adding a payee who is already allowed resets their cooling time, so re adding the landlord would hold rent back for a day.
-26. The provenance check covers only transfers. A payee id that appears only in tool output can still be proposed as a new payee, and the student's confirmation and the cooling period are then the defences.
-27. The engine does not refuse freezing a card with no `instrument_id`; only the loop's required argument check stops it.
-28. `AgentReply` has no field for a `FreezeResult`, so the deep link reaches the frontend only inside the reply text.
+23. Closed. Every change to a mandate produces a new version id, earlier versions are kept and resolve by id, and receipts and ledger entries keep the version that authorised them.
+24. Closed. A new loop replays `payee_added` notes from the ledger, restoring the payees, their addition times, and the version history.
+25. Closed. Adding a payee who is already allowed changes nothing and never resets the addition time.
+26. Closed. The provenance check covers adding a payee as well as a transfer.
+27. Closed. The engine refuses freezing a card with no `instrument_id` under R04.
+28. Closed. `AgentReply` carries the `FreezeResult` of an executed freeze in `freeze`.
+29. When a payee who is already allowed is proposed, the engine has already issued a token that nothing will ever accept, and the reply's `decision` still carries it. It cannot be confirmed because nothing is waiting under it, but a frontend should not show it.
+30. The rebuild assumes the mandate a new loop is given is the version the ledger started from, or a later one that already holds every payee the ledger added. Given any other starting version, such as one saved by a future store without its addition times, the replayed version ids would not match the ones in the ledger. The store that keeps mandates will need to save every version with its addition times.

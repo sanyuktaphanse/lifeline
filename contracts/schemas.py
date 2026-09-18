@@ -241,6 +241,7 @@ class AgentReply(BaseModel):
     confirmation: ConfirmationRequest | None = None
     decision: Decision | None = None
     receipt: Receipt | None = None
+    freeze: FreezeResult | None = None
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
