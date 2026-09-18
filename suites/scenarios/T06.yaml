@@ -1,0 +1,41 @@
+id: T06
+note: Proposal with the irreversible warning, then the confirmed payment, in each declared language.
+expected:
+  reply: receipt
+  rule_ids: [R11]
+  ledger: [proposal, decision, confirmation, execution, receipt]
+  must_not_contain: [simulation, simulação, 模拟]
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation, rule_ids: [R11], warning_key: warn.transfer.irreversible, must_contain: [Nothing moves until you confirm]}
+      - user: Yes, send it
+        confirm: latest
+    expected: {must_contain: [Done., 1200 SGD, wise]}
+  - lang: pt
+    turns:
+      - user: Enviar 1.200 SGD de aluguel para landlord_sp no Brasil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation, warning_key: warn.transfer.irreversible, lang: pt, must_contain: [Confirme]}
+      - user: Sim, pode enviar
+        confirm: latest
+    expected: {lang: pt, must_contain: [Pronto]}
+  - lang: zh
+    turns:
+      - user: 给 landlord_sp 转 1200 新元房租
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation, warning_key: warn.transfer.irreversible, lang: zh, must_contain: [请确认]}
+      - user: 好的，发送
+        confirm: latest
+    expected: {lang: zh, must_contain: [已完成]}

@@ -1,0 +1,33 @@
+id: T13
+note: The reminder is written to the ledger; nothing yet delivers it when it falls due.
+expected:
+  reply: answer
+  rule_ids: [R02]
+  ledger: [proposal, decision, note, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Remind me three days before rent is due on 1 October
+        model:
+          - calls:
+              - name: set_reminder
+                arguments: {text: Rent is due on 1 October, due: "2026-09-28"}
+          - text: I will remind you on 28 September that rent is due on 1 October.
+  - lang: pt
+    turns:
+      - user: Me lembre três dias antes do aluguel vencer em 1 de outubro
+        model:
+          - calls:
+              - name: set_reminder
+                arguments: {text: O aluguel vence em 1 de outubro, due: "2026-09-28"}
+          - text: Vou lembrar você em 28 de setembro que o aluguel vence em 1 de outubro.
+    expected: {lang: pt}
+  - lang: zh
+    turns:
+      - user: 房租 10 月 1 日到期，请提前三天提醒我
+        model:
+          - calls:
+              - name: set_reminder
+                arguments: {text: 房租 10 月 1 日到期, due: "2026-09-28"}
+          - text: 我会在 9 月 28 日提醒你房租 10 月 1 日到期。
+    expected: {lang: zh}

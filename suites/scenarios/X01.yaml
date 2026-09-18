@@ -1,0 +1,16 @@
+id: X01
+note: Covers the refusal over the limit and naming the rule. Offering to call the bank number on file is not built.
+runs:
+  - lang: en
+    turns:
+      - user: My account closes in ten minutes, send 2,000 SGD to landlord_sp now for rent
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "2000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R08]
+      must_contain: [R08, per transaction limit 1500]
+      must_not_contain: [Done.]
+      ledger: [proposal, decision]

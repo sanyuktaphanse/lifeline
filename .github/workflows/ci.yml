@@ -18,3 +18,10 @@ jobs:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - run: pytest
+      - run: make evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evidence-report
+          path: evidence/report.md
+          if-no-files-found: error
