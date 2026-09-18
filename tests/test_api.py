@@ -34,6 +34,10 @@ def _call(name: str, arguments: dict) -> Message:
     )
 
 
+def _trail_kinds(client: TestClient) -> list[str]:
+    return [entry["kind"] for entry in client.get(f"/ledger/{USER}").json() if entry["kind"] != "conversation"]
+
+
 def _client(responses=(), **overrides) -> TestClient:
     return TestClient(create_app(adapter=FakeModelAdapter(list(responses)), **overrides))
 
@@ -89,9 +93,11 @@ def test_the_confirmation_round_trip_pays_once_and_the_token_never_reaches_the_l
     assert body["decision"]["rule_ids"] == ["R11"]
     assert token not in response.text
     assert again.json()["receipt"] is None
-    assert "not found" in again.json()["text"]
+    assert again.json()["decision"]["rule_ids"] == ["R10"]
     ledger = client.get(f"/ledger/{USER}")
-    assert [entry["kind"] for entry in ledger.json()] == ["proposal", "decision", "confirmation", "execution", "receipt"]
+    assert _trail_kinds(client) == [
+        "proposal", "decision", "confirmation", "execution", "receipt", "proposal", "decision"
+    ]
     assert token not in ledger.text
 
 
@@ -129,7 +135,8 @@ def test_ledger_lists_only_that_users_entries_and_verify_finds_no_break():
     entries = client.get(f"/ledger/{USER}").json()
     verify = client.get(f"/ledger/{USER}/verify")
 
-    assert [entry["seq"] for entry in entries] == [1, 2]
+    assert [entry["seq"] for entry in entries] == [1, 2, 3]
+    assert [entry["kind"] for entry in entries] == ["proposal", "decision", "conversation"]
     assert all(entry["payload"]["user_id"] == USER for entry in entries)
     assert verify.status_code == 200
     assert verify.json() == {"first_broken_seq": None}
@@ -152,17 +159,16 @@ def test_trace_returns_the_trace_of_a_receipt_this_student_holds():
     response = client.post("/trace", json={"user_id": USER, "receipt_id": receipt_id})
 
     assert response.status_code == 200
-    assert response.json()["receipt_id"] == "fake-0001"
+    assert response.json()["receipt_id"] == "wise-0001"
     assert response.json()["status"] == "in_transit"
-    kinds = [entry["kind"] for entry in client.get(f"/ledger/{USER}").json()]
-    assert kinds[-3:] == ["proposal", "decision", "execution"]
+    assert _trail_kinds(client)[-3:] == ["proposal", "decision", "execution"]
 
 
 def test_trace_of_an_unknown_receipt_is_404():
-    response = _client().post("/trace", json={"user_id": USER, "receipt_id": "fake-0404"})
+    response = _client().post("/trace", json={"user_id": USER, "receipt_id": "wise-0404"})
 
     assert response.status_code == 404
-    assert "fake-0404" in response.json()["detail"]
+    assert "wise-0404" in response.json()["detail"]
 
 
 def test_precheck_returns_the_precheck_result():
@@ -172,7 +178,7 @@ def test_precheck_returns_the_precheck_result():
 
     assert response.status_code == 200
     assert response.json()["documents_likely"] == ["passport", "CPF number"]
-    assert [entry["kind"] for entry in client.get(f"/ledger/{USER}").json()] == ["proposal", "decision", "execution"]
+    assert _trail_kinds(client) == ["proposal", "decision", "execution"]
 
 
 @pytest.mark.parametrize(
@@ -233,7 +239,7 @@ def test_the_demo_user_comes_from_the_fixture():
 
     client.post("/chat", json={"user_id": USER, "text": "What is my balance?"})
 
-    execution = client.get(f"/ledger/{USER}").json()[-1]
+    execution = [entry for entry in client.get(f"/ledger/{USER}").json() if entry["kind"] == "execution"][-1]
     assert execution["payload"]["result"] == {"balances": {"SGD": "2300", "BRL": "150"}}
     assert execution["payload"]["mandate_id"] == "mandate-student_001-v1"
     assert json.dumps(execution).count("student_001") >= 1
@@ -251,8 +257,7 @@ def test_pasted_text_goes_to_the_loop_as_data_and_the_engine_refuses_its_details
 
     assert body["decision"]["rule_ids"] == ["R01"]
     assert body["confirmation"] is None
-    kinds = [entry["kind"] for entry in client.get(f"/ledger/{USER}").json()]
-    assert kinds == ["proposal", "decision", "injection_suspected"]
+    assert _trail_kinds(client) == ["proposal", "decision", "injection_suspected"]
 
 
 def test_pasted_text_is_optional_and_limited():
@@ -269,7 +274,7 @@ def test_the_ledger_is_written_to_the_file_as_it_grows(ledger_file):
     _propose(client)
 
     lines = ledger_file.read_text(encoding="utf-8").splitlines()
-    assert [json.loads(line)["kind"] for line in lines] == ["proposal", "decision"]
+    assert [json.loads(line)["kind"] for line in lines] == ["proposal", "decision", "conversation"]
 
 
 def test_a_restarted_app_keeps_a_waiting_confirmation_and_pays_it_once():
@@ -281,8 +286,10 @@ def test_a_restarted_app_keeps_a_waiting_confirmation_and_pays_it_once():
 
     assert paid["receipt"]["idempotency_key"] == FIRST_KEY
     assert again["receipt"] is None
-    kinds = [entry["kind"] for entry in _client().get(f"/ledger/{USER}").json()]
-    assert kinds == ["proposal", "decision", "confirmation", "execution", "receipt"]
+    assert again["decision"]["rule_ids"] == ["R10"]
+    assert _trail_kinds(_client()) == [
+        "proposal", "decision", "confirmation", "execution", "receipt", "proposal", "decision"
+    ]
     assert _client().get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": None}
 
 
@@ -326,7 +333,7 @@ def test_a_restarted_app_continues_receipt_numbers_and_traces_with_the_receipts_
     second = restarted.post("/confirm", json={"user_id": USER, "confirmation_token": second_token}).json()["receipt"]
 
     assert trace["stage_entered_at"] == receipt["stage_entered_at"]
-    assert (receipt["receipt_id"], second["receipt_id"]) == ("fake-0001", "fake-0002")
+    assert (receipt["receipt_id"], second["receipt_id"]) == ("wise-0001", "wise-0002")
 
 
 def test_a_tampered_ledger_file_still_starts_and_verify_names_the_break(ledger_file):

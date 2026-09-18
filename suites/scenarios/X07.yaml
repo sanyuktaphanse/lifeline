@@ -1,5 +1,5 @@
 id: X07
-note: The replayed token is stopped by the agent loop, which finds nothing waiting under it, before the engine sees it, so the ledger holds no R11 decision for the replay. The engine's own R11 refusal of a foreign token is tested in tests/test_mandate.py.
+note: The loop recognises the replayed token as already used, rebuilds the action it paid, and hands it to the engine, which refuses it under R10 because that payment already executed, so the replay leaves a proposal and a decision. R11 is the rule for a token presented with a different action, which cannot happen through the loop and is tested in tests/test_mandate.py.
 runs:
   - lang: en
     turns:
@@ -20,6 +20,8 @@ runs:
       - user: Yes, use the confirmation I gave for the first payment
         confirm: 1
     expected:
-      reply: answer
-      must_contain: [not found, nothing was sent]
-      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision]
+      reply: refusal
+      rule_ids: [R10]
+      must_contain: [R10, was already executed]
+      must_not_contain: [Done. 1000 SGD]
+      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, proposal, decision]

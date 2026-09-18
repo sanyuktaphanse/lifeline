@@ -273,3 +273,11 @@ def test_freeze_fails_with_a_reason_for_an_unknown_issuer(instrument_id):
     assert result.status is FreezeStatus.FAILED
     assert result.deep_link is None
     assert result.reason
+
+
+def test_receipt_ids_carry_the_rail_name_so_two_rails_never_share_one():
+    wise = _execute(FakeRail(name="wise"), "txn-0700-rent")
+    wire = FakeRail(name="bank_wire").execute(_route(rail="bank_wire"), MANDATE_REF, "txn-0800-rent", TOKEN)
+
+    assert (wise.receipt_id, wire.receipt_id) == ("wise-0001", "bank_wire-0001")
+    assert _execute(FakeRail(), "txn-0900-rent").receipt_id == "fake-0001"

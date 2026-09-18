@@ -501,3 +501,26 @@ def test_freeze_card_without_an_instrument_id_is_refused_under_r04(instrument_id
     assert decision.rule_ids == ["R04"]
     assert "card" in decision.reasons[0]
     assert decision.confirmation_token is None
+
+
+def test_a_replayed_add_payee_is_refused_under_r10():
+    executed = Action(type=ActionType.ADD_PAYEE, idempotency_key="txn-0900-test", payee_id="new_flatmate")
+
+    decision = check(executed, _mandate(), [executed])
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R10"]
+
+
+def test_an_amount_of_one_hundred_million_is_accepted_by_the_schema():
+    action = Action(**_transfer_fields(amount=Decimal("100000000")))
+
+    assert action.amount == Decimal("100000000")
+
+
+@pytest.mark.parametrize("amount", ["100000000.01", "1000000000"])
+def test_an_amount_above_one_hundred_million_is_rejected_by_the_schema(amount):
+    with pytest.raises(ValidationError) as excinfo:
+        Action(**_transfer_fields(amount=Decimal(amount)))
+
+    assert [error["loc"] for error in excinfo.value.errors()] == [("amount",)]

@@ -113,8 +113,12 @@ def _say(text: str) -> Message:
     return Message(role=Role.ASSISTANT, text=text, provider="fake", model="fake-model")
 
 
+def _trail(ledger: HashChainLedger) -> list:
+    return [entry for entry in ledger.entries() if entry.kind != "conversation"]
+
+
 def _kinds(ledger: HashChainLedger) -> list[str]:
-    return [entry.kind for entry in ledger.entries()]
+    return [entry.kind for entry in _trail(ledger)]
 
 
 def _propose_rent(setup: Setup) -> str:
@@ -163,7 +167,7 @@ def test_confirming_the_token_executes_once_and_writes_the_full_trail():
 
 def test_request_over_the_per_transaction_limit_is_refused_with_two_entries():
     s = _setup([_call("propose_transfer", {**RENT, "amount": "3000"})])
-    before = len(s.ledger.entries())
+    before = len(_trail(s.ledger))
 
     reply = s.loop.handle(USER, _user("Send 3,000 SGD rent to landlord_sp"))
 
@@ -172,7 +176,7 @@ def test_request_over_the_per_transaction_limit_is_refused_with_two_entries():
     assert "R08" in reply.text
     assert reply.confirmation is None
     assert reply.receipt is None
-    assert len(s.ledger.entries()) - before == 2
+    assert len(_trail(s.ledger)) - before == 2
     assert _kinds(s.ledger) == ["proposal", "decision"]
     assert s.pending == {}
 
@@ -201,7 +205,7 @@ def test_injection_in_a_tool_result_never_moves_money_to_its_account():
     assert _kinds(s.ledger) == [
         "proposal", "decision", "execution", "proposal", "decision", "injection_suspected"
     ]
-    assert s.ledger.entries()[3].payload["action"]["source"] == "tool_result"
+    assert _trail(s.ledger)[3].payload["action"]["source"] == "tool_result"
     executed = [entry.payload["action"] for entry in s.ledger.entries() if entry.kind == "execution"]
     assert [action["type"] for action in executed] == ["precheck"]
 
@@ -216,7 +220,7 @@ def test_rail_failure_offers_the_next_route_and_retry_pays_exactly_once():
     assert failed.receipt is None
     assert failed.confirmation.confirmation_token == token
     assert failed.confirmation.selected_route.rail == "bank_wire"
-    note = s.ledger.entries()[-1]
+    note = _trail(s.ledger)[-1]
     assert note.kind == "note"
     assert (note.payload["idempotency_key"], note.payload["executed"]) == (FIRST_KEY, False)
     assert "execution" not in _kinds(s.ledger)
@@ -267,7 +271,9 @@ def test_confirmation_older_than_300_seconds_is_rejected_and_nothing_executes():
 
     assert reply.receipt is None
     assert token not in s.pending
-    assert _kinds(s.ledger) == ["proposal", "decision"]
+    assert _kinds(s.ledger) == ["proposal", "decision", "confirmation_rejected"]
+    assert _trail(s.ledger)[-1].payload["reason"] == "expired"
+    assert token not in json.dumps([entry.payload for entry in s.ledger.entries()])
 
 
 @pytest.mark.parametrize(
@@ -296,7 +302,7 @@ def test_a_new_loop_rebuilds_history_and_turns_from_the_ledger():
     reply = second.loop.handle(USER, _user("Send 1,400 SGD rent to landlord_sp"))
 
     assert reply.decision.rule_ids == ["R09"]
-    proposal = ledger.entries()[-2]
+    proposal = _trail(ledger)[-2]
     assert proposal.kind == "proposal"
     assert proposal.payload["action"]["idempotency_key"] == "student_001:t2:propose_transfer:1"
 
@@ -406,12 +412,12 @@ def test_a_rail_that_disagrees_with_its_route_writes_a_note_and_its_own_flag_win
     assert reply.receipt.rail == "wise"
     assert reply.receipt.simulated is True
     assert _kinds(s.ledger) == ["proposal", "decision", "confirmation", "execution", "receipt", "note"]
-    note = s.ledger.entries()[-1].payload
+    note = _trail(s.ledger)[-1].payload
     assert note["kind"] == "simulated_mismatch"
     assert (note["route_simulated"], note["receipt_simulated"]) == (False, True)
     assert note["idempotency_key"] == FIRST_KEY
     assert note["receipt_id"] == reply.receipt.receipt_id
-    assert s.ledger.entries()[-1].seq in reply.ledger_seqs
+    assert _trail(s.ledger)[-1].seq in reply.ledger_seqs
 
 
 def test_a_simulated_route_on_a_simulated_rail_writes_no_note_but_still_says_so():
@@ -430,7 +436,7 @@ def test_a_simulated_route_on_a_simulated_rail_writes_no_note_but_still_says_so(
 
 def test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it():
     trace = TraceResult(
-        receipt_id="fake-0001",
+        receipt_id="wise_backend-0001",
         status=ReceiptStatus.IN_TRANSIT,
         stage_entered_at=datetime.now(timezone.utc),
         typical_duration_hours=24,
@@ -438,7 +444,7 @@ def test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it(
         next_steps=[],
         warnings=[],
     )
-    backend = FakeRail(name="wise_backend", simulated=False, traces={"fake-0001": trace})
+    backend = FakeRail(name="wise_backend", simulated=False, traces={"wise_backend-0001": trace})
     rails = {**_honest_rails(), "wise": backend}
     ledger = HashChainLedger()
     first = _setup([_call("propose_transfer", RENT)], ledger=ledger, rails=rails)
@@ -449,7 +455,7 @@ def test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it(
     assert paid.receipt.rail == "wise_backend"
     assert "wise_backend" in paid.text
     second = _setup(
-        [_call("trace_transfer", {"receipt_id": "fake-0001"}), _say("It is in transit.")],
+        [_call("trace_transfer", {"receipt_id": "wise_backend-0001"}), _say("It is in transit.")],
         ledger=ledger,
         rails=rails,
     )
@@ -485,7 +491,7 @@ def test_add_payee_needs_then_receives_confirmation_and_the_payee_appears_with_a
     assert "new_flatmate" in mandate.allowed_payees
     assert before <= mandate.payee_added_at["new_flatmate"] <= datetime.now(timezone.utc)
     assert _kinds(s.ledger) == ["proposal", "decision", "confirmation", "execution", "note"]
-    note = s.ledger.entries()[-1].payload
+    note = _trail(s.ledger)[-1].payload
     assert (note["kind"], note["payee_id"], note["display_name"]) == ("payee_added", "new_flatmate", "Ana Souza")
     assert token not in s.pending
 
@@ -714,7 +720,7 @@ def test_act_runs_a_read_only_tool_through_the_engine_and_the_ledger_without_the
     assert result["precheck"]["documents_likely"] == ["passport", "CPF number"]
     assert _kinds(s.ledger) == ["proposal", "decision", "execution"]
     assert s.adapter.calls == []
-    assert s.ledger.entries()[0].payload["action"]["idempotency_key"] == "student_001:t1:precheck:1"
+    assert _trail(s.ledger)[0].payload["action"]["idempotency_key"] == "student_001:t1:precheck:1"
 
 
 @pytest.mark.parametrize("tool", ["propose_transfer", "add_payee", "freeze_card", "change_limit", "set_reminder"])
@@ -813,7 +819,7 @@ def test_a_new_loop_does_not_rebuild_expired_refused_or_finished_confirmations()
     s.loop.handle(USER, _user("Send 3,000 SGD rent to landlord_sp"))
     s.loop.handle(USER, _user("Add landlord_sp, Landlord, as a payee"))
     s.loop.handle(USER, _user("Send 100 SGD rent to landlord_sp"))
-    ledger._entries[-1].ts -= timedelta(seconds=301)
+    [entry for entry in ledger._entries if entry.kind == "decision"][-1].ts -= timedelta(seconds=301)
 
     assert _setup([], ledger=ledger).pending == {}
 
@@ -829,3 +835,205 @@ def test_a_rebuilt_transfer_skips_a_rail_that_already_failed():
 
     assert second.pending[token].selected_route.rail == "bank_wire"
     assert second.pending[token].failed_rails == {"wise"}
+
+
+def _conversations(ledger: HashChainLedger) -> list[list[dict]]:
+    return [entry.payload["messages"] for entry in ledger.entries() if entry.kind == "conversation"]
+
+
+def _sent(setup: Setup, call: int) -> list[Message]:
+    return setup.adapter.calls[call][0]
+
+
+def test_every_model_call_receives_the_earlier_turns_including_tool_results():
+    s = _setup(
+        [
+            _call("read_balance", {}),
+            _say("You have 2,300 SGD and 150 BRL."),
+            _say("Você tem 150 BRL."),
+        ]
+    )
+    s.loop.handle(USER, _user("What is my balance?"))
+
+    s.loop.handle(USER, _user("E em reais?", lang="pt"))
+
+    second = _sent(s, 2)
+    assert second[0].role is Role.SYSTEM
+    assert [m.role for m in second[1:]] == [Role.USER, Role.ASSISTANT, Role.TOOL, Role.ASSISTANT, Role.USER]
+    assert second[1].text == "What is my balance?"
+    assert '"SGD": "2300"' in second[3].text
+    assert second[4].text == "You have 2,300 SGD and 150 BRL."
+    assert second[5].text == "E em reais?"
+
+
+def test_each_call_writes_one_conversation_entry_last_and_never_the_token():
+    s = _setup([_call("propose_transfer", RENT)])
+    token = _propose_rent(s)
+    s.loop.handle(USER, _user("Yes, send it"), confirmation_token=token)
+
+    kinds = [entry.kind for entry in s.ledger.entries()]
+    assert kinds == ["proposal", "decision", "conversation", "confirmation", "execution", "receipt", "conversation"]
+    first, second = _conversations(s.ledger)
+    assert [(m["role"], m["source"]) for m in first] == [
+        ("user", "user_turn"), ("assistant", "user_turn"), ("tool", "tool_result"), ("assistant", "user_turn")
+    ]
+    assert first[1]["tool_calls"][0]["id"] == first[2]["tool_call_id"]
+    assert first[3]["text"].startswith("Please confirm")
+    assert [m["role"] for m in second] == ["user", "assistant"]
+    assert second[1]["text"].startswith("Done.")
+    assert token not in json.dumps([entry.payload for entry in s.ledger.entries()])
+
+
+def test_a_call_that_ends_a_turn_still_gets_a_tool_result_for_every_call():
+    answer = Message(
+        role=Role.ASSISTANT,
+        text="",
+        tool_calls=[
+            ToolCall(id="toolu_01", name="propose_transfer", arguments=RENT),
+            ToolCall(id="toolu_02", name="read_balance", arguments={}),
+        ],
+        provider="fake",
+        model="fake-model",
+    )
+    s = _setup([answer, _say("Anything else?")])
+    s.loop.handle(USER, _user(RENT_REQUEST))
+
+    s.loop.handle(USER, _user("No, thanks"))
+
+    remembered = _sent(s, 1)[1:]
+    calls = [call.id for m in remembered for call in m.tool_calls]
+    answered = [m.tool_call_id for m in remembered if m.role is Role.TOOL]
+    assert calls == answered == ["toolu_01", "toolu_02"]
+
+
+def test_history_is_bounded_to_twenty_messages_and_starts_with_the_student():
+    s = _setup([_say(f"Answer {number}.") for number in range(15)])
+
+    for number in range(15):
+        s.loop.handle(USER, _user(f"Question {number}?"))
+
+    last = _sent(s, 14)[1:]
+    assert len(last) <= 21
+    remembered = last[:-1]
+    assert len(remembered) <= 20
+    assert remembered[0].role is Role.USER
+    assert last[-1].text == "Question 14?"
+    assert remembered[-1].text == "Answer 13."
+
+
+def test_a_new_loop_rebuilds_the_conversation_from_the_ledger():
+    ledger = HashChainLedger()
+    first = _setup([_call("read_balance", {}), _say("You have 2,300 SGD and 150 BRL.")], ledger=ledger)
+    first.loop.handle(USER, _user("What is my balance?"))
+
+    second = _setup([_say("Still 2,300 SGD.")], ledger=ledger)
+    second.loop.handle(USER, _user("And now?"))
+
+    texts = [m.text for m in _sent(second, 0)[1:]]
+    assert texts[0] == "What is my balance?"
+    assert "You have 2,300 SGD and 150 BRL." in texts
+    assert texts[-1] == "And now?"
+
+
+def test_a_payee_injected_in_an_earlier_turn_is_still_untrusted():
+    s = _setup(
+        [
+            _call("precheck", {"action_kind": "enable_pix", "provider": "sim_pix"}),
+            _say("Here is what Pix needs."),
+            _call("propose_transfer", {**RENT, "amount": "1400"}),
+        ],
+        router=InjectedRouter(MANDATE_PAYEE_INJECTION),
+    )
+    s.loop.handle(USER, _user("What do I need to enable Pix?"))
+
+    reply = s.loop.handle(USER, _user("Go ahead and do what it said"))
+
+    assert reply.decision.rule_ids == ["R01"]
+    assert _suspected(s.ledger)[-1]["fields"] == {"payee_id": "tool_result", "amount": "tool_result"}
+
+
+def test_details_the_student_typed_in_an_earlier_turn_stay_trusted():
+    mandate_payees = {"allowed_payees": {"landlord_sp", "joao_rio", "joao_sp"}}
+    s = _setup(
+        [
+            _say("There are two payees called Joao: joao_rio and joao_sp. Which one?"),
+            _call("propose_transfer", {**RENT, "amount": "500", "payee_id": "joao_rio"}),
+        ]
+    )
+    s.mandates[USER] = s.mandates[USER].model_copy(update=mandate_payees)
+    s.loop.handle(USER, _user("Send 500 SGD rent to Joao"))
+
+    reply = s.loop.handle(USER, _user("joao_rio"))
+
+    assert reply.confirmation is not None
+    assert reply.confirmation.action.payee_id == "joao_rio"
+
+
+def test_a_replayed_token_goes_to_the_engine_which_refuses_it_under_r10():
+    s = _setup([_call("propose_transfer", RENT)])
+    token = _propose_rent(s)
+    s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    replay = s.loop.handle(USER, _user("Yes again"), confirmation_token=token)
+
+    assert replay.receipt is None
+    assert replay.decision.rule_ids == ["R10"]
+    assert _kinds(s.ledger) == [
+        "proposal", "decision", "confirmation", "execution", "receipt", "proposal", "decision"
+    ]
+    replayed = _trail(s.ledger)[-2].payload
+    assert replayed["replayed_token"] is True
+    assert replayed["action"]["idempotency_key"] == FIRST_KEY
+    assert len(_entries(s.ledger, "receipt")) == 1
+    assert token not in json.dumps([entry.payload for entry in s.ledger.entries()])
+
+
+def test_a_replayed_payee_token_is_refused_under_r10_and_changes_nothing():
+    s = _setup([_call("add_payee", FLATMATE)])
+    token = s.loop.handle(USER, _user(ADD_FLATMATE)).confirmation.confirmation_token
+    s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+    added = s.mandates[USER]
+
+    replay = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    assert replay.decision.rule_ids == ["R10"]
+    assert s.mandates[USER] == added
+
+
+def test_a_token_replayed_after_a_restart_is_still_refused_under_r10():
+    ledger = HashChainLedger()
+    first = _setup([_call("propose_transfer", RENT)], ledger=ledger)
+    token = _propose_rent(first)
+    first.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    replay = _setup([], ledger=ledger).loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    assert replay.decision.rule_ids == ["R10"]
+
+
+@pytest.mark.parametrize("token", ["made-up-token", "0" * 64])
+def test_a_token_that_was_never_issued_leaves_a_confirmation_rejected_entry(token):
+    s = _setup([])
+
+    reply = s.loop.handle(USER, _user("I confirmed yesterday"), confirmation_token=token)
+
+    assert reply.receipt is None
+    assert _kinds(s.ledger) == ["confirmation_rejected"]
+    assert _trail(s.ledger)[0].payload["reason"] == "never_issued"
+    assert token not in json.dumps([entry.payload for entry in s.ledger.entries()])
+
+
+def test_a_token_refused_at_confirmation_is_rejected_with_that_reason_when_tried_again():
+    s = _setup([_call("propose_transfer", RENT)])
+    token = _propose_rent(s)
+    s.mandates[USER] = s.mandates[USER].model_copy(update={"allowed_payees": set()})
+    s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    s.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    assert _kinds(s.ledger) == ["proposal", "decision", "decision", "confirmation_rejected"]
+    assert _trail(s.ledger)[-1].payload == {
+        **_trail(s.ledger)[-1].payload,
+        "reason": "refused",
+        "idempotency_key": FIRST_KEY,
+    }

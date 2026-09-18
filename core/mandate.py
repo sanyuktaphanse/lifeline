@@ -128,17 +128,15 @@ class DeterministicMandateEngine(MandateEngine):
             rule_ids.append("R04")
             reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
 
-        if action.type is ActionType.TRANSFER:
-            if any(past.idempotency_key == action.idempotency_key for past in history):
-                return Decision(
-                    allowed=False,
-                    reasons=[
-                        f"Idempotency key {action.idempotency_key} was already executed."
-                    ],
-                    rule_ids=["R10"],
-                    tier=tier,
-                )
+        if any(past.idempotency_key == action.idempotency_key for past in history):
+            return Decision(
+                allowed=False,
+                reasons=[f"Idempotency key {action.idempotency_key} was already executed."],
+                rule_ids=["R10"],
+                tier=tier,
+            )
 
+        if action.type is ActionType.TRANSFER:
             missing = [
                 name
                 for name, value in (("amount", action.amount), ("currency", action.currency))

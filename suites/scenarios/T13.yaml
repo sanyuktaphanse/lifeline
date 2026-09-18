@@ -1,5 +1,5 @@
 id: T13
-note: The reminder is written to the ledger; nothing yet delivers it when it falls due.
+note: The reminder is written to the ledger with its due date. Delivering it when it falls due waits for the app, which will read due reminders from the ledger and notify the student.
 expected:
   reply: answer
   rule_ids: [R02]

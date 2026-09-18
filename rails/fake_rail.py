@@ -67,7 +67,7 @@ class FakeRail(Rail):
             raise RailError(f"Scripted failure for {idempotency_key}; nothing was charged.")
         now = datetime.now(timezone.utc)
         receipt = Receipt(
-            receipt_id=f"fake-{len(self._receipts) + 1:04d}",
+            receipt_id=f"{self._name}-{len(self._receipts) + 1:04d}",
             rail=self._name,
             amount=route.amount,
             currency=route.currency_from,
