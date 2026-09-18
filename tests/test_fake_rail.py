@@ -64,6 +64,24 @@ def test_fake_rail_implements_the_rail():
     assert rail.simulated is True
 
 
+def test_name_and_simulated_are_chosen_when_the_rail_is_made():
+    rail = FakeRail(name="wise", simulated=False)
+
+    receipt = _execute(rail, "txn-0700-rent")
+
+    assert rail.name == "wise"
+    assert rail.simulated is False
+    assert receipt.simulated is False
+
+
+def test_the_receipt_takes_simulated_from_the_rail_not_the_route():
+    route = _route().model_copy(update={"simulated": False})
+
+    receipt = FakeRail().execute(route, MANDATE_REF, "txn-0700-rent", TOKEN)
+
+    assert receipt.simulated is True
+
+
 def test_execute_returns_a_completed_receipt_carrying_both_references():
     receipt = _execute(FakeRail(), "txn-0700-rent")
 

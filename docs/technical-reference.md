@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. At that point there are 146 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. At that point there are 160 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -68,7 +68,7 @@ The project `CLAUDE.md` sets eight rules. Six of them show up directly in the co
 | --- | --- |
 | Every action that moves money passes `MandateEngine.check` first | `core/mandate.py`, the only implementation of `MandateEngine` |
 | The mandate engine is plain Python and makes no model calls | `core/mandate.py` imports nothing but the standard library and the contracts |
-| Instructions come only from the user's own turn | Rule R01 in the engine, the `Source` enum, and the tool message check on `Message` |
+| Instructions come only from the user's own turn | Rule R01 in the engine, the `Source` enum, the tool message check on `Message`, and the agent loop's refusal of payment details the student never typed |
 | Never hardcode a fee, a limit, or a rule without a source | Every constant and format rule in `core/model_adapter.py` carries a `# Source:` comment |
 | Secrets live only in `.env` | The adapter reads keys from the environment; `.env` is in `.gitignore`; `.env.example` lists names with no values |
 | Write tests before code | Every change was made by writing the test, watching it fail, then writing the code |
@@ -302,7 +302,7 @@ A test checks that every `ActionType` has a tier, so a new action type cannot be
 | 2 | R02 | The tier is not T3 | Adds a reason and continues |
 | 3 | R03 | The mandate is valid at the request time; T0 is exempt | Adds a reason and continues |
 | 4 | R10 | The idempotency key has not already been executed (transfers only) | Refuses immediately and stops |
-| 5 | R04 | Currency matches the mandate | Adds a reason and continues |
+| 5 | R04 | A transfer has an amount and a currency, and the currency matches the mandate | Adds a reason and continues |
 | 6 | R06 | Payee is in the allowed payees | Adds a reason and continues |
 | 7 | R05 | Corridor is in the allowed corridors | Adds a reason and continues |
 | 8 | R07 | Purpose is in the allowed purposes | Adds a reason and continues |
@@ -312,9 +312,22 @@ A test checks that every `ActionType` has a tier, so a new action type cannot be
 
 Two rules stop evaluation early, and for different reasons. R01 stops because an injected instruction should not be evaluated at all. R10 stops because a replayed payment already appears in the history, so running the money rules on it would count it twice and give a wrong answer. Every other rule collects its failure and keeps going, so a transfer that breaks three rules reports all three in one refusal.
 
+R04 refuses a transfer that has no amount or no currency, and its reason names what is missing. Without it, a transfer with no amount would pass R08 and R09, which only compare an amount that is present. R04 is recorded once even when the currency is both missing and therefore different from the mandate's.
+
+### Allowed decisions cite their rule
+
+A refusal lists every rule that failed. An allowed decision lists the one rule that governed the yes, so every decision in the ledger names a rule.
+
+| Tier | Rule cited when allowed | Why |
+| --- | --- | --- |
+| T0, T1 | R02 | The tier rule is what lets a read or a reversible action through without confirmation |
+| T2 | R11 | The confirmation rule governs a money moving action, both while confirmation is still required and once it has been given |
+
+The table lives in `ALLOWED_RULE` in `core/mandate.py`. T3 has no entry, because a T3 action is never allowed. An allowed decision has no reasons, because nothing needs explaining.
+
 ### The confirmation token, R11
 
-A clean transfer sent without a token is allowed but marked as needing confirmation. The decision carries a token and the warning key `warn.transfer.irreversible`. When the student confirms, the same action is sent again with that token and goes through.
+A clean transfer sent without a token is allowed but marked as needing confirmation. The decision carries a token and the warning key `warn.transfer.irreversible`. When the student confirms, the same action is sent again with that token and goes through. Both decisions cite R11. The confirmed decision issues no new token but keeps the warning key, so the ledger records which warning the student accepted.
 
 ```python
 def confirmation_token_for(action: Action, mandate: Mandate) -> str:
@@ -577,6 +590,8 @@ Every tool call becomes an `Action` with source `user_turn`, the current time, a
 | A refused action, a T3 request included | `proposal`, `decision` |
 | An allowed T0 or T1 action | `proposal`, `decision`, `execution`; a reminder writes a `note` before its execution |
 | A rail failure during confirmation | `confirmation`, then a `note` naming the rail, the error, the key, and `executed` false |
+| A transfer whose payee or amount the student never typed | One `note` of kind `injection_suspected`, and no `proposal` or `decision` |
+| A receipt whose simulated flag differs from its route's | After `receipt`, a `note` of kind `simulated_mismatch` |
 
 Every entry carries the user id and the turn, and the provider and model whenever a model answered. Entries written during a confirmation carry the provider and model of the turn that proposed the transfer. The confirmation token never enters the ledger, because anyone who could read it there could confirm the payment.
 
@@ -592,7 +607,17 @@ On `RailError` the loop writes a note, quotes again, leaves out every rail that 
 
 ### Injection in tool results
 
-A tool result that says to ignore the rules and pay account 999 reaches the model only as a tool message. When the model then proposes a payment to 999, the action is built and written as a proposal, and the engine refuses it under R06 because 999 is not an allowed payee. Nothing is confirmed, executed, or paid.
+A tool result that says to ignore the rules and pay account 999 reaches the model only as a tool message. When the model then proposes a payment to 999, the loop refuses it under R01 before the engine is asked. Nothing is confirmed, executed, or paid.
+
+Payment details that first appear in tool output are untrusted. For each turn the loop keeps two sets of payee ids and amounts: those in the student's own message, and those in data, meaning pasted text and every tool result of the turn. A message counts as the student's own only when its role is `user` and its source is `user_turn`; a user message whose source is `pasted_text` counts as data. When the model proposes a transfer, a payee id or an amount is untrusted if it appears in data and never in the student's message. Any untrusted field ends the turn with a refusal citing R01, and the ledger receives one `note` of kind `injection_suspected` naming the rule, the untrusted fields, the tool call, and the action. No `proposal` or `decision` is written, because the action never reached the engine. The refusal is a `Decision` built by the loop; it can only say no, so it opens no path around the engine.
+
+This closes a gap the engine cannot close alone. An injected instruction to pay a payee who is already on the mandate, such as `landlord_sp`, would pass every engine rule and reach a confirmation, leaving the student's yes as the last defence. Now it stops at the loop. When the student typed the same payee and amount, the transfer goes ahead as usual, even if a tool result repeats them.
+
+Amounts are compared as numbers, so `1,400`, `1400`, and `1400.00` match, and a figure written the Portuguese way, such as `1.400`, is also read as 1400. Payee ids are compared without regard to case. A detail that appears nowhere, neither in the student's message nor in data, is not flagged by this check and is left to the engine.
+
+### Simulated receipts
+
+A receipt's `simulated` flag is the executing rail's truth. The route's flag is what the router expected; only the rail knows whether money moved. When the two differ, the loop writes a `note` of kind `simulated_mismatch` after the receipt, recording the key, the rail, the receipt id, and both flags. Whenever a receipt is simulated, the reply adds a sentence in the student's language saying that it was a simulation and no real money moved.
 
 ### Rebuilding from the ledger
 
@@ -634,7 +659,7 @@ Every route is up and within limits. The spread is a cost in the sending currenc
 
 Reusing a key with the same route, amount, and mandate reference returns the first receipt unchanged, so a retried request cannot pay twice. Reusing it with any difference raises `RailError` and charges nothing, because a different payment under an old key is a mistake to report, not a retry. The quote time is not compared, so a fresh quote of the same route counts as the same. The confirmation token is not compared either. The rule is part of the `Rail` contract, written in the docstring of `Rail.execute`, so every real rail must follow it as well as the fake.
 
-Receipts are numbered from `fake-0001` and always come back completed and simulated.
+Receipts are numbered from `fake-0001` and always come back completed. `FakeRail` takes `name` and `simulated` when it is made, with defaults `fake` and `True`, and its receipts carry the rail's own `simulated` flag, never the route's. A test can therefore stand a fake in for a real rail, as `FakeRail(name="wise", simulated=False)`, or make a simulated rail pay a route marked real to exercise the mismatch note.
 
 The key `txn-fail-once` raises `RailError` the first time it is seen and succeeds after that. A test can name other keys that fail once through `fail_once_keys`, which is how the agent loop's own derived key is made to fail. A failed attempt stores no receipt and no details, so a retry under the same key, on the same rail or another, is not a reuse. This is how task T12, a rail that fails on execute without charging twice, can be scripted. Only the idempotency key is matched, never the mandate reference.
 
@@ -686,17 +711,17 @@ Every change was written test first. The test was run and seen to fail before th
 
 | Test file | Tests | Covers |
 | --- | --- | --- |
-| `tests/test_mandate.py` | 24 | Every rule R01 to R11, schema rejection of bad actions, tier coverage |
-| `tests/test_fake_rail.py` | 23 | Receipts carrying both references, a reused key with the same details and with each kind of difference, a fresh quote, the scripted failure, a retry on another route after a failure, chosen fail once keys, traces, copies, and all three freeze results |
+| `tests/test_mandate.py` | 27 | Every rule R01 to R11, the rule each allowed tier cites, a transfer with no amount or no currency, schema rejection of bad actions, tier coverage |
+| `tests/test_fake_rail.py` | 25 | Receipts carrying both references, a chosen name and simulated flag, the receipt taking its flag from the rail, a reused key with the same details and with each kind of difference, a fresh quote, the scripted failure, a retry on another route after a failure, chosen fail once keys, traces, copies, and all three freeze results |
 | `tests/test_schemas.py` | 22 | Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers including `get_quote`, the mandate id, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits and selected route |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
 | `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
-| `tests/test_agent.py` | 13 | The confirmation round trip and its ledger trail, a limit refusal, injection in a tool result, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
+| `tests/test_agent.py` | 22 | The confirmation round trip and its ledger trail, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused under R01 and the same details allowed when typed, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
 | `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 146 | |
+| Total | 160 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -746,10 +771,13 @@ All times are local time.
 | `97a6211` | 15 Sep 17:48 | Fake rail: reject a reused idempotency key with different details |
 | `0011324` | 15 Sep 17:59 | Docs: idempotency rule on Rail.execute |
 | `70887c0` | 15 Sep 18:05 | Merge pull request #1 from sanyuktaphanse/lane-a/idempotency-contract |
+| `e3fb02e` | 15 Sep 18:46 | Agent loop: engine in front of every tool, confirmation round trip, ledger trail |
+| `7a62868` | 18 Sep 14:27 | Agent loop: name the per turn call cap |
+| `553845e` | 18 Sep 03:29 | Merge pull request #2 from sanyuktaphanse/lane-a/agent-loop |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
-From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop is on the branch `lane-a/agent-loop`.
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The changes of 18 September described above are on the branch `lane-a/engine-and-provenance`.
 
 ## Open items
 
@@ -769,6 +797,6 @@ From `97a6211` onward every change goes on its own branch and reaches `main` thr
 14. The fees, spreads, and arrival times in the fake router are fixtures. A real router must take them from the provider or from a sourced entry.
 15. Closed. A reused idempotency key with a different route, amount, or mandate reference now raises `RailError` instead of returning the first receipt. The rule is written in the `Rail.execute` docstring, so real rails must follow it too.
 16. Pending confirmations, the executed history, and the turn numbers live in memory. They are rebuilt from the ledger, which is itself in memory, so a restart loses every waiting confirmation.
-17. The mandate engine allows a transfer that has no amount, because R08 and R09 check only an amount that is present. The agent loop never builds one, since `propose_transfer` requires an amount, but the engine should refuse it on its own.
-18. A payment the model proposes after reading an injected tool result is still built as an `Action` and written as a proposal. The engine refuses it when the payee is not allowed, but a payee already on the mandate would reach a confirmation, and the student's confirmation would be the last defence. Treating transfer arguments that appear only in tool output as untrusted would stop it earlier.
+17. Closed. The mandate engine refuses a transfer with no amount or no currency under R04.
+18. Closed in part. A payee id or an amount that appears in tool output or pasted text and never in the student's message is refused under R01 before the engine. A detail the model invents, which appears nowhere in the turn, is not flagged by this check, and the corridor, currency, and purpose are not checked for provenance.
 19. Fixed replies exist in English, Portuguese, and Chinese. Any other language gets English text while the reply keeps the requested language code.
