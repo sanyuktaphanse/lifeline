@@ -11,6 +11,7 @@ from contracts.schemas import (
     ConfirmationRequest,
     Decision,
     FreezeResult,
+    FreezeStatus,
     Mandate,
     Message,
     Receipt,
@@ -274,7 +275,16 @@ def test_agent_reply_validates_with_only_the_required_parts():
     assert reply.confirmation is None
     assert reply.decision is None
     assert reply.receipt is None
+    assert reply.freeze is None
     assert (reply.provider, reply.model) == (None, None)
+
+
+def test_agent_reply_carries_an_optional_freeze_result():
+    freeze = FreezeResult(status=FreezeStatus.NOT_SUPPORTED, deep_link="https://example.invalid/x", reason="r")
+
+    reply = AgentReply(text="t", lang="en", ledger_seqs=[1], freeze=freeze)
+
+    assert reply.freeze == freeze
 
 
 def test_confirmation_request_rejects_an_expiry_that_is_not_positive():

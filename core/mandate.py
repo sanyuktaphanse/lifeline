@@ -124,6 +124,10 @@ class DeterministicMandateEngine(MandateEngine):
             rule_ids.append("R04")
             reasons.append("Adding a payee needs a payee id, and this one has none.")
 
+        if action.type is ActionType.FREEZE_CARD and not action.instrument_id:
+            rule_ids.append("R04")
+            reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
+
         if action.type is ActionType.TRANSFER:
             if any(past.idempotency_key == action.idempotency_key for past in history):
                 return Decision(

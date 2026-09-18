@@ -43,6 +43,7 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 NUMBER = re.compile(r"\d(?:[\d.,]*\d)?")
 DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
+MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
     {
@@ -148,6 +149,7 @@ TEXTS = {
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
+        "payee_exists": "{payee} is already a payee, so nothing changed.",
         "frozen": "Done. Card {instrument} is frozen.",
         "freeze_not_supported": "Lifeline could not freeze card {instrument} directly, because the issuer does not allow it. Freeze it now in the issuer's app: {deep_link}",
         "freeze_failed": "Lifeline could not freeze card {instrument}: {reason} Freeze it now in the issuer's app.",
@@ -166,6 +168,7 @@ TEXTS = {
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
+        "payee_exists": "{payee} já é um destinatário, então nada mudou.",
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
         "freeze_not_supported": "O Lifeline não conseguiu bloquear o cartão {instrument} diretamente, porque o emissor não permite. Bloqueie agora no app do emissor: {deep_link}",
         "freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}: {reason} Bloqueie agora no app do emissor.",
@@ -184,6 +187,7 @@ TEXTS = {
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
+        "payee_exists": "{payee} 已经是收款人，因此没有任何更改。",
         "frozen": "已完成。卡片 {instrument} 已冻结。",
         "freeze_not_supported": "Lifeline 无法直接冻结卡片 {instrument}，因为发卡机构不允许。请立即在发卡机构的应用中冻结：{deep_link}",
         "freeze_failed": "Lifeline 无法冻结卡片 {instrument}：{reason} 请立即在发卡机构的应用中冻结。",
@@ -246,9 +250,17 @@ class _Trail:
     turn: int
     provider: str | None = None
     model: str | None = None
+    mandate_id: str | None = None
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+
+
+def _next_version(mandate_id: str) -> str:
+    match = MANDATE_VERSION.fullmatch(mandate_id)
+    if match is None:
+        return f"{mandate_id}-v2"
+    return f"{match['base']}{int(match['number']) + 1}"
 
 
 def _now() -> datetime:
@@ -313,7 +325,12 @@ class AgentLoop:
         self._history: dict[str, list[Action]] = {}
         self._turns: dict[str, int] = {}
         self._receipt_rails: dict[str, dict[str, str]] = {}
+        self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
         self._rebuild_from_ledger()
+
+    def mandate_version(self, mandate_id: str) -> Mandate | None:
+        version = self._versions.get(mandate_id)
+        return None if version is None else version.model_copy(deep=True)
 
     def handle(
         self, user_id: str, message: Message, confirmation_token: str | None = None
@@ -327,7 +344,7 @@ class AgentLoop:
     def _converse(self, user_id: str, mandate: Mandate, lang: str, message: Message) -> AgentReply:
         turn = self._turns.get(user_id, 0) + 1
         self._turns[user_id] = turn
-        trail = _Trail(user_id, turn)
+        trail = _Trail(user_id, turn, mandate_id=mandate.id)
         if message.role is Role.USER and message.source is Source.USER_TURN:
             trail.from_user.add(message.text, Source.USER_TURN)
         else:
@@ -387,7 +404,8 @@ class AgentLoop:
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        untrusted = _untrusted_fields(trail, action) if action.type is ActionType.TRANSFER else {}
+        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE)
+        untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
@@ -483,6 +501,8 @@ class AgentLoop:
             pending.routes, pending.selected_route = routes, selected
             text = _text(lang, "confirm", **_route_values(action, selected))
         elif action.type is ActionType.ADD_PAYEE:
+            if action.payee_id in self._mandates[user_id].allowed_payees:
+                return self._reply(trail, lang, _text(lang, "payee_exists", payee=action.payee_id), decision=decision)
             pending.display_name = str(arguments.get("display_name") or action.payee_id)
             hours = self._mandates[user_id].cooling_hours
             text = _text(lang, "confirm_payee", payee=action.payee_id, display_name=pending.display_name, hours=hours)
@@ -506,7 +526,7 @@ class AgentLoop:
             del self._pending[token]
             minutes = int(CONFIRMATION_TTL.total_seconds() // 60)
             return AgentReply(text=_text(lang, "expired", minutes=minutes), lang=lang, ledger_seqs=[])
-        trail = _Trail(user_id, pending.turn, pending.provider, pending.model)
+        trail = _Trail(user_id, pending.turn, pending.provider, pending.model, mandate.id)
         action = pending.action.model_copy(update={"confirmation_token": token})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         if not decision.allowed or decision.requires_confirmation:
@@ -587,24 +607,22 @@ class AgentLoop:
             {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)},
         )
         self._history.setdefault(user_id, []).append(action)
+        freeze: FreezeResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
         else:
-            text = self._freeze(lang, trail, action)
-        return self._reply(trail, lang, text, decision=decision)
+            text, freeze = self._freeze(lang, trail, action)
+        return self._reply(trail, lang, text, decision=decision, freeze=freeze)
 
     def _add_payee(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
     ) -> str:
         payee = action.payee_id or ""
+        if payee in mandate.allowed_payees:
+            return _text(lang, "payee_exists", payee=payee)
         added_at = _now()
         allowed_from = added_at + timedelta(hours=mandate.cooling_hours)
-        self._mandates[user_id] = mandate.model_copy(
-            update={
-                "allowed_payees": mandate.allowed_payees | {payee},
-                "payee_added_at": {**mandate.payee_added_at, payee: added_at},
-            }
-        )
+        version = self._new_version(user_id, payee, added_at)
         self._write(trail, "execution", {"action": _action_json(action), "result": {"payee_added": payee}})
         self._write(
             trail,
@@ -616,6 +634,7 @@ class AgentLoop:
                 "display_name": name,
                 "added_at": added_at.isoformat(),
                 "allowed_from": allowed_from.isoformat(),
+                "new_mandate_id": version.id,
             },
         )
         return _text(
@@ -626,7 +645,22 @@ class AgentLoop:
             allowed_from=allowed_from.isoformat(timespec="seconds"),
         )
 
-    def _freeze(self, lang: str, trail: _Trail, action: Action) -> str:
+    def _new_version(
+        self, user_id: str, payee: str, added_at: datetime, version_id: str | None = None
+    ) -> Mandate:
+        current = self._mandates[user_id]
+        version = current.model_copy(
+            update={
+                "id": version_id or _next_version(current.id),
+                "allowed_payees": current.allowed_payees | {payee},
+                "payee_added_at": {**current.payee_added_at, payee: added_at},
+            }
+        )
+        self._versions[version.id] = version
+        self._mandates[user_id] = version
+        return version
+
+    def _freeze(self, lang: str, trail: _Trail, action: Action) -> tuple[str, FreezeResult]:
         instrument = action.instrument_id or ""
         issuer = instrument.partition(":")[0]
         rail = self._rails.get(issuer)
@@ -642,10 +676,10 @@ class AgentLoop:
             {"action": _action_json(action), "result": {"freeze": result.model_dump(mode="json")}},
         )
         if result.status is FreezeStatus.DONE:
-            return _text(lang, "frozen", instrument=instrument)
+            return _text(lang, "frozen", instrument=instrument), result
         if result.status is FreezeStatus.NOT_SUPPORTED:
-            return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link)
-        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason)
+            return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
+        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
 
     def _offer_next_route(
         self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
@@ -707,6 +741,8 @@ class AgentLoop:
             body["provider"] = trail.provider
         if trail.model is not None:
             body["model"] = trail.model
+        if trail.mandate_id is not None:
+            body["mandate_id"] = trail.mandate_id
         trail.seqs.append(self._ledger.append(ACTOR, kind, body).seq)
 
     def _reply(
@@ -718,6 +754,7 @@ class AgentLoop:
         decision: Decision | None = None,
         confirmation: ConfirmationRequest | None = None,
         receipt: Receipt | None = None,
+        freeze: FreezeResult | None = None,
     ) -> AgentReply:
         return AgentReply(
             text=text,
@@ -725,6 +762,7 @@ class AgentLoop:
             confirmation=confirmation,
             decision=decision,
             receipt=receipt,
+            freeze=freeze,
             ledger_seqs=list(trail.seqs),
             provider=trail.provider,
             model=trail.model,
@@ -741,3 +779,9 @@ class AgentLoop:
             elif entry.kind == "receipt":
                 receipt_id = entry.payload["receipt"]["receipt_id"]
                 self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
+            elif entry.kind == "note" and entry.payload.get("kind") == "payee_added":
+                mandate = self._mandates.get(user_id)
+                payee = entry.payload["payee_id"]
+                if mandate is not None and payee not in mandate.payee_added_at:
+                    added_at = datetime.fromisoformat(entry.payload["added_at"])
+                    self._new_version(user_id, payee, added_at, entry.payload.get("new_mandate_id"))
