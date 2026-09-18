@@ -83,7 +83,9 @@ class Rail(ABC):
         Reusing a key with the same route, amount, and mandate_ref returns the
         original receipt. Reusing it with any difference raises RailError. The
         quote time is not compared, so a fresh quote of the same route counts
-        as the same.
+        as the same. A key is recorded only when a payment executes. A
+        RailError records nothing, so a retry under the same key, on this rail
+        or another, is not a reuse.
         """
 
     @abstractmethod

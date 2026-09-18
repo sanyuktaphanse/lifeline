@@ -1,4 +1,4 @@
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,11 +21,16 @@ REVOLUT_FREEZE_DEEP_LINK = "https://example.invalid/revolut/freeze-card"
 
 
 class FakeRail(Rail):
-    def __init__(self, traces: Mapping[str, TraceResult] | None = None) -> None:
+    def __init__(
+        self,
+        traces: Mapping[str, TraceResult] | None = None,
+        fail_once_keys: Iterable[str] = (FAIL_ONCE_KEY,),
+    ) -> None:
         self._traces = {
             receipt_id: trace.model_copy(deep=True)
             for receipt_id, trace in (traces or {}).items()
         }
+        self._fail_once_keys = frozenset(fail_once_keys)
         self._receipts: dict[str, Receipt] = {}
         self._requests: dict[str, tuple[dict[str, Any], str]] = {}
         self._failed_once: set[str] = set()
@@ -53,7 +58,7 @@ class FakeRail(Rail):
                     "route, amount, or mandate; nothing was charged."
                 )
             return self._receipts[idempotency_key].model_copy(deep=True)
-        if idempotency_key == FAIL_ONCE_KEY and idempotency_key not in self._failed_once:
+        if idempotency_key in self._fail_once_keys and idempotency_key not in self._failed_once:
             self._failed_once.add(idempotency_key)
             raise RailError(f"Scripted failure for {idempotency_key}; nothing was charged.")
         now = datetime.now(timezone.utc)

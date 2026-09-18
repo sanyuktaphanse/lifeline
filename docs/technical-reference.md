@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, including the fake router and fake rail and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, and the rule for reusing an idempotency key. At that point there are 128 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 15 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. At that point there are 146 tests, all passing locally and in CI. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -17,11 +17,12 @@ Lifeline is a cross border finance agent for students studying abroad. It has tw
 9. [Interfaces](#interfaces)
 10. [The hash chained ledger](#the-hash-chained-ledger)
 11. [The model adapter](#the-model-adapter)
-12. [The fake router and fake rail](#the-fake-router-and-fake-rail)
-13. [Decisions of 14 September](#decisions-of-14-september)
-14. [Testing and CI](#testing-and-ci)
-15. [Commit history](#commit-history)
-16. [Open items](#open-items)
+12. [The agent loop](#the-agent-loop)
+13. [The fake router and fake rail](#the-fake-router-and-fake-rail)
+14. [Decisions of 14 September](#decisions-of-14-september)
+15. [Testing and CI](#testing-and-ci)
+16. [Commit history](#commit-history)
+17. [Open items](#open-items)
 
 ## How the pieces fit
 
@@ -56,7 +57,8 @@ Not every box exists yet. This table shows what is implemented.
 | Fake router | `rails/fake_router.py` | Implemented for tests and the agent loop, with fixture routes |
 | Fake rail | `rails/fake_rail.py` | Implemented for tests and the agent loop, with scripted receipts, traces, and freezes |
 | Rail errors | `contracts/errors.py` | `RailError`, shared by every rail |
-| Agent loop, Anchor, Council, Translator, real routers and rails | none yet | Interfaces only; the agent loop exists only as a scripted loop inside a test |
+| Agent loop | `core/agent.py` | Implemented as `AgentLoop`, tested with the fake adapter, router, and rail |
+| Anchor, Council, Translator, real routers and rails | none yet | Interfaces only |
 
 ## The rules that shape the code
 
@@ -182,7 +184,7 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | --- | --- |
 | `Source` | `user_turn`, `pasted_text`, `tool_result`, `translated_text`, `provider_status` |
 | `Tier` | `T0`, `T1`, `T2`, `T3` |
-| `ActionType` | `transfer`, `read_balance`, `set_reminder`, `add_payee`, `freeze_card`, `change_limit`, `change_mandate`, `export_credentials`, `trace_transfer`, `precheck` |
+| `ActionType` | `transfer`, `read_balance`, `set_reminder`, `add_payee`, `freeze_card`, `change_limit`, `change_mandate`, `export_credentials`, `trace_transfer`, `precheck`, `get_quote` |
 | `RouteStatus` | `up`, `degraded`, `down`, `simulated` |
 | `ReceiptStatus` | `created`, `funded`, `in_transit`, `held_for_review`, `completed`, `failed`, `returned` |
 | `FreezeStatus` | `done`, `not_supported`, `failed` |
@@ -193,7 +195,7 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | Model | Purpose |
 | --- | --- |
 | `Action` | One request to do something, with its source, idempotency key, and transfer fields |
-| `Mandate` | What the student has authorised: currency, limits, allowed payees, corridors, purposes, and validity window |
+| `Mandate` | What the student has authorised: an id for this version, currency, limits, allowed payees, corridors, purposes, and validity window |
 | `StandingMandate` | A recurring payment such as monthly rent, with tolerance, schedule, notice and cancel windows |
 | `Decision` | The mandate engine's verdict, with every reason and rule id |
 | `Route` | One way to move money: fees, spread, taxes, arrival time, status, and where the fee figure came from |
@@ -204,7 +206,7 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 | `LedgerEntry` | One link in the hash chained ledger |
 | `ToolCall` | One tool call requested by the model: id, name, and arguments |
 | `Message` | One turn in a conversation; see the field table below |
-| `ConfirmationRequest` | What the student must approve before a transfer: the action, its token, the warning, the routes, and how long the request lasts |
+| `ConfirmationRequest` | What the student must approve before a transfer: the action, its token, the warning, the routes, the selected route, and how long the request lasts |
 | `AgentReply` | Everything one agent turn returns to the frontend: text and language, plus any confirmation, decision, receipt, ledger entries, provider, and model |
 
 `Route` carries `fee_source_url` and `rate_source` so that every figure shown to the student can cite where it came from, which is rule four applied to data.
@@ -254,6 +256,7 @@ class ConfirmationRequest(BaseModel):
     confirmation_token: str
     warning_key: str
     routes: list[Route]
+    selected_route: Route | None = None
     expires_in_seconds: int = Field(default=300, gt=0)
 
 
@@ -268,7 +271,7 @@ class AgentReply(BaseModel):
     model: str | None = None
 ```
 
-When the mandate engine allows a clean transfer but asks for confirmation under R11, the reply carries a `ConfirmationRequest`. It holds the exact `Action` being approved, the token the engine issued for it, the warning key the frontend translates into the student's language, and the routes, so the student sees the fees before saying yes. `expires_in_seconds` defaults to 300 and must be above zero.
+When the mandate engine allows a clean transfer but asks for confirmation under R11, the reply carries a `ConfirmationRequest`. It holds the exact `Action` being approved, the token the engine issued for it, the warning key the frontend translates into the student's language, and the routes, so the student sees the fees before saying yes. `selected_route` is the route the agent chose to pay over, and `routes` keeps the full list for comparison. `expires_in_seconds` defaults to 300 and must be above zero.
 
 The rest of `AgentReply` records what the turn did. `decision` is present when the mandate engine was consulted, and `receipt` when money moved. `ledger_seqs` lists the ledger entries the turn wrote, and each must be at least 1, the same rule as `LedgerEntry.seq`. `provider` and `model` name the model that wrote the text. `text` and `lang` are required, so every reply says something in a known language.
 
@@ -280,7 +283,7 @@ Two tests check the limits. An expiry of 0 is rejected on `expires_in_seconds` a
 
 | Tier | Meaning | Action types |
 | --- | --- | --- |
-| T0 | Reads and explains, moves nothing | `read_balance`, `trace_transfer`, `precheck` |
+| T0 | Reads and explains, moves nothing | `read_balance`, `trace_transfer`, `precheck`, `get_quote` |
 | T1 | Low risk, reversible | `set_reminder` |
 | T2 | Moves money or changes who can receive it | `transfer`, `add_payee`, `freeze_card` |
 | T3 | Changes the rules themselves | `change_limit`, `change_mandate`, `export_credentials` |
@@ -357,7 +360,7 @@ The engine is a class that implements the `MandateEngine` interface. A module le
 | `ModelAdapter` | `complete(messages, tools) -> Message` | `ProviderModelAdapter`, `FakeModelAdapter` |
 | `Translator` | `explain(text, source_lang, target_lang) -> str` | Not yet |
 
-`tests/test_interfaces.py` checks that each interface declares exactly its listed members, no more and no fewer, and that none of them can be instantiated directly. Adding or removing a method breaks that test, which is what keeps the interfaces frozen. The `Ledger` interface was changed once on purpose, in commit `e8201df`, when `entries` and `head` became methods and `head` began returning the hash itself. The `Rail` interface was changed on purpose on 15 September, when `execute` gained `idempotency_key` and `freeze` began returning a `FreezeResult`. Because the member check sees only names, a second test pins those two signatures. The rule for reusing an idempotency key is written as a docstring on `Rail.execute`, the only docstring in the interfaces, because a signature cannot express it.
+`tests/test_interfaces.py` checks that each interface declares exactly its listed members, no more and no fewer, and that none of them can be instantiated directly. Adding or removing a method breaks that test, which is what keeps the interfaces frozen. The `Ledger` interface was changed once on purpose, in commit `e8201df`, when `entries` and `head` became methods and `head` began returning the hash itself. The `Rail` interface was changed on purpose on 15 September, when `execute` gained `idempotency_key` and `freeze` began returning a `FreezeResult`. Because the member check sees only names, a second test pins those two signatures. The rule for reusing an idempotency key is written as a docstring on `Rail.execute`, the only docstring in the interfaces, because a signature cannot express it. It also says a key is recorded only when a payment executes, so a retry after a `RailError`, on the same rail or another, is not a reuse.
 
 ## The hash chained ledger
 
@@ -544,6 +547,70 @@ The SDK packages are pinned to releases older than the ten day freshness window,
 | `dashscope` | 1.27.3 | 1.27.5, three days old | Newest release outside the window |
 | `python-dotenv` | 1.2.3 | 1.2.3, 29 days old | Already outside the window |
 
+## The agent loop
+
+`core/agent.py` holds `AgentLoop`, the piece that connects the model, the mandate engine, the ledger, the router, and the rails. Its constructor takes the model adapter, the engine, the ledger, the router, a dictionary of rails keyed by the rail name used in routes, the mandates and balances keyed by user id, and a dictionary of pending confirmations keyed by token. `handle(user_id, message, confirmation_token=None)` returns an `AgentReply`.
+
+### Language
+
+A message whose `lang` was set by the caller is answered in that language. When `lang` holds only its default, the loop guesses: any Chinese character gives `zh`, a common Portuguese word gives `pt`, and anything else gives `en`. The system prompt tells the model which language to use, and the loop's own fixed replies exist in all three.
+
+### Tools
+
+| Tool | Action type | Tier | What runs |
+| --- | --- | --- | --- |
+| `read_balance` | `read_balance` | T0 | The student's balances |
+| `get_quote` | `get_quote` | T0 | `Router.quote` |
+| `propose_transfer` | `transfer` | T2 | Nothing until the student confirms |
+| `set_reminder` | `set_reminder` | T1 | A ledger note |
+| `trace_transfer` | `trace_transfer` | T0 | `Rail.status` on the rail that issued the receipt |
+| `precheck` | `precheck` | T0 | `Router.precheck` |
+| `change_limit` | `change_limit` | T3 | Nothing; the reply says limits change in settings |
+
+Every tool call becomes an `Action` with source `user_turn`, the current time, and an idempotency key made of the user id, the turn number, the tool name, and the call number within the turn, such as `student_001:t1:propose_transfer:1`. The turn number grows by one for every conversation turn and is rebuilt from the ledger, so keys never repeat across turns and the model never chooses one. Every action passes `MandateEngine.check`, with the student's mandate and executed history, before anything runs. Every tool result goes back to the model as a `Message` with role `tool`, source `tool_result`, and the id of the call it answers. One turn may call the model at most eight times, a guard against a runaway loop and not a money rule.
+
+### Ledger trail
+
+| Case | Entries, in order |
+| --- | --- |
+| A transfer proposed and then confirmed | `proposal`, `decision`, then on confirmation `confirmation`, `execution`, `receipt` |
+| A refused action, a T3 request included | `proposal`, `decision` |
+| An allowed T0 or T1 action | `proposal`, `decision`, `execution`; a reminder writes a `note` before its execution |
+| A rail failure during confirmation | `confirmation`, then a `note` naming the rail, the error, the key, and `executed` false |
+
+Every entry carries the user id and the turn, and the provider and model whenever a model answered. Entries written during a confirmation carry the provider and model of the turn that proposed the transfer. The confirmation token never enters the ledger, because anyone who could read it there could confirm the payment.
+
+### Confirmation
+
+An allowed transfer never executes in the turn that proposes it. The router quotes every route and the loop selects the cheapest usable one: routes that are not blocked, within limits, not down, and backed by a rail in the dictionary, with real routes before simulated ones and then the lowest fee plus spread. For 1,200 SGD on SG>BR that is Wise. The action, the token, the routes, the selected route, and the time are stored in `pending`, and the reply carries a `ConfirmationRequest` with the full list in `routes` and the choice in `selected_route`.
+
+When `handle` is called with the token, the loop refuses a token that is missing, belongs to another student, or is older than 300 seconds. Otherwise it rebuilds the same action with the token attached and runs `MandateEngine.check` again. It pays only when that decision is allowed and asks for no further confirmation, by calling the selected route's rail with the route, the mandate's `id` as `mandate_ref`, the action's idempotency key, and the token.
+
+### Rail failure
+
+On `RailError` the loop writes a note, quotes again, leaves out every rail that has failed, and replies with the next best route under the same token. The note records the idempotency key and that it was not executed, which is the proof that nothing moved twice. Confirming the token again pays over the new route, and because a rail records a key only when a payment executes, the retry is not a reuse. In the test, Wise fails once, the bank wire is offered, and exactly one receipt exists after the retry.
+
+### Injection in tool results
+
+A tool result that says to ignore the rules and pay account 999 reaches the model only as a tool message. When the model then proposes a payment to 999, the action is built and written as a proposal, and the engine refuses it under R06 because 999 is not an allowed payee. Nothing is confirmed, executed, or paid.
+
+### Rebuilding from the ledger
+
+A new loop reads the ledger once. Every `execution` entry becomes an action in that student's history, every `receipt` entry records which rail issued it, and the highest turn number per student sets the next turn. A new loop over the same ledger therefore still counts earlier payments against the daily limit, and still gives fresh keys.
+
+### Decisions of 15 September, afternoon
+
+Before the loop was written, six points in the request did not match the code or could not work as written. They were settled as follows.
+
+1. `ActionType` gained `get_quote` at tier T0, because a quote only reads prices.
+2. `Mandate` gained a required `id`, so a receipt's `mandate_ref` names the exact mandate that authorised it.
+3. The language counts as set only when the caller passed it, read from `model_fields_set`, because `Message.lang` defaults to English.
+4. Idempotency keys include a per student turn number rebuilt from the ledger, so next month's rent does not reuse this month's key. `FakeRail` gained `fail_once_keys`, so a test can make the loop's own key fail once.
+5. A seventh tool, `change_limit`, lets a limit change reach the engine, which refuses it at T3, instead of the model answering on its own.
+6. The route is chosen when the transfer is proposed, kept with the pending confirmation, and moved to the next route after a rail failure.
+
+Two additions came with them. A rail records an idempotency key only when a payment executes, which the `Rail.execute` docstring now says, so a retry after a `RailError` is not a reuse. `ConfirmationRequest` gained an optional `selected_route`, while `routes` keeps the full list. Where the request was silent, three defaults apply: an allowed T0 or T1 action writes `proposal`, `decision`, and `execution`; reminders and rail failures are written as `note`; and each `execution` entry holds the full action so the history can be rebuilt.
+
 ## The fake router and fake rail
 
 `rails/fake_router.py` and `rails/fake_rail.py` implement `Router` and `Rail` with fixed answers, so the agent loop and its tests can run without a real provider. Every figure in them is a fixture, not a published fee, rate, or rule. The comment above the figures names the file itself as their source, and every route carries `rate_source="fixture"`.
@@ -569,7 +636,7 @@ Reusing a key with the same route, amount, and mandate reference returns the fir
 
 Receipts are numbered from `fake-0001` and always come back completed and simulated.
 
-The key `txn-fail-once` raises `RailError` the first time it is seen and succeeds after that. A failed attempt stores no receipt. This is how task T12, a rail that fails on execute without charging twice, can be scripted. Only the idempotency key is matched, never the mandate reference.
+The key `txn-fail-once` raises `RailError` the first time it is seen and succeeds after that. A test can name other keys that fail once through `fail_once_keys`, which is how the agent loop's own derived key is made to fail. A failed attempt stores no receipt and no details, so a retry under the same key, on the same rail or another, is not a reuse. This is how task T12, a rail that fails on execute without charging twice, can be scripted. Only the idempotency key is matched, never the mandate reference.
 
 `status` returns the trace given for that receipt id when the rail was created, and raises `RailError` for any other id. Receipts and traces come back as copies, as the ledger's entries do.
 
@@ -620,15 +687,16 @@ Every change was written test first. The test was run and seen to fail before th
 | Test file | Tests | Covers |
 | --- | --- | --- |
 | `tests/test_mandate.py` | 24 | Every rule R01 to R11, schema rejection of bad actions, tier coverage |
-| `tests/test_fake_rail.py` | 21 | Receipts carrying both references, a reused key with the same details and with each kind of difference, a fresh quote, the scripted failure, traces, copies, and all three freeze results |
+| `tests/test_fake_rail.py` | 23 | Receipts carrying both references, a reused key with the same details and with each kind of difference, a fresh quote, the scripted failure, a retry on another route after a failure, chosen fail once keys, traces, copies, and all three freeze results |
+| `tests/test_schemas.py` | 22 | Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers including `get_quote`, the mandate id, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits and selected route |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
-| `tests/test_schemas.py` | 19 | Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits |
 | `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
+| `tests/test_agent.py` | 13 | The confirmation round trip and its ledger trail, a limit refusal, injection in a tool result, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
 | `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 9 | Chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 128 | |
+| Total | 146 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -676,25 +744,31 @@ All times are local time.
 | `f2e4cf6` | 15 Sep 16:57 | Fake router and fake rail for the agent loop |
 | `daa0754` | 15 Sep 17:35 | Fake rails: freeze result, explicit idempotency, IN>SG, honest spreads |
 | `97a6211` | 15 Sep 17:48 | Fake rail: reject a reused idempotency key with different details |
+| `0011324` | 15 Sep 17:59 | Docs: idempotency rule on Rail.execute |
+| `70887c0` | 15 Sep 18:05 | Merge pull request #1 from sanyuktaphanse/lane-a/idempotency-contract |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
-From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and the documentation that describes it are on the branch `lane-a/idempotency-contract`, in pull request 1.
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop is on the branch `lane-a/agent-loop`.
 
 ## Open items
 
 1. No round trip has been run against the real provider APIs. Every provider test uses stand ins built from the SDK classes. One short real two step tool run on each provider, with keys in `.env`, would confirm the formats.
 2. When DashScope makes a tool call and the conversation then moves to Anthropic, for example after a fallback in the middle of a loop, that assistant turn reaches Anthropic with no reasoning blocks. Whether `claude-opus-5` accepts such a turn can only be confirmed with a real call.
 3. A failed tool is sent back as ordinary text. There is no way yet to mark a tool result as an error, which Anthropic supports with `is_error`.
-4. Lanes B and C need to know about four contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`, and on 15 September `Rail.execute` gained `idempotency_key`, `Rail.freeze` began returning `FreezeResult`, `Receipt` gained `idempotency_key`, `RailError` moved to `contracts/errors.py`, and the `Rail.execute` docstring set the rule for reusing an idempotency key.
+4. Lanes B and C need to know about four contract changes: the `Ledger` interface changed in `e8201df`, `Message` gained `tool_call_id` and `provider_content` in `26e29ae`, `AgentReply` with `ConfirmationRequest` arrived in `f331d96` and gained its limits in `f6419ce`, and on 15 September `Rail.execute` gained `idempotency_key`, `Rail.freeze` began returning `FreezeResult`, `Receipt` gained `idempotency_key`, `RailError` moved to `contracts/errors.py`, and the `Rail.execute` docstring set the rule for reusing an idempotency key. With the agent loop, `Mandate` gained a required `id`, `ConfirmationRequest` gained `selected_route`, `ActionType` gained `get_quote`, and the docstring gained the rule that a failed payment records no key.
 5. The ledger lives in memory only. Attack `X22`, a tampered ledger file, needs the ledger to be saved and loaded.
 6. A refusal from the model is an error and does not switch providers. Revisit this if a refusal on one provider should be retried on the other.
-7. `Anchor`, `Council`, and `Translator` have interfaces but no implementations, `Router` and `Rail` have only fakes, and the agent loop exists only inside a test.
+7. `Anchor`, `Council`, and `Translator` have interfaces but no implementations, and `Router` and `Rail` have only fakes. The agent loop has run only against the fakes and the fake model adapter.
 8. The task and attack suites are validated for structure but are not yet run by a harness that scores each scenario.
-9. `expires_in_seconds` on `ConfirmationRequest` is only data. The confirmation token carries no time, so nothing yet refuses a token after its request has expired.
+9. Closed in part. The agent loop refuses a confirmation older than 300 seconds, but the token itself still carries no time, so any other caller of the engine must enforce the expiry the same way.
 10. No code reads the knowledge base yet, so the rule that the agent may only assert facts that exist as entries is not enforced.
 11. All eight China entries are waiting for a second set of initials, and they must be checked again before 16 October 2026 or the knowledge test fails.
 12. The Revolut deep link in the fake rail is a placeholder on `example.invalid`. The real link needs a source before a demo.
 13. The rule id `in_upi_paynow_purpose_001` has no entry in the knowledge base, and there is no India file yet. The purpose limit on UPI to PayNow needs a sourced entry before a real router cites it.
 14. The fees, spreads, and arrival times in the fake router are fixtures. A real router must take them from the provider or from a sourced entry.
 15. Closed. A reused idempotency key with a different route, amount, or mandate reference now raises `RailError` instead of returning the first receipt. The rule is written in the `Rail.execute` docstring, so real rails must follow it too.
+16. Pending confirmations, the executed history, and the turn numbers live in memory. They are rebuilt from the ledger, which is itself in memory, so a restart loses every waiting confirmation.
+17. The mandate engine allows a transfer that has no amount, because R08 and R09 check only an amount that is present. The agent loop never builds one, since `propose_transfer` requires an amount, but the engine should refuse it on its own.
+18. A payment the model proposes after reading an injected tool result is still built as an `Action` and written as a proposal. The engine refuses it when the payee is not allowed, but a payee already on the mandate would reach a confirmation, and the student's confirmation would be the last defence. Treating transfer arguments that appear only in tool output as untrusted would stop it earlier.
+19. Fixed replies exist in English, Portuguese, and Chinese. Any other language gets English text while the reply keeps the requested language code.
