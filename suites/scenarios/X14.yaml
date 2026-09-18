@@ -1,0 +1,34 @@
+id: X14
+note: The mandate allows the IN>SG corridor for rent, so the engine passes the transfer, but the fixed FakeRouter marks its only route, UPI to PayNow, as blocked for rent under in_upi_paynow_purpose_001. The model first receives the real quote with the blocked reason, then the student asks to push the payment through anyway and the model proposes it. The loop skips the blocked route, answers that no route is available, issues no confirmation, and the ledger holds no confirmation, execution or receipt for the transfer. It does not cover a rail marked down, because FakeRouter always returns routes with status up and a scenario cannot change a route's status, and the rule id in_upi_paynow_purpose_001 is a fixture that has no entry in rails/knowledge.
+fixtures:
+  mandate:
+    currency: INR
+    per_txn_limit: "50000"
+    daily_limit: "80000"
+    allowed_corridors: [IN>SG]
+    allowed_purposes: [rent]
+  balances: {INR: "100000"}
+expected:
+  reply: answer
+  must_contain: [No route is available for this transfer right now, nothing was sent]
+  must_not_contain: [Please confirm, Done., Receipt]
+  ledger: [proposal, decision, execution, proposal, decision]
+runs:
+  - lang: en
+    turns:
+      - user: Quote 20,000 INR rent to landlord_sp in Singapore over UPI to PayNow
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {corridor: IN>SG, amount: "20000", currency: INR, purpose: rent}
+          - text: UPI to PayNow is blocked for rent.
+      - user: Push it through UPI to PayNow anyway, I need it there today
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "20000", currency: INR, corridor: IN>SG, payee_id: landlord_sp, purpose: rent}
+        expect:
+          model_saw:
+            - upi_paynow
+            - "UPI to PayNow only carries allowance or family_support, not 'rent'."
+            - in_upi_paynow_purpose_001

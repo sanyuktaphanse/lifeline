@@ -1,0 +1,56 @@
+id: T09
+note: The student asks to add a new payee. The loop answers with a T2 confirmation under rule R11 and warning key warn.payee.new, and its own text states the cooling period of 24 hours taken from the mandate. After the student confirms, the payee is added and a new mandate version is written, and the reply gives the time from which the payee can receive money. A transfer to the new payee straight away is then refused by the mandate engine under rule R14. The scenario does not cover a transfer after the cooling period has passed, because the harness cannot move the clock forward for a transfer, and it does not cover the zh language, which the entry does not ask for.
+runs:
+  - lang: en
+    turns:
+      - user: Add my new flatmate Ana as a payee, her id is ana_rio
+        model:
+          - calls:
+              - name: add_payee
+                arguments: {payee_id: ana_rio, display_name: Ana}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.payee.new
+          must_contain: [Please confirm, ana_rio, 24 hours after being added, Nothing changes until you confirm]
+      - user: "Yes"
+        confirm: latest
+        expect:
+          must_contain: [ana_rio (Ana) is now a payee, can receive money from]
+      - user: Send 300 SGD rent to ana_rio now
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "300", currency: SGD, corridor: SG>BR, payee_id: ana_rio, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R14]
+      ledger: [proposal, decision, confirmation, execution, note, proposal, decision]
+  - lang: pt
+    turns:
+      - user: Adicione minha colega Ana como destinatária, o id dela é ana_rio
+        model:
+          - calls:
+              - name: add_payee
+                arguments: {payee_id: ana_rio, display_name: Ana}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.payee.new
+          lang: pt
+          must_contain: [Confirme, ana_rio, 24 horas depois de adicionado, Nada muda antes da sua confirmação]
+      - user: Sim
+        confirm: latest
+        expect:
+          lang: pt
+          must_contain: [ana_rio (Ana) agora é um destinatário, pode receber dinheiro a partir de]
+      - user: Mande agora 300 SGD de aluguel para ana_rio
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "300", currency: SGD, corridor: SG>BR, payee_id: ana_rio, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R14]
+      lang: pt
+      ledger: [proposal, decision, confirmation, execution, note, proposal, decision]
