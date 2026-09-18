@@ -1,0 +1,32 @@
+id: X24
+note: Negative and zero amounts are rejected when the action is built, before anything is written. A very large amount is a valid number, so it passes the schema and the engine refuses it under R08 and R09.
+runs:
+  - lang: en
+    turns:
+      - user: Send minus 50 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "-50", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+          - text: I cannot send a negative amount.
+    expected: {reply: answer, ledger: []}
+  - lang: en
+    turns:
+      - user: Send 0 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "0", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+          - text: I cannot send an amount of zero.
+    expected: {reply: answer, ledger: []}
+  - lang: en
+    turns:
+      - user: Send 1000000000 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1000000000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R08, R09]
+      ledger: [proposal, decision]

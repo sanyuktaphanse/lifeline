@@ -1,0 +1,314 @@
+import json
+import subprocess
+import sys
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from contracts.schemas import AgentReply, Mandate, Message, Role, Source, ToolCall
+from core.agent import AgentLoop
+from core.fake_adapter import FakeModelAdapter
+from core.ledger import HashChainLedger
+from core.mandate import DeterministicMandateEngine
+from rails.fake_rail import FakeRail
+from rails.fake_router import FakeRouter
+
+ROOT = Path(__file__).resolve().parent.parent
+SUITES_DIR = ROOT / "suites"
+SCENARIOS_DIR = SUITES_DIR / "scenarios"
+REPORT_PATH = ROOT / "evidence" / "report.md"
+SUITES = (("tasks", "tasks.yaml"), ("attacks", "attacks.yaml"))
+PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
+TIERS = ("T0", "T1", "T2", "T3")
+# A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
+TEXT_CHECKS = ("must_contain", "must_not_contain")
+
+# Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
+USER = "student_001"
+FIXTURE_MANDATE: dict[str, Any] = {
+    "id": "mandate-student_001-v1",
+    "user_id": USER,
+    "currency": "SGD",
+    "per_txn_limit": "1500",
+    "daily_limit": "2500",
+    "allowed_payees": ["landlord_sp"],
+    "allowed_corridors": ["SG>BR"],
+    "allowed_purposes": ["rent"],
+}
+FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
+FIXTURE_VALIDITY = timedelta(days=30)
+
+
+@dataclass
+class RunResult:
+    langs: list[str]
+    failures: list[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        return not self.failures
+
+
+@dataclass
+class EntryResult:
+    suite: str
+    id: str
+    title: str
+    tier: str | None
+    langs: list[str]
+    status: str
+    runs: list[RunResult] = field(default_factory=list)
+    note: str | None = None
+
+
+def load_suite(path: Path) -> list[dict[str, Any]]:
+    with path.open(encoding="utf-8") as handle:
+        return yaml.safe_load(handle) or []
+
+
+def _mandate(overrides: dict[str, Any]) -> Mandate:
+    now = datetime.now(timezone.utc)
+    fields = {
+        **FIXTURE_MANDATE,
+        "valid_from": now - FIXTURE_VALIDITY,
+        "valid_until": now + FIXTURE_VALIDITY,
+        **overrides,
+    }
+    return Mandate.model_validate(fields)
+
+
+def _rails() -> dict[str, FakeRail]:
+    return {
+        "wise": FakeRail(name="wise", simulated=False),
+        "bank_wire": FakeRail(name="bank_wire", simulated=False),
+        "sim_pix": FakeRail(name="sim_pix", simulated=True),
+        "revolut": FakeRail(name="revolut", simulated=False),
+    }
+
+
+def _response(response: dict[str, Any], number: int) -> Message:
+    calls = [
+        ToolCall(id=call.get("id", f"toolu_{number:02d}_{index}"), name=call["name"], arguments=call.get("arguments", {}))
+        for index, call in enumerate(response.get("calls", []), start=1)
+    ]
+    return Message(
+        role=Role.ASSISTANT, text=response.get("text", ""), tool_calls=calls, provider="fake", model="fake-model"
+    )
+
+
+def reply_kind(reply: AgentReply) -> str:
+    if reply.receipt is not None:
+        return "receipt"
+    if reply.freeze is not None:
+        return "freeze"
+    if reply.confirmation is not None:
+        return "confirmation"
+    if reply.decision is not None and not reply.decision.allowed:
+        return "refusal"
+    return "answer"
+
+
+def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
+    failures = []
+    if "reply" in expect and reply_kind(reply) != expect["reply"]:
+        failures.append(f"{where}: reply was {reply_kind(reply)}, expected {expect['reply']}")
+    if "rule_ids" in expect:
+        rule_ids = reply.decision.rule_ids if reply.decision else []
+        if rule_ids != expect["rule_ids"]:
+            failures.append(f"{where}: rule ids were {rule_ids}, expected {expect['rule_ids']}")
+    if "warning_key" in expect:
+        warning = reply.confirmation.warning_key if reply.confirmation else None
+        if warning != expect["warning_key"]:
+            failures.append(f"{where}: warning key was {warning}, expected {expect['warning_key']}")
+    if "lang" in expect and reply.lang != expect["lang"]:
+        failures.append(f"{where}: reply language was {reply.lang}, expected {expect['lang']}")
+    for text in expect.get("must_contain", []):
+        if text not in reply.text:
+            failures.append(f"{where}: reply text does not contain {text!r}")
+    for text in expect.get("must_not_contain", []):
+        if text in reply.text:
+            failures.append(f"{where}: reply text contains {text!r}")
+    return failures
+
+
+def _token(confirm: Any, replies: list[AgentReply]) -> str:
+    if confirm == "latest":
+        source = next((reply for reply in reversed(replies) if reply.confirmation), None)
+    else:
+        source = replies[int(confirm) - 1]
+    if source is None or source.confirmation is None:
+        raise ValueError(f"confirm {confirm!r} names a reply without a confirmation")
+    return source.confirmation.confirmation_token
+
+
+def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult:
+    langs = [turn.get("lang", run["lang"]) for turn in run["turns"]]
+    result = RunResult(langs=list(dict.fromkeys(langs)))
+    shared, own = scenario.get("expected", {}), run.get("expected", {})
+    expected = {**shared, **own}
+    for key in TEXT_CHECKS:
+        expected[key] = [*shared.get(key, []), *own.get(key, [])]
+    try:
+        responses = [
+            _response(response, number)
+            for number, response in enumerate(
+                (response for turn in run["turns"] for response in turn.get("model", [])), start=1
+            )
+        ]
+        ledger = HashChainLedger()
+        fixtures = scenario.get("fixtures", {})
+        balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
+        loop = AgentLoop(
+            adapter=FakeModelAdapter(responses),
+            engine=DeterministicMandateEngine(),
+            ledger=ledger,
+            router=FakeRouter(),
+            rails=_rails(),
+            mandates={USER: _mandate(fixtures.get("mandate", {}))},
+            balances={USER: balances},
+            pending={},
+        )
+        replies: list[AgentReply] = []
+        for number, turn in enumerate(run["turns"], start=1):
+            message = Message(
+                role=Role.USER,
+                text=turn["user"],
+                lang=turn.get("lang", run["lang"]),
+                source=Source(turn.get("source", Source.USER_TURN.value)),
+            )
+            token = _token(turn["confirm"], replies) if "confirm" in turn else None
+            reply = loop.handle(USER, message, confirmation_token=token)
+            replies.append(reply)
+            result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
+    except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, the error becomes a failed run in the report
+        result.failures.append(f"error: {type(error).__name__}: {error}")
+        return result
+    final = {key: value for key, value in expected.items() if key not in ("ledger", "must_not_contain")}
+    result.failures += _judge("final reply", replies[-1], final)
+    for number, reply in enumerate(replies, start=1):
+        result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
+    kinds = [entry.kind for entry in ledger.entries()]
+    if "ledger" in expected and kinds != expected["ledger"]:
+        result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
+    ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
+    for text in expected.get("must_not_contain", []):
+        if text in ledger_text:
+            result.failures.append(f"ledger contains {text!r}")
+    broken = ledger.verify()
+    if broken is not None:
+        result.failures.append(f"ledger chain breaks at entry {broken}")
+    return result
+
+
+def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -> list[EntryResult]:
+    scenarios_dir = suites_dir / "scenarios" if scenarios_dir is None else scenarios_dir
+    results = []
+    for suite, filename in SUITES:
+        for entry in load_suite(suites_dir / filename):
+            result = EntryResult(
+                suite=suite,
+                id=entry["id"],
+                title=entry["title"],
+                tier=entry.get("tier"),
+                langs=list(entry.get("langs", [])),
+                status=NOT_AUTOMATED,
+            )
+            path = scenarios_dir / f"{entry['id']}.yaml"
+            if path.exists():
+                scenario = load_suite(path)
+                result.note = scenario.get("note")
+                if scenario.get("id") != entry["id"]:
+                    result.runs = [RunResult([], [f"scenario id {scenario.get('id')!r} does not match {entry['id']}"])]
+                else:
+                    result.runs = [run_scenario_run(scenario, run) for run in scenario.get("runs", [])]
+                if not result.runs:
+                    result.runs = [RunResult([], ["scenario has no runs"])]
+                result.status = PASSED if all(run.passed for run in result.runs) else FAILED
+            results.append(result)
+    return results
+
+
+def _row(*cells: object) -> str:
+    return "| " + " | ".join(str(cell) for cell in cells) + " |"
+
+
+def _count_table(title: str, key: str, groups: dict[str, list[EntryResult]]) -> list[str]:
+    lines = [f"## {title}", "", _row(key, "Entries", "Passed", "Failed", "Not automated"), _row(*["---"] * 5)]
+    for name, entries in groups.items():
+        counts = Counter(entry.status for entry in entries)
+        lines.append(_row(name, len(entries), counts[PASSED], counts[FAILED], counts[NOT_AUTOMATED]))
+    return lines + [""]
+
+
+def render_report(results: list[EntryResult], commit: str, generated_at: datetime) -> str:
+    lines = [
+        "# Lifeline evidence report",
+        "",
+        f"Generated by `core/harness.py` at {generated_at.isoformat(timespec='seconds')} from commit `{commit}`.",
+        "Every number and row below is computed from `suites/` and `suites/scenarios/`. "
+        "An entry without a scenario is not automated and is never counted as passed.",
+        "",
+    ]
+    suites = {suite: [r for r in results if r.suite == suite] for suite, _ in SUITES}
+    lines += _count_table("By suite", "Suite", suites)
+    tiers = {tier: [r for r in suites["tasks"] if r.tier == tier] for tier in TIERS}
+    lines += _count_table("By tier, tasks", "Tier", tiers)
+    runs = [run for result in results for run in result.runs]
+    lines += ["## By language, runs", "", _row("Language", "Runs", "Passed", "Failed"), _row(*["---"] * 4)]
+    for lang in sorted({lang for run in runs for lang in run.langs}):
+        chosen = [run for run in runs if lang in run.langs]
+        passed = sum(run.passed for run in chosen)
+        lines.append(_row(lang, len(chosen), passed, len(chosen) - passed))
+    lines += ["", "## Automated entries", "", _row("Id", "Suite", "Tier", "Title", "Result", "Languages run", "Languages declared", "Note"), _row(*["---"] * 8)]
+    for result in results:
+        if result.status != NOT_AUTOMATED:
+            run_langs = ", ".join(dict.fromkeys(lang for run in result.runs for lang in run.langs))
+            lines.append(
+                _row(result.id, result.suite, result.tier or "", result.title, result.status, run_langs, ", ".join(result.langs), result.note or "")
+            )
+    failed = [result for result in results if result.status == FAILED]
+    if failed:
+        lines += ["", "## Failures", ""]
+        for result in failed:
+            for run in result.runs:
+                for failure in run.failures:
+                    lines.append(f"1. {result.id}, run in {', '.join(run.langs) or 'no language'}: {failure}")
+    lines += ["", "## Not automated", "", _row("Id", "Suite", "Tier", "Title", "Result"), _row(*["---"] * 5)]
+    for result in results:
+        if result.status == NOT_AUTOMATED:
+            lines.append(_row(result.id, result.suite, result.tier or "", result.title, result.status))
+    return "\n".join(lines) + "\n"
+
+
+def _commit() -> str:
+    try:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        return f"unknown, git failed: {error}"
+    return f"{head}, with uncommitted changes" if dirty else head
+
+
+def main() -> int:
+    results = evaluate()
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc)), encoding="utf-8")
+    counts = Counter(result.status for result in results)
+    print(
+        f"{REPORT_PATH.relative_to(ROOT)}: {counts[PASSED]} passed, {counts[FAILED]} failed, "
+        f"{counts[NOT_AUTOMATED]} not automated"
+    )
+    return 1 if counts[FAILED] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

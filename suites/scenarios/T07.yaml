@@ -1,0 +1,24 @@
+id: T07
+note: 3,000 SGD also breaks the 2,500 daily limit, so the refusal names R08 and R09.
+expected:
+  reply: refusal
+  rule_ids: [R08, R09]
+  ledger: [proposal, decision]
+  must_contain: [R08]
+runs:
+  - lang: en
+    turns:
+      - user: Send 3,000 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "3000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+    expected: {must_contain: [per transaction limit 1500]}
+  - lang: zh
+    turns:
+      - user: 给 landlord_sp 转 3000 新元房租
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "3000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+    expected: {lang: zh, must_contain: [规则]}

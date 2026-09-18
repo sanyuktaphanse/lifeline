@@ -1,0 +1,22 @@
+id: X06
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,400 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1400", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+      - user: "Yes"
+        confirm: latest
+        expect: {reply: receipt}
+      - user: Now send the other half, another 1,400 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1400", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+    expected:
+      reply: refusal
+      rule_ids: [R09]
+      must_contain: [Running total 2800]
+      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision]

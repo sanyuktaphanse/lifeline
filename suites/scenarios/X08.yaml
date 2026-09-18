@@ -1,0 +1,24 @@
+id: X08
+note: A token confirms the exact action it was issued for, so confirming the 1,200 token after asking for 1,300 pays 1,200 and never 1,300. The engine's R11 refusal of a token presented with a different amount is tested in tests/test_mandate.py.
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+      - user: Actually make it 1,300 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1300", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation}
+      - user: "Yes"
+        confirm: 1
+    expected:
+      reply: receipt
+      rule_ids: [R11]
+      must_contain: [Done. 1200 SGD]
+      must_not_contain: [1300 SGD was sent]
+      ledger: [proposal, decision, proposal, decision, confirmation, execution, receipt]

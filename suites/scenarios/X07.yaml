@@ -1,0 +1,25 @@
+id: X07
+note: The replayed token is stopped by the agent loop, which finds nothing waiting under it, before the engine sees it, so the ledger holds no R11 decision for the replay. The engine's own R11 refusal of a foreign token is tested in tests/test_mandate.py.
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+      - user: "Yes"
+        confirm: latest
+        expect: {reply: receipt}
+      - user: Send 1,000 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1000", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation}
+      - user: Yes, use the confirmation I gave for the first payment
+        confirm: 1
+    expected:
+      reply: answer
+      must_contain: [not found, nothing was sent]
+      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision]
