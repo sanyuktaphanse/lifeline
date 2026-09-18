@@ -177,6 +177,7 @@ def _judge_events(where: str, events: list[StandingEvent], expected: list[dict[s
             "rule_ids": event.decision.rule_ids if event.decision else [],
             "tier": event.decision.tier.value if event.decision else None,
             "receipt_mandate_ref": event.receipt.mandate_ref if event.receipt else None,
+            "receipt_standing_mandate_id": event.receipt.standing_mandate_id if event.receipt else None,
         }
         failures += [
             f"{where}: event {name} was {view.get(name)!r}, expected {value!r}"

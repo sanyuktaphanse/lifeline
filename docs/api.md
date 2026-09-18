@@ -54,7 +54,7 @@ The token itself is never written to the ledger; the engine recomputes it from t
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
 | none of these | An answer | `text` only |
 
-The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, `warn.freeze.card`, and `warn.standing.new`, the last for setting up a recurring transfer. Translate them in the app. A payment the student makes under one of their standing mandates, within its pattern, comes back from `/chat` with a `receipt` straight away, decided under rule R12 without a confirmation. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
+The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, `warn.freeze.card`, and `warn.standing.new`, the last for setting up a recurring transfer. Translate them in the app. A payment the student makes under one of their standing mandates, within its pattern, comes back from `/chat` with a `receipt` straight away, decided under rule R12 without a confirmation. A transfer under a standing mandate the student stopped is refused under R12. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
 
 ## GET /health
 
@@ -312,7 +312,8 @@ Response `200`, the payment made:
     "mandate_ref": "mandate-student_001-v1",
     "idempotency_key": "student_001:t1:propose_transfer:1",
     "simulated": false,
-    "executed_at": "2026-09-18T08:17:40.410873Z"
+    "executed_at": "2026-09-18T08:17:40.410873Z",
+    "standing_mandate_id": null
   },
   "freeze": null,
   "ledger_seqs": [
@@ -742,6 +743,101 @@ Response `200`:
 
 An `action_kind` the router knows nothing about returns empty lists and `ready` null, not an error.
 
+## Standing mandates
+
+A standing mandate is a recurring transfer the student confirms once, such as monthly rent. It is set up through `/chat` and `/confirm` like any T2 action, with the warning key `warn.standing.new`. Its runs happen on their own:
+
+1. While the API runs, it checks for due runs once a minute. It needs no request from the app, and it writes to the ledger and to the server's log.
+2. `POST /standing/run_due` makes the same check at a chosen time, for demos and tests. It is refused with `403` when `LIFELINE_ENV` is `production`, because choosing the time would let a caller bring a run forward.
+
+Each check returns standing events. The first check inside a run's window gives a `notice`, with the time until which the student can cancel; the app should show it. Once that window has passed, a later check gives a `run`, with the decision under rule R12 and the receipt. The other kinds are `skipped` for a cancelled run, `needs_student` for a run the mandate engine would not allow without the student, and `rail_failed` when no route could pay. A student cancels a run, or stops a standing mandate for good, through `/chat`.
+
+A run's receipt names the mandate version it was paid under in `mandate_ref`, like every receipt, and the standing mandate in `standing_mandate_id`. Every other receipt has `standing_mandate_id` null.
+
+### POST /standing/run_due
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `now` | string | yes | An ISO 8601 time with a time zone; a time without one is a `422` |
+
+Request, at the notice time of the next run of a rent standing mandate:
+
+```json
+{
+  "now": "2026-09-29T00:01:00+00:00"
+}
+```
+
+Response `200`:
+
+```json
+[
+  {
+    "kind": "notice",
+    "user_id": "student_001",
+    "standing_mandate_id": "student_001-standing-1-1",
+    "period": "2026-10",
+    "due_at": "2026-10-01T00:00:00Z",
+    "amount": "1200",
+    "currency": "SGD",
+    "payee_id": "landlord_sp",
+    "cancel_until": "2026-09-30T00:01:00Z",
+    "decision": null,
+    "receipt": null
+  }
+]
+```
+
+Request, a day later, once the cancel window has passed:
+
+```json
+{
+  "now": "2026-09-30T00:02:00+00:00"
+}
+```
+
+Response `200`:
+
+```json
+[
+  {
+    "kind": "run",
+    "user_id": "student_001",
+    "standing_mandate_id": "student_001-standing-1-1",
+    "period": "2026-10",
+    "due_at": "2026-10-01T00:00:00Z",
+    "amount": "1200",
+    "currency": "SGD",
+    "payee_id": "landlord_sp",
+    "cancel_until": null,
+    "decision": {
+      "allowed": true,
+      "reasons": [],
+      "rule_ids": [
+        "R12"
+      ],
+      "tier": "T1",
+      "requires_confirmation": false,
+      "warning_key": null,
+      "confirmation_token": null
+    },
+    "receipt": {
+      "receipt_id": "wise-0001",
+      "rail": "wise",
+      "amount": "1200",
+      "currency": "SGD",
+      "status": "completed",
+      "stage_entered_at": "2026-09-18T10:07:40.658244Z",
+      "mandate_ref": "mandate-student_001-v2",
+      "idempotency_key": "student_001:standing:student_001-standing-1-1:2026-10",
+      "simulated": false,
+      "executed_at": "2026-09-18T10:07:40.658244Z",
+      "standing_mandate_id": "student_001-standing-1-1"
+    }
+  }
+]
+```
+
 ## Errors
 
 | Status | When | Body |
@@ -750,6 +846,7 @@ An `action_kind` the router knows nothing about returns empty lists and `ready` 
 | `404` | `/trace` for a receipt this student does not hold | `{"detail": "<reason>"}` |
 | `403` | `/trace` or `/precheck` refused by the mandate engine | `{"detail": {"rule_ids": [...], "reasons": [...]}}` |
 | `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long | FastAPI's validation detail |
+| `403` | `/standing/run_due` when `LIFELINE_ENV` is `production` | `{"detail": "<reason>"}` |
 | `503` | `/chat` could not reach a model, such as a missing key | `{"detail": "<reason>"}` |
 
 Unknown user, `404`:

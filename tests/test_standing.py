@@ -123,8 +123,13 @@ def test_an_unknown_standing_mandate_escalates_under_r13():
     assert "no standing mandate standing-x" in _escalated(_run(standing_mandate_id="standing-x"))
 
 
-def test_an_inactive_standing_mandate_escalates_under_r13():
-    assert "not active" in _escalated(_run(), _mandate(_standing(active=False)))
+@pytest.mark.parametrize("source", [Source.STANDING_MANDATE, Source.USER_TURN])
+def test_a_run_under_an_inactive_standing_mandate_is_refused_under_r12(source):
+    decision = check(_run(source=source), _mandate(_standing(active=False)))
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R12"]
+    assert "inactive" in decision.reasons[0]
 
 
 def test_a_standing_mandate_confirmed_after_the_request_escalates_under_r13():
@@ -287,3 +292,15 @@ def test_occurrences_follow_the_window_around_each_due_date():
     assert occurrence_containing(schedule, 48, due + timedelta(hours=24)) is None
     assert next_occurrence(schedule, due + timedelta(hours=24)) == ("2026-11", datetime(2026, 11, 10, tzinfo=timezone.utc))
     assert next_occurrence("monthly:1", datetime(2026, 12, 20, tzinfo=timezone.utc)) == ("2027-01", datetime(2027, 1, 1, tzinfo=timezone.utc))
+
+
+
+def test_deactivating_is_t1_and_needs_a_standing_mandate_on_the_mandate():
+    deactivate = Action(type=ActionType.DEACTIVATE_STANDING_MANDATE, idempotency_key="txn-deact-01", standing_mandate_id=STANDING_ID)
+
+    allowed = check(deactivate, _mandate())
+    unknown = check(deactivate.model_copy(update={"standing_mandate_id": "standing-x"}), _mandate())
+
+    assert TIERS[ActionType.DEACTIVATE_STANDING_MANDATE] is Tier.T1
+    assert (allowed.allowed, allowed.rule_ids, allowed.requires_confirmation) == (True, ["R02"], False)
+    assert unknown.rule_ids == ["R04"]

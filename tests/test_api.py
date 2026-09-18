@@ -366,3 +366,80 @@ def test_a_restarted_app_rebuilds_memory_from_the_conversation_store():
 
     texts = [message.text for message in later.calls[0][0][1:]]
     assert texts == ["What is my balance?", "You have 2,300 SGD and 150 BRL.", "And now?"]
+
+
+STANDING = {
+    "amount": "1200", "currency": "SGD", "corridor": "SG>BR", "payee_id": "landlord_sp", "purpose": "rent",
+    "schedule": "monthly:1", "tolerance_pct": "5", "notice_hours": 48, "cancel_window_hours": 24,
+}
+STANDING_ID = "student_001-standing-1-1"
+
+
+def _with_standing(client: TestClient) -> None:
+    token = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp monthly"}).json()[
+        "confirmation"
+    ]["confirmation_token"]
+    client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+
+
+def _next_notice_and_run(app) -> tuple[str, str]:
+    from datetime import datetime, timedelta, timezone
+
+    from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
+
+    now = datetime.now(timezone.utc)
+    period, due = next_occurrence("monthly:1", now)
+    if due - timedelta(hours=48) <= now:
+        period, due = next_occurrence("monthly:1", due + RUN_WINDOW_AFTER_DUE)
+    notice = due - timedelta(hours=48) + timedelta(minutes=1)
+    return notice.isoformat(), (notice + timedelta(hours=24, minutes=1)).isoformat()
+
+
+def test_standing_run_due_returns_the_notice_then_the_run():
+    app = create_app(adapter=FakeModelAdapter([_call("create_standing_mandate", STANDING)]))
+    client = TestClient(app)
+    _with_standing(client)
+    notice_at, run_at = _next_notice_and_run(app)
+
+    notice = client.post("/standing/run_due", json={"now": notice_at})
+    run = client.post("/standing/run_due", json={"now": run_at})
+
+    assert notice.status_code == 200
+    assert [(e["kind"], e["standing_mandate_id"]) for e in notice.json()] == [("notice", STANDING_ID)]
+    [event] = run.json()
+    assert event["kind"] == "run"
+    assert event["decision"]["rule_ids"] == ["R12"]
+    assert event["decision"]["confirmation_token"] is None
+    assert event["receipt"]["standing_mandate_id"] == STANDING_ID
+    assert event["receipt"]["mandate_ref"] == "mandate-student_001-v2"
+
+
+def test_standing_run_due_needs_an_aware_timestamp():
+    response = _client().post("/standing/run_due", json={"now": "2026-10-01T00:00:00"})
+
+    assert response.status_code == 422
+
+
+def test_standing_run_due_is_refused_in_production(monkeypatch):
+    monkeypatch.setenv("LIFELINE_ENV", "production")
+    monkeypatch.setenv("LIFELINE_CONFIRM_SECRET", "test-secret-for-this-test")
+
+    response = _client().post("/standing/run_due", json={"now": "2026-10-01T00:00:00+00:00"})
+
+    assert response.status_code == 403
+
+
+def test_the_background_tick_runs_due_standing_mandates_while_the_server_runs():
+    import time
+
+    arguments = {**STANDING, "notice_hours": 900, "cancel_window_hours": 24}
+    app = create_app(adapter=FakeModelAdapter([_call("create_standing_mandate", arguments)]), tick_seconds=0.05)
+    with TestClient(app) as client:
+        _with_standing(client)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and "standing_notice" not in json.dumps(client.get(f"/ledger/{USER}").json()):
+            time.sleep(0.05)
+        entries = client.get(f"/ledger/{USER}").json()
+
+    notices = [e for e in entries if e["kind"] == "note" and e["payload"].get("kind") == "standing_notice"]
+    assert len(notices) == 1

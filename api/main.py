@@ -1,3 +1,9 @@
+import asyncio
+import logging
+import os
+import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -7,10 +13,9 @@ import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
-from contracts.interfaces import ModelAdapter
-from contracts.interfaces import Ledger
+from contracts.interfaces import Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
@@ -22,6 +27,7 @@ from contracts.schemas import (
     Role,
     Route,
     Source,
+    StandingEvent,
     TraceResult,
 )
 from core.agent import AgentLoop
@@ -42,6 +48,10 @@ LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 MAX_TEXT_CHARS = 4000
 # Source: this module. Pasted messages and documents run longer than typed text; attack X18 uses a long one.
 MAX_PASTED_CHARS = 20000
+# Source: docs/decisions.md, 18 September 2026. The scheduler checks for due standing runs once a minute.
+TICK_SECONDS = 60.0
+
+logger = logging.getLogger("lifeline.api")
 
 
 class ChatRequest(BaseModel):
@@ -66,6 +76,10 @@ class PrecheckRequest(BaseModel):
     user_id: str
     action_kind: str
     provider: str
+
+
+class RunDueRequest(BaseModel):
+    now: AwareDatetime
 
 
 class VerifyResult(BaseModel):
@@ -135,12 +149,19 @@ def _without_tokens(reply: AgentReply) -> AgentReply:
     return reply.model_copy(update=update)
 
 
+def _event_without_tokens(event: StandingEvent) -> StandingEvent:
+    if event.decision is None:
+        return event
+    return event.model_copy(update={"decision": event.decision.model_copy(update={"confirmation_token": None})})
+
+
 def create_app(
     adapter: ModelAdapter | None = None,
     fixture_path: Path = DEMO_FIXTURE,
     rails: dict[str, FakeRail] | None = None,
     ledger_path: Path | None = None,
     conversations_path: Path | None = None,
+    tick_seconds: float | None = TICK_SECONDS,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
@@ -159,8 +180,39 @@ def create_app(
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
     )
     users = {user_id}
+    # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
+    lock = threading.Lock()
 
-    app = FastAPI(title="Lifeline API")
+    def run_due(now: datetime) -> list[StandingEvent]:
+        with lock:
+            return [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+
+    async def tick() -> None:
+        while True:
+            await asyncio.sleep(tick_seconds)
+            try:
+                events = await asyncio.to_thread(run_due, datetime.now(timezone.utc))
+            except Exception:  # anti-pattern: SILENT-EXCEPT ok, logged with its traceback and the next tick still runs
+                logger.exception("standing tick failed")
+                continue
+            for event in events:
+                logger.info(
+                    "standing %s user=%s standing=%s period=%s receipt=%s",
+                    event.kind,
+                    event.user_id,
+                    event.standing_mandate_id,
+                    event.period,
+                    event.receipt.receipt_id if event.receipt else None,
+                )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        task = asyncio.create_task(tick()) if tick_seconds else None
+        yield
+        if task is not None:
+            task.cancel()
+
+    app = FastAPI(title="Lifeline API", lifespan=lifespan)
     app.state.loop = loop
     app.state.ledger = ledger
     app.add_middleware(
@@ -180,7 +232,8 @@ def create_app(
         return user
 
     def direct(user: str, tool: str, arguments: dict[str, Any], key: str) -> dict[str, Any]:
-        decision, result = loop.act(known(user), tool, arguments)
+        with lock:
+            decision, result = loop.act(known(user), tool, arguments)
         refused(decision)
         if key not in result:
             raise HTTPException(status_code=404, detail=result.get("error", f"No {key} result."))
@@ -201,24 +254,29 @@ def create_app(
         pasted = None
         if request.pasted_text is not None:
             pasted = Message(role=Role.USER, text=request.pasted_text, source=Source.PASTED_TEXT)
-        return _without_tokens(loop.handle(known(request.user_id), message, pasted=pasted))
+        with lock:
+            reply = loop.handle(known(request.user_id), message, pasted=pasted)
+        return _without_tokens(reply)
 
     @app.post("/confirm")
     def confirm(request: ConfirmRequest) -> AgentReply:
         fields = {"lang": request.lang} if request.lang else {}
         message = Message(role=Role.USER, text="", **fields)
-        reply = loop.handle(known(request.user_id), message, confirmation_token=request.confirmation_token)
+        with lock:
+            reply = loop.handle(known(request.user_id), message, confirmation_token=request.confirmation_token)
         return _without_tokens(reply)
 
     @app.get("/ledger/{user}")
     def entries(user: str) -> list[LedgerEntry]:
         known(user)
-        return [entry for entry in ledger.entries() if entry.payload.get("user_id") == user]
+        with lock:
+            return [entry for entry in ledger.entries() if entry.payload.get("user_id") == user]
 
     @app.get("/ledger/{user}/verify")
     def verify(user: str) -> VerifyResult:
         known(user)
-        return VerifyResult(first_broken_seq=ledger.verify())
+        with lock:
+            return VerifyResult(first_broken_seq=ledger.verify())
 
     @app.post("/trace")
     def trace(request: TraceRequest) -> TraceResult:
@@ -229,5 +287,11 @@ def create_app(
     def precheck(request: PrecheckRequest) -> PrecheckResult:
         arguments = {"action_kind": request.action_kind, "provider": request.provider}
         return PrecheckResult.model_validate(direct(request.user_id, "precheck", arguments, "precheck"))
+
+    @app.post("/standing/run_due")
+    def standing_run_due(request: RunDueRequest) -> list[StandingEvent]:
+        if os.environ.get("LIFELINE_ENV") == "production":
+            raise HTTPException(status_code=403, detail="Running standing mandates at a chosen time is for demos and tests only.")
+        return run_due(request.now)
 
     return app
