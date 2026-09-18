@@ -3,7 +3,7 @@ import hmac
 import json
 import os
 from collections.abc import Sequence
-from datetime import date, timezone
+from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
@@ -53,6 +53,7 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
             action.corridor or "",
             action.payee_id or "",
             action.purpose or "",
+            action.instrument_id or "",
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -119,6 +120,10 @@ class DeterministicMandateEngine(MandateEngine):
                 f"{action.requested_at}."
             )
 
+        if action.type is ActionType.ADD_PAYEE and not action.payee_id:
+            rule_ids.append("R04")
+            reasons.append("Adding a payee needs a payee id, and this one has none.")
+
         if action.type is ActionType.TRANSFER:
             if any(past.idempotency_key == action.idempotency_key for past in history):
                 return Decision(
@@ -152,6 +157,17 @@ class DeterministicMandateEngine(MandateEngine):
             if action.payee_id not in mandate.allowed_payees:
                 rule_ids.append("R06")
                 reasons.append(f"Payee {action.payee_id} is not in the allowed payees.")
+
+            added_at = mandate.payee_added_at.get(action.payee_id or "")
+            if added_at is not None:
+                allowed_from = added_at + timedelta(hours=mandate.cooling_hours)
+                if action.requested_at < allowed_from:
+                    rule_ids.append("R14")
+                    reasons.append(
+                        f"Payee {action.payee_id} was added less than "
+                        f"{mandate.cooling_hours} hours ago and can receive transfers from "
+                        f"{allowed_from.astimezone(timezone.utc).isoformat(timespec='seconds')}."
+                    )
 
             if action.corridor not in mandate.allowed_corridors:
                 rule_ids.append("R05")

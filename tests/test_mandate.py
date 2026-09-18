@@ -424,3 +424,67 @@ def test_token_issued_for_one_new_payee_is_refused_for_another():
 
     assert decision.allowed is False
     assert decision.rule_ids == ["R11"]
+
+
+def test_freeze_token_for_one_instrument_is_refused_for_another():
+    mandate = _mandate()
+    first = Action(type=ActionType.FREEZE_CARD, idempotency_key="txn-0800-test", instrument_id="wise:card_01")
+    token = check(first, mandate).confirmation_token
+
+    other = first.model_copy(update={"instrument_id": "wise:card_02", "confirmation_token": token})
+    same = first.model_copy(update={"confirmation_token": token})
+
+    assert check(other, mandate).rule_ids == ["R11"]
+    assert check(same, mandate).allowed is True
+
+
+@pytest.mark.parametrize("payee_id", [None, ""])
+def test_add_payee_without_a_payee_id_is_refused_under_r04(payee_id):
+    action = Action(type=ActionType.ADD_PAYEE, idempotency_key="txn-0801-test", payee_id=payee_id)
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]
+    assert "payee id" in decision.reasons[0]
+    assert decision.confirmation_token is None
+
+
+def test_cooling_hours_default_to_24():
+    assert _mandate().cooling_hours == 24
+    assert _mandate().payee_added_at == {}
+
+
+def _cooling_mandate(added_hours_ago: float) -> Mandate:
+    mandate = _mandate()
+    added_at = datetime.now(timezone.utc) - timedelta(hours=added_hours_ago)
+    return mandate.model_copy(
+        update={
+            "allowed_payees": mandate.allowed_payees | {"new_flatmate"},
+            "payee_added_at": {"new_flatmate": added_at},
+        }
+    )
+
+
+def test_transfer_to_a_payee_inside_the_cooling_window_is_refused_under_r14():
+    mandate = _cooling_mandate(added_hours_ago=2)
+    allowed_from = mandate.payee_added_at["new_flatmate"] + timedelta(hours=24)
+
+    decision = check(Action(**_transfer_fields(payee_id="new_flatmate")), mandate)
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R14"]
+    assert allowed_from.isoformat(timespec="seconds") in decision.reasons[0]
+
+
+def test_transfer_to_a_payee_after_the_cooling_window_is_allowed():
+    decision = check(Action(**_transfer_fields(payee_id="new_flatmate")), _cooling_mandate(added_hours_ago=25))
+
+    assert decision.allowed is True
+    assert decision.rule_ids == ["R11"]
+
+
+def test_cooling_hours_can_be_set_per_mandate():
+    mandate = _cooling_mandate(added_hours_ago=2).model_copy(update={"cooling_hours": 1})
+
+    assert check(Action(**_transfer_fields(payee_id="new_flatmate")), mandate).allowed is True
