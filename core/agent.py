@@ -117,6 +117,12 @@ TOOLS = [
         {"standing_mandate_id": TEXT},
         ["standing_mandate_id"],
     ),
+    _tool(
+        "deactivate_standing_mandate",
+        "Stop a standing mandate for good, by its id. No run is made under it again.",
+        {"standing_mandate_id": TEXT},
+        ["standing_mandate_id"],
+    ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
     _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
     _tool(
@@ -157,6 +163,7 @@ TOOL_ACTIONS = {
     "change_limit": ActionType.CHANGE_LIMIT,
     "create_standing_mandate": ActionType.CREATE_STANDING_MANDATE,
     "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
+    "deactivate_standing_mandate": ActionType.DEACTIVATE_STANDING_MANDATE,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -167,6 +174,7 @@ REQUIRED_ARGUMENTS = {
     "freeze_card": ("instrument_id",),
     "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
     "cancel_standing_run": ("standing_mandate_id",),
+    "deactivate_standing_mandate": ("standing_mandate_id",),
 }
 
 TEXTS = {
@@ -642,6 +650,12 @@ class AgentLoop:
             period = self._next_unrun_period(user_id, standing, action.requested_at)
             self._standing_cancelled.add((user_id, standing.id, period))
             return {"cancelled": {"standing_mandate_id": standing.id, "period": period}}
+        if action.type is ActionType.DEACTIVATE_STANDING_MANDATE:
+            standing = self._standing(user_id, action.standing_mandate_id or "")
+            if not standing.active:
+                return {"deactivated": {"standing_mandate_id": standing.id, "already_inactive": True}}
+            version = self._new_version(user_id, self._without_standing(user_id, standing.id))
+            return {"deactivated": {"standing_mandate_id": standing.id, "new_mandate_id": version.id}}
         if action.type is ActionType.PRECHECK:
             result = self._router.precheck(
                 str(arguments.get("action_kind", "")),
@@ -741,13 +755,11 @@ class AgentLoop:
                 "route": route.model_dump(mode="json"),
             },
         )
-        try:
-            receipt = self._rails[route.rail].execute(route, mandate.id, action.idempotency_key, token)
-        except RailError as error:
-            return self._offer_next_route(lang, trail, token, pending, error)
+        receipt = self._pay_on_route(user_id, trail, action, route, mandate.id, token)
+        if isinstance(receipt, RailError):
+            return self._offer_next_route(lang, trail, token, pending)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
-        self._record_payment(user_id, trail, action, route, receipt, mandate.id)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 
     def _unknown_token(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
@@ -857,6 +869,13 @@ class AgentLoop:
 
     def _with_standing(self, user_id: str, standing: StandingMandate) -> dict[str, Any]:
         return {"standing_mandates": [*self._mandates[user_id].standing_mandates, standing]}
+
+    def _without_standing(self, user_id: str, standing_id: str) -> dict[str, Any]:
+        standing = [
+            s.model_copy(update={"active": False}) if s.id == standing_id else s
+            for s in self._mandates[user_id].standing_mandates
+        ]
+        return {"standing_mandates": standing}
 
     def _create_standing(self, user_id: str, lang: str, trail: _Trail, action: Action, token: str) -> str:
         standing = _standing_from(action, _now(), token)
@@ -974,7 +993,7 @@ class AgentLoop:
         self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
-        receipt = self._pay(user_id, trail, action, standing.id, standing.confirmation_token)
+        receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if receipt is None:
             return StandingEvent(kind="rail_failed", decision=decision, **event)
         return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
@@ -983,7 +1002,7 @@ class AgentLoop:
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, decision: Decision
     ) -> AgentReply:
         standing = self._standing(user_id, action.standing_mandate_id or "")
-        receipt = self._pay(user_id, trail, action, standing.id, standing.confirmation_token)
+        receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -992,18 +1011,34 @@ class AgentLoop:
         self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
     ) -> Receipt | None:
         routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-        route = self._choose(routes, set())
-        if route is None:
-            return None
+        failed: set[str] = set()
+        while (route := self._choose(routes, failed)) is not None:
+            receipt = self._pay_on_route(user_id, trail, action, route, mandate_ref, token)
+            if not isinstance(receipt, RailError):
+                return receipt
+            failed.add(route.rail)
+        return None
+
+    def _pay_on_route(
+        self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
+    ) -> Receipt | RailError:
         try:
             receipt = self._rails[route.rail].execute(route, mandate_ref, action.idempotency_key, token)
         except RailError as error:
+            executed = any(past.idempotency_key == action.idempotency_key for past in self._history.get(user_id, []))
             self._write(
                 trail,
                 "note",
-                {"idempotency_key": action.idempotency_key, "rail": route.rail, "rail_error": str(error), "executed": False},
+                {
+                    "idempotency_key": action.idempotency_key,
+                    "rail": route.rail,
+                    "rail_error": str(error),
+                    "executed": executed,
+                },
             )
-            return None
+            return error
+        if action.standing_mandate_id is not None:
+            receipt = receipt.model_copy(update={"standing_mandate_id": action.standing_mandate_id})
         self._record_payment(user_id, trail, action, route, receipt, mandate_ref)
         return receipt
 
@@ -1020,9 +1055,18 @@ class AgentLoop:
                 "route": route.model_dump(mode="json"),
                 "mandate_ref": mandate_ref,
                 "idempotency_key": action.idempotency_key,
+                **({"standing_mandate_id": action.standing_mandate_id} if action.standing_mandate_id else {}),
             },
         )
-        self._write(trail, "receipt", {"rail": route.rail, "receipt": receipt.model_dump(mode="json")})
+        self._write(
+            trail,
+            "receipt",
+            {
+                "rail": route.rail,
+                "receipt": receipt.model_dump(mode="json"),
+                **({"standing_mandate_id": action.standing_mandate_id} if action.standing_mandate_id else {}),
+            },
+        )
         if route.simulated != receipt.simulated:
             self._write(
                 trail,
@@ -1077,25 +1121,11 @@ class AgentLoop:
         return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
 
     def _offer_next_route(
-        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
+        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation
     ) -> AgentReply:
         action = pending.action
         failed = pending.selected_route
         assert failed is not None, "A rail fails only while paying a transfer's route."
-        executed = any(
-            past.idempotency_key == action.idempotency_key
-            for past in self._history.get(pending.user_id, [])
-        )
-        self._write(
-            trail,
-            "note",
-            {
-                "idempotency_key": action.idempotency_key,
-                "rail": failed.rail,
-                "rail_error": str(error),
-                "executed": executed,
-            },
-        )
         pending.failed_rails.add(failed.rail)
         routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
         selected = self._choose(routes, pending.failed_rails)
@@ -1217,6 +1247,12 @@ class AgentLoop:
             if entry.kind == "proposal" and "standing_run" in entry.payload:
                 run = entry.payload["standing_run"]
                 self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
+            if entry.kind == "execution" and "new_mandate_id" in entry.payload.get("result", {}).get("deactivated", {}):
+                deactivated = entry.payload["result"]["deactivated"]
+                mandate = self._mandates.get(user_id)
+                if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
+                    update = self._without_standing(user_id, deactivated["standing_mandate_id"])
+                    self._new_version(user_id, update, deactivated["new_mandate_id"])
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))

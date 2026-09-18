@@ -303,3 +303,15 @@ def test_agent_reply_rejects_a_ledger_seq_below_one():
     with pytest.raises(ValidationError) as excinfo:
         AgentReply(text="Done.", lang="en", ledger_seqs=[1, 0])
     assert [error["loc"] for error in excinfo.value.errors()] == [("ledger_seqs", 1)]
+
+
+
+def test_a_receipt_may_name_the_standing_mandate_it_ran_under():
+    fields = {
+        "receipt_id": "wise-0001", "rail": "wise", "amount": "1200", "currency": "SGD", "status": "completed",
+        "stage_entered_at": datetime.now(timezone.utc), "mandate_ref": "mandate-student_001-v2",
+        "idempotency_key": "student_001:standing:x:2026-10", "simulated": False, "executed_at": datetime.now(timezone.utc),
+    }
+
+    assert Receipt(**fields).standing_mandate_id is None
+    assert Receipt(**fields, standing_mandate_id="student_001-standing-1-1").standing_mandate_id == "student_001-standing-1-1"

@@ -45,6 +45,7 @@ class ActionType(str, Enum):
     GET_QUOTE = "get_quote"
     CREATE_STANDING_MANDATE = "create_standing_mandate"
     CANCEL_STANDING_RUN = "cancel_standing_run"
+    DEACTIVATE_STANDING_MANDATE = "deactivate_standing_mandate"
 
 
 class RouteStatus(str, Enum):
@@ -185,6 +186,7 @@ class Receipt(BaseModel):
     idempotency_key: str = Field(min_length=8)
     simulated: bool
     executed_at: AwareDatetime
+    standing_mandate_id: str | None = None
 
 
 class TraceResult(BaseModel):

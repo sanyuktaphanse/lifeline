@@ -90,7 +90,7 @@ def _standing_named(action: Action, mandate: Mandate) -> StandingMandate | None:
 
 def _confirmed_standing(action: Action, mandate: Mandate) -> StandingMandate | None:
     standing = _standing_named(action, mandate)
-    if standing is None or not standing.active or standing.confirmed_at > action.requested_at:
+    if standing is None or standing.confirmed_at > action.requested_at:
         return None
     return standing
 
@@ -100,7 +100,7 @@ def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]
     if standing is None:
         return [f"no standing mandate {action.standing_mandate_id} is on mandate {mandate.id}"]
     if not standing.active:
-        return [f"standing mandate {standing.id} is not active"]
+        return []
     if standing.confirmed_at > action.requested_at:
         return [f"standing mandate {standing.id} was confirmed after this request"]
     outside = []
@@ -159,8 +159,10 @@ class DeterministicMandateEngine(MandateEngine):
                 tier=tier,
             )
 
+        named = _standing_named(action, mandate) if standing_run else None
+        inactive = named is not None and not named.active
         outside = _outside_pattern(action, mandate, history) if standing_run else []
-        within_pattern = standing_run and not outside
+        within_pattern = standing_run and not outside and not inactive
         if within_pattern:
             tier = Tier.T1
         escalation = (
@@ -172,6 +174,12 @@ class DeterministicMandateEngine(MandateEngine):
 
         reasons: list[str] = []
         rule_ids: list[str] = []
+
+        if inactive:
+            rule_ids.append("R12")
+            reasons.append(
+                f"Standing mandate {action.standing_mandate_id} is inactive, so no run may be made under it."
+            )
 
         if tier is Tier.T3:
             rule_ids.append("R02")
@@ -211,10 +219,11 @@ class DeterministicMandateEngine(MandateEngine):
                     f"an id, and its terms, and this one has no {', no '.join(missing)}."
                 )
 
-        if action.type is ActionType.CANCEL_STANDING_RUN and _standing_named(action, mandate) is None:
+        standing_actions = (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE)
+        if action.type in standing_actions and _standing_named(action, mandate) is None:
             rule_ids.append("R04")
             reasons.append(
-                f"Cancelling a run needs a standing mandate on mandate {mandate.id}, and "
+                f"{action.type.value} needs a standing mandate on mandate {mandate.id}, and "
                 f"{action.standing_mandate_id or 'none'} is not one."
             )
 
