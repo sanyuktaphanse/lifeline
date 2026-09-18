@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from contracts.schemas import Mandate, Message, ReceiptStatus, Role, Source, Tier, ToolCall
+from contracts.schemas import Mandate, Message, ReceiptStatus, Role, Source, Tier, ToolCall, TraceResult
 from core.agent import AgentLoop, PendingConfirmation, detect_lang
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
@@ -74,10 +74,10 @@ def _honest_rails() -> dict[str, FakeRail]:
     }
 
 
-def _setup(responses, *, ledger=None, rail=None, router=None) -> Setup:
+def _setup(responses, *, ledger=None, rails=None, router=None) -> Setup:
     adapter = FakeModelAdapter(responses)
     ledger = HashChainLedger() if ledger is None else ledger
-    rails = _honest_rails() if rail is None else {"wise": rail, "bank_wire": rail, "sim_pix": rail}
+    rails = _honest_rails() if rails is None else rails
     pending: dict[str, PendingConfirmation] = {}
     loop = AgentLoop(
         adapter=adapter,
@@ -195,13 +195,17 @@ def test_injection_in_a_tool_result_never_moves_money_to_its_account():
     assert reply.confirmation is None
     assert reply.receipt is None
     assert s.pending == {}
-    assert _kinds(s.ledger) == ["proposal", "decision", "execution", "note"]
+    assert _kinds(s.ledger) == [
+        "proposal", "decision", "execution", "proposal", "decision", "injection_suspected"
+    ]
+    assert s.ledger.entries()[3].payload["action"]["source"] == "tool_result"
     executed = [entry.payload["action"] for entry in s.ledger.entries() if entry.kind == "execution"]
     assert [action["type"] for action in executed] == ["precheck"]
 
 
 def test_rail_failure_offers_the_next_route_and_retry_pays_exactly_once():
-    s = _setup([_call("propose_transfer", RENT)], rail=FakeRail(fail_once_keys={FIRST_KEY}))
+    wise = FakeRail(name="wise", simulated=False, fail_once_keys={FIRST_KEY})
+    s = _setup([_call("propose_transfer", RENT)], rails={**_honest_rails(), "wise": wise})
     token = _propose_rent(s)
 
     failed = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
@@ -294,15 +298,15 @@ def test_a_new_loop_rebuilds_history_and_turns_from_the_ledger():
     assert proposal.payload["action"]["idempotency_key"] == "student_001:t2:propose_transfer:1"
 
 
-def _suspected_notes(ledger: HashChainLedger) -> list[dict]:
-    return [
-        entry.payload
-        for entry in ledger.entries()
-        if entry.kind == "note" and entry.payload.get("kind") == "injection_suspected"
-    ]
+def _suspected(ledger: HashChainLedger) -> list[dict]:
+    return [entry.payload for entry in ledger.entries() if entry.kind == "injection_suspected"]
 
 
-def test_mandate_payee_and_amount_seen_only_in_a_tool_result_are_refused_before_the_engine():
+def _proposed_source(ledger: HashChainLedger) -> str:
+    return [entry for entry in ledger.entries() if entry.kind == "proposal"][-1].payload["action"]["source"]
+
+
+def test_mandate_payee_and_amount_seen_only_in_a_tool_result_are_refused_by_the_engine():
     s = _setup(
         [
             _call("precheck", {"action_kind": "enable_pix", "provider": "sim_pix"}),
@@ -318,22 +322,27 @@ def test_mandate_payee_and_amount_seen_only_in_a_tool_result_are_refused_before_
     assert "R01" in reply.text
     assert reply.confirmation is None
     assert s.pending == {}
-    assert _kinds(s.ledger) == ["proposal", "decision", "execution", "note"]
-    [note] = _suspected_notes(s.ledger)
-    assert note["rule_id"] == "R01"
-    assert note["fields"] == ["payee_id", "amount"]
-    assert note["arguments"]["payee_id"] == "landlord_sp"
+    assert _kinds(s.ledger) == [
+        "proposal", "decision", "execution", "proposal", "decision", "injection_suspected"
+    ]
+    assert _proposed_source(s.ledger) == "tool_result"
+    [suspected] = _suspected(s.ledger)
+    assert suspected["fields"] == {"payee_id": "tool_result", "amount": "tool_result"}
+    assert suspected["arguments"]["payee_id"] == "landlord_sp"
+    assert suspected["idempotency_key"] == "student_001:t1:propose_transfer:2"
+    assert "note" not in _kinds(s.ledger)
 
 
-def test_payment_details_seen_only_in_pasted_text_are_refused_before_the_engine():
+def test_payment_details_seen_only_in_pasted_text_are_refused_by_the_engine():
     s = _setup([_call("propose_transfer", {**RENT, "amount": "1400"})])
 
     reply = s.loop.handle(USER, _user(MANDATE_PAYEE_INJECTION, source=Source.PASTED_TEXT))
 
     assert reply.decision.rule_ids == ["R01"]
     assert reply.confirmation is None
-    assert _kinds(s.ledger) == ["note"]
-    assert _suspected_notes(s.ledger)[0]["fields"] == ["payee_id", "amount"]
+    assert _kinds(s.ledger) == ["proposal", "decision", "injection_suspected"]
+    assert _proposed_source(s.ledger) == "pasted_text"
+    assert _suspected(s.ledger)[0]["fields"] == {"payee_id": "pasted_text", "amount": "pasted_text"}
 
 
 def test_an_amount_seen_only_in_a_tool_result_is_refused_even_when_the_user_named_the_payee():
@@ -348,7 +357,7 @@ def test_an_amount_seen_only_in_a_tool_result_is_refused_even_when_the_user_name
     reply = s.loop.handle(USER, _user("What do I need to enable Pix before I pay landlord_sp?"))
 
     assert reply.decision.rule_ids == ["R01"]
-    assert _suspected_notes(s.ledger)[0]["fields"] == ["amount"]
+    assert _suspected(s.ledger)[0]["fields"] == {"amount": "tool_result"}
 
 
 def test_the_same_details_are_allowed_when_the_user_typed_them():
@@ -368,13 +377,14 @@ def test_the_same_details_are_allowed_when_the_user_typed_them():
     assert reply.decision.rule_ids == ["R11"]
     assert reply.confirmation is not None
     assert reply.confirmation.action.amount == Decimal("1400")
-    assert _suspected_notes(s.ledger) == []
+    assert _suspected(s.ledger) == []
+    assert _proposed_source(s.ledger) == "user_turn"
     assert _kinds(s.ledger) == ["proposal", "decision", "execution", "proposal", "decision"]
 
 
 @pytest.mark.parametrize("lang", ["en", "pt", "zh"])
 def test_a_simulated_receipt_says_so_in_the_users_language(lang):
-    s = _setup([_call("propose_transfer", RENT)], rail=FakeRail())
+    s = _setup([_call("propose_transfer", RENT)], rails={**_honest_rails(), "wise": FakeRail(name="wise")})
     token = _propose_rent(s)
 
     reply = s.loop.handle(USER, _user("ok", lang=lang), confirmation_token=token)
@@ -384,7 +394,7 @@ def test_a_simulated_receipt_says_so_in_the_users_language(lang):
 
 
 def test_a_rail_that_disagrees_with_its_route_writes_a_note_and_its_own_flag_wins():
-    s = _setup([_call("propose_transfer", RENT)], rail=FakeRail())
+    s = _setup([_call("propose_transfer", RENT)], rails={**_honest_rails(), "wise": FakeRail(name="wise")})
     token = _propose_rent(s)
 
     reply = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
@@ -402,14 +412,43 @@ def test_a_rail_that_disagrees_with_its_route_writes_a_note_and_its_own_flag_win
 
 
 def test_a_simulated_route_on_a_simulated_rail_writes_no_note_but_still_says_so():
-    rail = FakeRail(name="sim_pix", simulated=True)
-    s = _setup([_call("propose_transfer", RENT)], rail=rail)
+    s = _setup([_call("propose_transfer", RENT)])
     token = _propose_rent(s)
     pending = s.pending[token]
     pending.selected_route = next(route for route in pending.routes if route.rail == "sim_pix")
 
     reply = s.loop.handle(USER, _user("Yes"), confirmation_token=token)
 
+    assert reply.receipt.rail == "sim_pix"
     assert reply.receipt.simulated is True
     assert SIMULATED_TEXT["en"] in reply.text
     assert _kinds(s.ledger) == ["proposal", "decision", "confirmation", "execution", "receipt"]
+
+
+def test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it():
+    trace = TraceResult(
+        receipt_id="fake-0001",
+        status=ReceiptStatus.IN_TRANSIT,
+        stage_entered_at=datetime.now(timezone.utc),
+        typical_duration_hours=24,
+        typical_duration_source="fixture",
+        next_steps=[],
+        warnings=[],
+    )
+    backend = FakeRail(name="wise_backend", simulated=False, traces={"fake-0001": trace})
+    rails = {**_honest_rails(), "wise": backend}
+    ledger = HashChainLedger()
+    first = _setup([_call("propose_transfer", RENT)], ledger=ledger, rails=rails)
+    token = _propose_rent(first)
+
+    paid = first.loop.handle(USER, _user("Yes"), confirmation_token=token)
+
+    assert paid.receipt.rail == "wise_backend"
+    assert "wise_backend" in paid.text
+    second = _setup(
+        [_call("trace_transfer", {"receipt_id": "fake-0001"}), _say("It is in transit.")],
+        ledger=ledger,
+        rails=rails,
+    )
+    second.loop.handle(USER, _user("Where is my rent?"))
+    assert '"in_transit"' in second.adapter.calls[1][0][-1].text

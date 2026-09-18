@@ -68,7 +68,7 @@ class FakeRail(Rail):
         now = datetime.now(timezone.utc)
         receipt = Receipt(
             receipt_id=f"fake-{len(self._receipts) + 1:04d}",
-            rail=route.rail,
+            rail=self._name,
             amount=route.amount,
             currency=route.currency_from,
             status=ReceiptStatus.COMPLETED,

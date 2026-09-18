@@ -25,7 +25,6 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
-from core.tiers import TIERS
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -168,12 +167,14 @@ def _amounts_in(text: str) -> set[Decimal]:
 
 @dataclass
 class _Details:
-    payee_ids: set[str] = field(default_factory=set)
-    amounts: set[Decimal] = field(default_factory=set)
+    payee_ids: dict[str, Source] = field(default_factory=dict)
+    amounts: dict[Decimal, Source] = field(default_factory=dict)
 
-    def add(self, text: str) -> None:
-        self.payee_ids.update(token.casefold() for token in IDENTIFIER.findall(text))
-        self.amounts.update(_amounts_in(text))
+    def add(self, text: str, source: Source) -> None:
+        for token in IDENTIFIER.findall(text):
+            self.payee_ids.setdefault(token.casefold(), source)
+        for amount in _amounts_in(text):
+            self.amounts.setdefault(amount, source)
 
 
 def detect_lang(text: str) -> str:
@@ -237,14 +238,14 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
     }
 
 
-def _untrusted_fields(trail: _Trail, action: Action) -> list[str]:
-    untrusted = []
+def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
+    untrusted: dict[str, Source] = {}
     payee = (action.payee_id or "").casefold()
     if payee and payee not in trail.from_user.payee_ids and payee in trail.from_data.payee_ids:
-        untrusted.append("payee_id")
+        untrusted["payee_id"] = trail.from_data.payee_ids[payee]
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
-        untrusted.append("amount")
+        untrusted["amount"] = trail.from_data.amounts[amount]
     return untrusted
 
 
@@ -287,9 +288,10 @@ class AgentLoop:
         self._turns[user_id] = turn
         trail = _Trail(user_id, turn)
         if message.role is Role.USER and message.source is Source.USER_TURN:
-            trail.from_user.add(message.text)
+            trail.from_user.add(message.text, Source.USER_TURN)
         else:
-            trail.from_data.add(message.text)
+            source = Source.PASTED_TEXT if message.source is Source.USER_TURN else message.source
+            trail.from_data.add(message.text, source)
         messages = [Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)), message]
         decision: Decision | None = None
         calls = 0
@@ -306,7 +308,7 @@ class AgentLoop:
                     return outcome
                 decision, result = outcome
                 text = json.dumps(result, ensure_ascii=False, default=str)
-                trail.from_data.add(text)
+                trail.from_data.add(text, Source.TOOL_RESULT)
                 messages.append(
                     Message(
                         role=Role.TOOL,
@@ -344,13 +346,23 @@ class AgentLoop:
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        if action.type is ActionType.TRANSFER:
-            untrusted = _untrusted_fields(trail, action)
-            if untrusted:
-                return self._refuse_untrusted(lang, trail, call, action, untrusted)
+        untrusted = _untrusted_fields(trail, action) if action.type is ActionType.TRANSFER else {}
+        if untrusted:
+            action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         self._write(trail, "decision", {"idempotency_key": key, "decision": _decision_json(decision)})
+        if untrusted:
+            self._write(
+                trail,
+                "injection_suspected",
+                {
+                    "idempotency_key": key,
+                    "fields": {name: source.value for name, source in untrusted.items()},
+                    "tool": call.name,
+                    "arguments": call.arguments,
+                },
+            )
         if decision.tier is Tier.T3:
             return self._reply(trail, lang, _text(lang, "settings"), decision=decision)
         if action.type is ActionType.TRANSFER:
@@ -361,33 +373,6 @@ class AgentLoop:
         self._history.setdefault(user_id, []).append(action)
         self._write(trail, "execution", {"action": _action_json(action), "result": result})
         return decision, result
-
-    def _refuse_untrusted(
-        self, lang: str, trail: _Trail, call: ToolCall, action: Action, untrusted: list[str]
-    ) -> AgentReply:
-        decision = Decision(
-            allowed=False,
-            reasons=[
-                f"The {' and '.join(untrusted)} of this transfer appeared only in tool output "
-                "or pasted text, never in the student's own message. Payment details from "
-                "data are never instructions."
-            ],
-            rule_ids=["R01"],
-            tier=TIERS[action.type],
-        )
-        self._write(
-            trail,
-            "note",
-            {
-                "kind": "injection_suspected",
-                "rule_id": "R01",
-                "fields": untrusted,
-                "tool": call.name,
-                "arguments": call.arguments,
-                "action": _action_json(action),
-            },
-        )
-        return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
 
     def _run_now(
         self, user_id: str, action: Action, arguments: dict[str, Any], trail: _Trail
@@ -506,7 +491,7 @@ class AgentLoop:
                 "idempotency_key": action.idempotency_key,
             },
         )
-        self._write(trail, "receipt", {"receipt": receipt.model_dump(mode="json")})
+        self._write(trail, "receipt", {"rail": route.rail, "receipt": receipt.model_dump(mode="json")})
         if route.simulated != receipt.simulated:
             self._write(
                 trail,
@@ -623,5 +608,5 @@ class AgentLoop:
             if entry.kind == "execution":
                 self._history.setdefault(user_id, []).append(Action.model_validate(entry.payload["action"]))
             elif entry.kind == "receipt":
-                receipt = entry.payload["receipt"]
-                self._receipt_rails.setdefault(user_id, {})[receipt["receipt_id"]] = receipt["rail"]
+                receipt_id = entry.payload["receipt"]["receipt_id"]
+                self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]

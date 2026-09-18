@@ -12,6 +12,13 @@ from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
 TRANSFER_WARNING_KEY = "warn.transfer.irreversible"
+# Source: project decision of 18 September 2026. Every T2 action needs the
+# confirmation round trip, and each type carries its own warning for the student.
+WARNING_KEYS = {
+    ActionType.TRANSFER: TRANSFER_WARNING_KEY,
+    ActionType.ADD_PAYEE: "warn.payee.new",
+    ActionType.FREEZE_CARD: "warn.freeze.card",
+}
 # Source: the order of evaluation table in docs/technical-reference.md. An allowed
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
 # confirmation rule R11, before and after the student confirms.
@@ -174,19 +181,21 @@ class DeterministicMandateEngine(MandateEngine):
                         f"limit {mandate.daily_limit}."
                     )
 
-            if action.confirmation_token is not None and not hmac.compare_digest(
+        if (
+            tier is Tier.T2
+            and action.confirmation_token is not None
+            and not hmac.compare_digest(
                 action.confirmation_token, self.confirmation_token_for(action, mandate)
-            ):
-                rule_ids.append("R11")
-                reasons.append(
-                    "The confirmation token does not belong to this exact action."
-                )
+            )
+        ):
+            rule_ids.append("R11")
+            reasons.append("The confirmation token does not belong to this exact action.")
 
         if rule_ids:
             return Decision(allowed=False, reasons=reasons, rule_ids=rule_ids, tier=tier)
 
-        is_transfer = action.type is ActionType.TRANSFER
-        needs_token = is_transfer and action.confirmation_token is None
+        confirms = tier is Tier.T2
+        needs_token = confirms and action.confirmation_token is None
 
         return Decision(
             allowed=True,
@@ -194,7 +203,7 @@ class DeterministicMandateEngine(MandateEngine):
             rule_ids=[ALLOWED_RULE[tier]],
             tier=tier,
             requires_confirmation=needs_token,
-            warning_key=TRANSFER_WARNING_KEY if is_transfer else None,
+            warning_key=WARNING_KEYS[action.type] if confirms else None,
             confirmation_token=(
                 self.confirmation_token_for(action, mandate) if needs_token else None
             ),

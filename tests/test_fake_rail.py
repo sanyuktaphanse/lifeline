@@ -74,6 +74,12 @@ def test_name_and_simulated_are_chosen_when_the_rail_is_made():
     assert receipt.simulated is False
 
 
+def test_the_receipt_names_the_rail_that_executed_it_not_the_route():
+    receipt = _execute(FakeRail(name="wise_backend"), "txn-0700-rent")
+
+    assert receipt.rail == "wise_backend"
+
+
 def test_the_receipt_takes_simulated_from_the_rail_not_the_route():
     route = _route().model_copy(update={"simulated": False})
 
@@ -87,7 +93,7 @@ def test_execute_returns_a_completed_receipt_carrying_both_references():
 
     assert isinstance(receipt, Receipt)
     assert receipt.status is ReceiptStatus.COMPLETED
-    assert receipt.rail == "wise"
+    assert receipt.rail == "fake"
     assert receipt.amount == Decimal("1200")
     assert receipt.currency == "SGD"
     assert receipt.mandate_ref == MANDATE_REF
@@ -183,7 +189,6 @@ def test_a_failed_key_is_not_recorded_so_another_route_may_retry_it():
     retry = rail.execute(_route(rail="bank_wire"), MANDATE_REF, FAIL_ONCE_KEY, TOKEN)
 
     assert retry.status is ReceiptStatus.COMPLETED
-    assert retry.rail == "bank_wire"
 
 
 def test_fail_once_keys_can_be_chosen_when_the_rail_is_made():

@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from contracts.schemas import Action, ActionType, Mandate, Source, Tier
-from core.mandate import check
+from core.mandate import WARNING_KEYS, check
 from core.tiers import TIERS
 
 
@@ -378,3 +378,49 @@ def test_transfer_without_an_amount_or_a_currency_is_refused_under_r04(missing):
     assert f"no {missing}" in decision.reasons[0]
     assert decision.requires_confirmation is False
     assert decision.confirmation_token is None
+
+
+def test_every_t2_action_type_has_a_warning_key():
+    assert set(WARNING_KEYS) == {kind for kind, tier in TIERS.items() if tier is Tier.T2}
+
+
+def _t2_action(action_type: ActionType, payee_id: str | None = None, token: str | None = None) -> Action:
+    return Action(
+        type=action_type,
+        idempotency_key="txn-0700-test",
+        payee_id=payee_id,
+        confirmation_token=token,
+    )
+
+
+@pytest.mark.parametrize(
+    ("action_type", "warning_key"),
+    [
+        (ActionType.ADD_PAYEE, "warn.payee.new"),
+        (ActionType.FREEZE_CARD, "warn.freeze.card"),
+    ],
+)
+def test_every_t2_action_needs_the_same_token_round_trip(action_type, warning_key):
+    mandate = _mandate()
+
+    first = check(_t2_action(action_type, "new_flatmate"), mandate)
+    confirmed = check(_t2_action(action_type, "new_flatmate", first.confirmation_token), mandate)
+
+    assert (first.allowed, first.requires_confirmation) == (True, True)
+    assert first.rule_ids == ["R11"]
+    assert first.warning_key == warning_key
+    assert first.confirmation_token
+    assert (confirmed.allowed, confirmed.requires_confirmation) == (True, False)
+    assert confirmed.rule_ids == ["R11"]
+    assert confirmed.warning_key == warning_key
+    assert confirmed.confirmation_token is None
+
+
+def test_token_issued_for_one_new_payee_is_refused_for_another():
+    mandate = _mandate()
+    token = check(_t2_action(ActionType.ADD_PAYEE, "new_flatmate"), mandate).confirmation_token
+
+    decision = check(_t2_action(ActionType.ADD_PAYEE, "stranger_42", token), mandate)
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R11"]
