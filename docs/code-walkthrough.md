@@ -1511,7 +1511,8 @@ CONFIRMATION_TTL = timedelta(
     seconds=ConfirmationRequest.model_fields["expires_in_seconds"].default
 )
 # Source: this module. A guard against a runaway tool loop, not a money rule.
-MAX_MODEL_CALLS = 8
+# The cap is per conversation turn: eight model calls, then the turn ends.
+MAX_MODEL_CALLS_PER_TURN = 8
 
 HAN = re.compile(r"[一-鿿]")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -1532,7 +1533,7 @@ SYSTEM_PROMPT = (
 )
 ```
 
-The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_MODEL_CALLS` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. `HAN` matches any Chinese character, and `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions.
+The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. `HAN` matches any Chinese character, and `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions.
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
@@ -1739,7 +1740,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
         messages = [Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)), message]
         decision: Decision | None = None
         calls = 0
-        for _ in range(MAX_MODEL_CALLS):
+        for _ in range(MAX_MODEL_CALLS_PER_TURN):
             answer = self._adapter.complete(messages, TOOLS)
             trail.provider, trail.model = answer.provider, answer.model
             if not answer.tool_calls:
@@ -1762,7 +1763,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
         return self._reply(trail, lang, _text(lang, "too_many_steps"), decision=decision)
 ```
 
-A conversation turn takes the next turn number and starts a trail. The model sees the system prompt, the student's message, and the tools. The loop then asks the model at most `MAX_MODEL_CALLS` times. `for _ in range(...)` repeats a block a fixed number of times, and `_` says the counter itself is not needed. An answer with no tool calls ends the turn with the model's text. Otherwise the answer joins the conversation and each tool call runs in order. `calls` counts every tool call in the turn and becomes the last part of the idempotency key. A call can end the turn early by returning a finished reply, which is how transfers, refusals of transfers, and tier T3 requests stop the loop, and `isinstance` checks which kind of result came back. Every other result goes back to the model as a `Message` with role `tool`, source `tool_result`, and the id of the call it answers, which is the only form in which tool output ever reaches the model. `json.dumps` with `default=str` writes values such as amounts as text.
+A conversation turn takes the next turn number and starts a trail. The model sees the system prompt, the student's message, and the tools. The loop then asks the model at most `MAX_MODEL_CALLS_PER_TURN` times. `for _ in range(...)` repeats a block a fixed number of times, and `_` says the counter itself is not needed. An answer with no tool calls ends the turn with the model's text. Otherwise the answer joins the conversation and each tool call runs in order. `calls` counts every tool call in the turn and becomes the last part of the idempotency key. A call can end the turn early by returning a finished reply, which is how transfers, refusals of transfers, and tier T3 requests stop the loop, and `isinstance` checks which kind of result came back. Every other result goes back to the model as a `Message` with role `tool`, source `tool_result`, and the id of the call it answers, which is the only form in which tool output ever reaches the model. `json.dumps` with `default=str` writes values such as amounts as text.
 
 ```python
     def _run_tool(

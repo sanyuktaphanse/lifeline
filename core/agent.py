@@ -33,7 +33,8 @@ CONFIRMATION_TTL = timedelta(
     seconds=ConfirmationRequest.model_fields["expires_in_seconds"].default
 )
 # Source: this module. A guard against a runaway tool loop, not a money rule.
-MAX_MODEL_CALLS = 8
+# The cap is per conversation turn: eight model calls, then the turn ends.
+MAX_MODEL_CALLS_PER_TURN = 8
 
 HAN = re.compile(r"[一-鿿]")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -243,7 +244,7 @@ class AgentLoop:
         messages = [Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)), message]
         decision: Decision | None = None
         calls = 0
-        for _ in range(MAX_MODEL_CALLS):
+        for _ in range(MAX_MODEL_CALLS_PER_TURN):
             answer = self._adapter.complete(messages, TOOLS)
             trail.provider, trail.model = answer.provider, answer.model
             if not answer.tool_calls:
