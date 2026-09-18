@@ -1,0 +1,68 @@
+id: T34
+note: The harness stands in for the app's scheduler, calling run_due_standing_mandates at the notice time and again once the cancel window has passed. The receipt's mandate_ref is the standing mandate id. The escalation checks an out of pattern amount; a cancelled run is covered in tests/test_agent.py.
+runs:
+  - lang: en
+    turns:
+      - user: Pay 1,200 SGD rent to landlord_sp in Brazil on the 1st of every month
+        model:
+          - calls:
+              - name: create_standing_mandate
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent, schedule: "monthly:1", tolerance_pct: "5", notice_hours: 48, cancel_window_hours: 24}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.standing.new
+          must_contain: [Nothing is set up until you confirm]
+      - user: "Yes"
+        confirm: latest
+        expect:
+          reply: answer
+          must_contain: [student_001-standing-1-1]
+      - run_due: notice
+        expect:
+          events:
+            - {kind: notice, standing_mandate_id: student_001-standing-1-1}
+      - run_due: after_cancel_window
+        expect:
+          events:
+            - {kind: run, rule_ids: [R12], tier: T1, receipt_mandate_ref: student_001-standing-1-1}
+      - user: Pay this month's standing rent to landlord_sp now, but make it 1,500 SGD
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1500", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent, standing_mandate_id: student_001-standing-1-1}
+    expected:
+      reply: confirmation
+      rule_ids: [R13, R11]
+      warning_key: warn.transfer.irreversible
+      must_contain: [Please confirm]
+      ledger: [proposal, decision, confirmation, execution, note, note, proposal, decision, execution, receipt, proposal, decision]
+  - lang: pt
+    turns:
+      - user: Pagar 1.200 SGD de aluguel para landlord_sp no Brasil todo dia 1
+        model:
+          - calls:
+              - name: create_standing_mandate
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent, schedule: "monthly:1", tolerance_pct: "5", notice_hours: 48, cancel_window_hours: 24}
+        expect: {reply: confirmation, warning_key: warn.standing.new, lang: pt, must_contain: [Confirme]}
+      - user: Sim
+        confirm: latest
+        expect: {lang: pt, must_contain: [Pronto]}
+      - run_due: notice
+        expect:
+          events:
+            - {kind: notice}
+      - run_due: after_cancel_window
+        expect:
+          events:
+            - {kind: run, rule_ids: [R12], tier: T1, receipt_mandate_ref: student_001-standing-1-1}
+      - user: Pague o aluguel deste mês para landlord_sp agora, mas com 1.500 SGD
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1500", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent, standing_mandate_id: student_001-standing-1-1}
+    expected:
+      reply: confirmation
+      rule_ids: [R13, R11]
+      lang: pt
+      ledger: [proposal, decision, confirmation, execution, note, note, proposal, decision, execution, receipt, proposal, decision]

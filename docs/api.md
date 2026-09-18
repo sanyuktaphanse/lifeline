@@ -54,7 +54,7 @@ The token itself is never written to the ledger; the engine recomputes it from t
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
 | none of these | An answer | `text` only |
 
-The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, and `warn.freeze.card`. Translate them in the app. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
+The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, `warn.freeze.card`, and `warn.standing.new`, the last for setting up a recurring transfer. Translate them in the app. A payment the student makes under one of their standing mandates, within its pattern, comes back from `/chat` with a `receipt` straight away, decided under rule R12 without a confirmation. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
 
 ## GET /health
 

@@ -1,6 +1,6 @@
 # Lifeline technical reference
 
-This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. A second set followed the same day: every T2 action needs the confirmation round trip, untrusted payment details reach the engine as data so the engine refuses them under R01, suspected injections are their own ledger entry kind, and a receipt names the rail that executed it. A third set added the T2 tools: `Action` gained `instrument_id`, `Mandate` gained `payee_added_at` and `cooling_hours`, rule R14 holds back transfers to a new payee during the cooling period, and the agent loop can add a payee and freeze a card, with an honest reply when the issuer does not allow the freeze. A fourth set made mandates versioned, rebuilt added payees and the version history from the ledger, made re adding a payee a no op, extended the provenance check to new payees, refused a freeze with no card, and gave `AgentReply` a structured `freeze` field. A fifth set added the evaluation harness, which runs suite entries as scripted scenarios and writes an evidence report. A sixth set added the HTTP API the Next.js app builds against, and a seventh hardened it: pasted text sent apart from the student's words, a ledger kept in a file and rebuilt on start, and the same token offered again after a rail failure. An eighth set gave the loop a conversation memory rebuilt from the ledger, left a ledger entry for every confirmation attempt, capped action amounts at one hundred million, and made receipt ids unique across rails. A ninth set moved the conversation out of the ledger into its own store, which can be erased per student, so the ledger holds money events only. At that point there are 276 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
+This document explains what has been built in the Lifeline repository, why each piece exists, and how the code works. It describes the repository as of 18 September 2026, including the agent loop, the fake router and fake rail, and the contract changes they brought: `FreezeResult`, an explicit idempotency key on `Rail.execute`, `RailError`, the rule for reusing an idempotency key, `Mandate.id`, `ConfirmationRequest.selected_route`, and the `get_quote` action type. It also covers the changes of 18 September: every allowed decision cites the rule that governed it, a transfer with no amount or no currency is refused under R04, payment details that first appear in tool output or pasted text are untrusted, and a receipt's simulated flag is the executing rail's truth. A second set followed the same day: every T2 action needs the confirmation round trip, untrusted payment details reach the engine as data so the engine refuses them under R01, suspected injections are their own ledger entry kind, and a receipt names the rail that executed it. A third set added the T2 tools: `Action` gained `instrument_id`, `Mandate` gained `payee_added_at` and `cooling_hours`, rule R14 holds back transfers to a new payee during the cooling period, and the agent loop can add a payee and freeze a card, with an honest reply when the issuer does not allow the freeze. A fourth set made mandates versioned, rebuilt added payees and the version history from the ledger, made re adding a payee a no op, extended the provenance check to new payees, refused a freeze with no card, and gave `AgentReply` a structured `freeze` field. A fifth set added the evaluation harness, which runs suite entries as scripted scenarios and writes an evidence report. A sixth set added the HTTP API the Next.js app builds against, and a seventh hardened it: pasted text sent apart from the student's words, a ledger kept in a file and rebuilt on start, and the same token offered again after a rail failure. An eighth set gave the loop a conversation memory rebuilt from the ledger, left a ledger entry for every confirmation attempt, capped action amounts at one hundred million, and made receipt ids unique across rails. A ninth set moved the conversation out of the ledger into its own store, which can be erased per student, so the ledger holds money events only. A tenth set added standing mandates: rule R12 lets a run within its pattern go at tier T1 without confirmation, and rule R13 escalates anything outside the pattern to an ordinary T2 transfer. At that point there are 324 tests, all passing locally. For a file by file, line by line explanation of the code itself, read `docs/code-walkthrough.md` alongside this document.
 
 Lifeline is a cross border finance agent for students studying abroad. It has two jobs. Move helps the student send money across borders. Protect helps the student avoid scams, fraud, and costly mistakes. Lifeline never gives investment advice.
 
@@ -176,6 +176,7 @@ No code reads the knowledge base yet, so the first rule is a contract for the ag
 | `Corridor` | Two country codes joined by `>` | `SG>BR` |
 | `PositiveAmount` | `Decimal` greater than zero | `1200` |
 | `ActionAmount` | `Decimal` greater than zero and at most 100,000,000; used by `Action.amount` | `1200` |
+| `StandingSchedule` | `monthly:` and a day from 1 to 28 | `monthly:1` |
 | `NonNegativeAmount` | `Decimal` zero or more | `8.40` |
 | `Hours` | Number zero or more | `24` |
 | `AwareDatetime` | A datetime that carries a time zone | `2026-09-14T12:00:00+00:00` |
@@ -188,9 +189,9 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 
 | Enum | Values |
 | --- | --- |
-| `Source` | `user_turn`, `pasted_text`, `tool_result`, `translated_text`, `provider_status` |
+| `Source` | `user_turn`, `pasted_text`, `tool_result`, `translated_text`, `provider_status`, `standing_mandate` |
 | `Tier` | `T0`, `T1`, `T2`, `T3` |
-| `ActionType` | `transfer`, `read_balance`, `set_reminder`, `add_payee`, `freeze_card`, `change_limit`, `change_mandate`, `export_credentials`, `trace_transfer`, `precheck`, `get_quote` |
+| `ActionType` | `transfer`, `read_balance`, `set_reminder`, `add_payee`, `freeze_card`, `change_limit`, `change_mandate`, `export_credentials`, `trace_transfer`, `precheck`, `get_quote`, `create_standing_mandate`, `cancel_standing_run` |
 | `RouteStatus` | `up`, `degraded`, `down`, `simulated` |
 | `ReceiptStatus` | `created`, `funded`, `in_transit`, `held_for_review`, `completed`, `failed`, `returned` |
 | `FreezeStatus` | `done`, `not_supported`, `failed` |
@@ -200,9 +201,11 @@ Fixed vocabularies are string enums. An unknown value fails validation instead o
 
 | Model | Purpose |
 | --- | --- |
-| `Action` | One request to do something, with its source, idempotency key, transfer fields, and the card a freeze is for |
+| `Action` | One request to do something, with its source, idempotency key, transfer fields, the card a freeze is for, and for standing mandates the standing mandate id and the terms |
 | `Mandate` | What the student has authorised: an id for this version, currency, limits, allowed payees, corridors, purposes, validity window, when each payee added through Lifeline was added, and the cooling period for new payees, 24 hours by default |
 | `StandingMandate` | A recurring payment such as monthly rent, with tolerance, schedule, notice and cancel windows |
+| `StandingTerms` | The terms of a standing mandate the student confirms: schedule, tolerance, notice hours, and cancel window hours, the cancel window no longer than the notice |
+| `StandingEvent` | What `run_due_standing_mandates` returns for the app: a notice, a run with its decision and receipt, a skipped run, a run that needs the student, or a rail failure |
 | `Decision` | The mandate engine's verdict, with every reason and rule id |
 | `Route` | One way to move money: fees, spread, taxes, arrival time, status, and where the fee figure came from |
 | `Receipt` | The record of an executed transfer, its current stage, and the mandate reference and idempotency key it was paid under |
@@ -290,9 +293,11 @@ Two tests check the limits. An expiry of 0 is rejected on `expires_in_seconds` a
 | Tier | Meaning | Action types |
 | --- | --- | --- |
 | T0 | Reads and explains, moves nothing | `read_balance`, `trace_transfer`, `precheck`, `get_quote` |
-| T1 | Low risk, reversible | `set_reminder` |
-| T2 | Moves money or changes who can receive it | `transfer`, `add_payee`, `freeze_card` |
+| T1 | Low risk, reversible | `set_reminder`, `cancel_standing_run` |
+| T2 | Moves money or changes who can receive it | `transfer`, `add_payee`, `freeze_card`, `create_standing_mandate` |
 | T3 | Changes the rules themselves | `change_limit`, `change_mandate`, `export_credentials` |
+
+A transfer within the pattern of one of the student's standing mandates is decided at tier T1 instead of T2, under rule R12, as described in [standing mandates](#standing-mandates-r12-and-r13).
 
 A test checks that every `ActionType` has a tier, so a new action type cannot be added without deciding how dangerous it is.
 
@@ -304,11 +309,11 @@ A test checks that every `ActionType` has a tier, so a new action type cannot be
 
 | Order | Rule | Checks | On failure |
 | --- | --- | --- | --- |
-| 1 | R01 | The action came from the user's own turn | Refuses immediately and stops |
+| 1 | R01 | The action came from the user's own turn, or is a standing run naming an active standing mandate the student confirmed | Refuses immediately and stops |
 | 2 | R02 | The tier is not T3 | Adds a reason and continues |
 | 3 | R03 | The mandate is valid at the request time; T0 is exempt | Adds a reason and continues |
 | 4 | R10 | The idempotency key has not already been executed | Refuses immediately and stops |
-| 5 | R04 | Adding a payee names a payee; freezing a card names a card; a transfer has an amount and a currency, and the currency matches the mandate | Adds a reason and continues |
+| 5 | R04 | Adding a payee names a payee; freezing a card names a card; creating a standing mandate has its terms; cancelling a run names a standing mandate on the mandate; a transfer has an amount and a currency, and the currency matches the mandate | Adds a reason and continues |
 | 6 | R06 | Payee is in the allowed payees | Adds a reason and continues |
 | 7 | R14 | A payee added through Lifeline was added at least `cooling_hours` ago | Adds a reason and continues |
 | 8 | R05 | Corridor is in the allowed corridors | Adds a reason and continues |
@@ -316,12 +321,13 @@ A test checks that every `ActionType` has a tier, so a new action type cannot be
 | 10 | R08 | Amount is within the per transaction limit | Adds a reason and continues |
 | 11 | R09 | Today's running total in UTC is within the daily limit | Adds a reason and continues |
 | 12 | R11 | A confirmation token, when given to a T2 action, belongs to this exact action | Adds a reason and continues |
+| 13 | R12, R13 | A transfer carrying a standing mandate id is within that standing mandate's pattern | Within it, R12 lowers the tier to T1; outside it, R13 is cited with a reason naming what fell outside |
 
 Two rules stop evaluation early, and for different reasons. R01 stops because an injected instruction should not be evaluated at all. R10 stops because a replayed payment already appears in the history, so running the money rules on it would count it twice and give a wrong answer. Every other rule collects its failure and keeps going, so a transfer that breaks three rules reports all three in one refusal. R10 applies to every action type. Keys are made per tool call, so only a replay can repeat one, and a replayed payee or freeze must be refused as surely as a replayed payment.
 
 R04 refuses a transfer that has no amount or no currency, and its reason names what is missing. Without it, a transfer with no amount would pass R08 and R09, which only compare an amount that is present. R04 is recorded once even when the currency is both missing and therefore different from the mandate's. R04 also refuses a request to add a payee that names no payee, and a request to freeze a card that names no card, whether the id is missing or empty. The rule is checked before the transfer rules, because adding a payee is not a transfer.
 
-R14 is the cooling period for a new payee. A scammer who talks a student into adding their account usually wants the money at once, so a payee added through Lifeline cannot receive a transfer until `cooling_hours` have passed since it was added, 24 hours unless the mandate sets another value. The reason states the exact time, in UTC, when the transfer becomes allowed. A payee that was on the mandate from the start has no entry in `payee_added_at` and is never held back. The ids R12 and R13 are not used.
+R14 is the cooling period for a new payee. A scammer who talks a student into adding their account usually wants the money at once, so a payee added through Lifeline cannot receive a transfer until `cooling_hours` have passed since it was added, 24 hours unless the mandate sets another value. The reason states the exact time, in UTC, when the transfer becomes allowed. A payee that was on the mandate from the start has no entry in `payee_added_at` and is never held back. R12 and R13 are described under [standing mandates](#standing-mandates-r12-and-r13).
 
 ### Allowed decisions cite their rule
 
@@ -330,7 +336,10 @@ A refusal lists every rule that failed. An allowed decision lists the one rule t
 | Tier | Rule cited when allowed | Why |
 | --- | --- | --- |
 | T0, T1 | R02 | The tier rule is what lets a read or a reversible action through without confirmation |
+| T1, a standing run | R12 | The run is within a standing mandate the student already confirmed |
 | T2 | R11 | The confirmation rule governs a money moving action, both while confirmation is still required and once it has been given |
+
+A transfer outside its standing mandate's pattern cites R13 first, then R11 when it is allowed, or the rules it broke when it is refused, so the reason for the escalation is always on record.
 
 The table lives in `ALLOWED_RULE` in `core/mandate.py`. T3 has no entry, because a T3 action is never allowed. An allowed decision has no reasons, because nothing needs explaining.
 
@@ -343,6 +352,7 @@ Every T2 action needs the confirmation round trip, not only a transfer. Adding a
 | `transfer` | `warn.transfer.irreversible` |
 | `add_payee` | `warn.payee.new` |
 | `freeze_card` | `warn.freeze.card` |
+| `create_standing_mandate` | `warn.standing.new` |
 
 The table is `WARNING_KEYS` in `core/mandate.py`. A test checks that every T2 action type has a key, so a new T2 type cannot be added without deciding what the student is warned about. Tasks T09, adding a payee, and T14, freezing a lost card, depend on this round trip.
 
@@ -375,6 +385,26 @@ The secret comes from `LIFELINE_CONFIRM_SECRET`. Outside production a clearly na
 ### Class and wrapper
 
 The engine is a class that implements the `MandateEngine` interface. A module level `check` function remains as a thin wrapper around one shared engine instance, so existing callers and tests keep working unchanged.
+
+### Standing mandates, R12 and R13
+
+A standing mandate is a recurring transfer the student confirmed once, such as monthly rent. It is the existing `StandingMandate` model, kept in the mandate's `standing_mandates`. Its schedule is `monthly:D`, due at 00:00 UTC on day D, and each calendar month is one period. The decisions behind these choices are in `docs/decisions.md`.
+
+A transfer carrying a `standing_mandate_id` is checked against that standing mandate's pattern:
+
+| Part of the pattern | Within it |
+| --- | --- |
+| The standing mandate | Is on the student's current mandate version, active, and confirmed before the request |
+| Payee, corridor, purpose | The same as the standing mandate's |
+| Amount | Within `tolerance_pct` percent of the standing amount |
+| Time | From `notice_hours` before the due time until 24 hours after it |
+| Period | No run of this standing mandate has executed for the same month |
+
+Within the pattern, rule R12 decides the transfer at tier T1: it is allowed with `R12` as its rule and needs no confirmation, because the student confirmed the standing mandate. Outside the pattern, rule R13 treats it as an ordinary T2 transfer needing confirmation: `R13` comes first in the rule ids, and its reason names every part that fell outside, such as the amount and the purpose together. Neither rule lifts the money rules. A run still passes R03 to R09 and R14, so a standing mandate can never pay above a limit or to a payee still cooling.
+
+A run the agent loop starts itself carries the source `standing_mandate`. R01 accepts that source only on a transfer naming an active standing mandate the student confirmed before the run, and refuses it everywhere else, so no other action can borrow it.
+
+Creating a standing mandate is its own action, `create_standing_mandate`, at tier T2 with the warning key `warn.standing.new`. It carries the payee, amount, currency, corridor, and purpose, the id the loop gives it, and `standing_terms`: the schedule, the tolerance, the notice hours, and the cancel window hours, which may not exceed the notice. R04 refuses it when any of these is missing, and the money rules R04 to R08 and R14 apply as to a transfer, so a standing mandate to an unknown payee or above the per transaction limit is refused when it is created. The confirmation token signs the id and the terms. `cancel_standing_run` is tier T1 and must name a standing mandate on the mandate, or R04 refuses it.
 
 ## Interfaces
 
@@ -605,6 +635,10 @@ A message whose `lang` was set by the caller is answered in that language. When 
 | `trace_transfer` | `trace_transfer` | T0 | `Rail.status` on the rail that issued the receipt |
 | `precheck` | `precheck` | T0 | `Router.precheck` |
 | `change_limit` | `change_limit` | T3 | Nothing; the reply says limits change in settings |
+| `create_standing_mandate` | `create_standing_mandate` | T2 | Nothing until the student confirms; then the standing mandate joins a new mandate version |
+| `cancel_standing_run` | `cancel_standing_run` | T1 | The next run of that standing mandate is skipped |
+
+`propose_transfer` also takes an optional `standing_mandate_id`. A transfer the engine decides under R12 is paid at once, without a confirmation, and ends the turn with its receipt; one escalated under R13 goes through the usual confirmation; one refused ends the turn with the refusal.
 
 Every tool call becomes an `Action` with source `user_turn`, the current time, and an idempotency key made of the user id, the turn number, the tool name, and the call number within the turn, such as `student_001:t1:propose_transfer:1`. The turn number grows by one for every conversation turn and is rebuilt from the ledger, so keys never repeat across turns and the model never chooses one. Every action passes `MandateEngine.check`, with the student's mandate and executed history, before anything runs. Every tool result goes back to the model as a `Message` with role `tool`, source `tool_result`, and the id of the call it answers. One turn may call the model at most eight times, a guard against a runaway loop and not a money rule.
 
@@ -632,6 +666,9 @@ The provenance check reads the remembered history as well as the current turn. A
 | A token already used to act, presented again | `proposal` marked `replayed_token`, then `decision` refusing under R10 |
 | A token never issued, expired, refused, or out of routes | `confirmation_rejected` with the reason |
 | A payee proposed and then confirmed | `proposal`, `decision`, then on confirmation `confirmation`, `execution`, and a `note` of kind `payee_added` |
+| A standing mandate proposed and then confirmed | `proposal`, `decision`, then on confirmation `confirmation`, `execution`, and a `note` of kind `standing_created` |
+| A standing run falling due | A `note` of kind `standing_notice`; once the cancel window has passed, `proposal` marked `standing_run`, `decision` under R12, `execution`, and `receipt` |
+| A standing run that was cancelled | The cancellation's `proposal`, `decision`, and `execution`; when the run falls due, a `note` of kind `standing_skipped` |
 | A card freeze proposed and then confirmed | `proposal`, `decision`, then on confirmation `confirmation` and an `execution` holding the whole `FreezeResult` |
 
 Every entry carries the user id, the turn, and the id of the mandate version in force when it was written, and the provider and model whenever a model answered. Entries written during a confirmation carry the provider and model of the turn that proposed the transfer. The confirmation token never enters the ledger, because anyone who could read it there could confirm the payment.
@@ -684,6 +721,21 @@ Amounts are compared as numbers, so `1,400`, `1400`, and `1400.00` match, and a 
 ### Simulated receipts
 
 A receipt's `simulated` flag is the executing rail's truth. The route's flag is what the router expected; only the rail knows whether money moved. A receipt's `rail` is likewise the name of the rail that executed it, taken from `rail.name`, never the route's label. When the two simulated flags differ, the loop writes a `note` of kind `simulated_mismatch` after the receipt, recording the key, the rail, the receipt id, and both flags. Whenever a receipt is simulated, the reply adds a sentence in the student's language saying that it was a simulation and no real money moved.
+
+### Standing runs
+
+`AgentLoop.run_due_standing_mandates(now)` is what the app's scheduler calls. For every active standing mandate whose run window contains `now`, it moves one step:
+
+1. A period that already ran, or whose run was already attempted, is left alone.
+2. A period the student cancelled is skipped: a `standing_skipped` note is written once and a `skipped` event returned.
+3. The first time a period is seen, a `standing_notice` note is written, recording when the notice was given and until when the student can cancel, and a `notice` event is returned for the app to show.
+4. Once `cancel_window_hours` have passed since the notice, the run executes. The loop builds the transfer with source `standing_mandate`, the standing mandate's payee, amount, corridor, and purpose, and the idempotency key `<user>:standing:<id>:<period>`. It writes the proposal, asks the engine, and writes the decision. Under R12 it quotes the routes, pays over the best one with the token the student confirmed the standing mandate with, and writes the execution and the receipt. The receipt's `mandate_ref` is the standing mandate id. A `run` event carries the decision and the receipt.
+
+A run the engine does not allow, or would escalate, is never paid: it returns a `needs_student` event with the decision. A rail failure writes a note and returns `rail_failed`. Either way the period is marked attempted and not retried by the scheduler; the student can still pay it from chat. The idempotency key per period means R10 would refuse a second run of the same period even across a restart.
+
+`cancel_standing_run` skips the next period of that standing mandate that has not run: the current period while its run is pending, or the next one once it has run. Its result names the period and is written in its execution entry.
+
+A new loop rebuilds all of this from the ledger: each `standing_created` note adds the standing mandate to a new version with the recorded id, its token computed again from the recorded action, and the notices, skips, attempted runs, and cancellations come back from their entries.
 
 ### Mandate versions
 
@@ -790,6 +842,7 @@ Commit `26e29ae` added `tool_call_id` to `Message`, required on every tool messa
 | `must_contain` | Strings the final reply must include |
 | `must_not_contain` | Strings no reply and no ledger entry may include |
 | `model_saw` | On a turn: strings the model must have received in that turn's first call, which is how memory is checked |
+| `events` | On a `run_due` turn: the standing events returned, in order, each matched on the fields it lists: `kind`, `standing_mandate_id`, `period`, `rule_ids`, `tier`, `receipt_mandate_ref` |
 
 A turn can carry its own `expect` with the same reply checks. Every run must also leave a ledger whose hash chain verifies. An error inside a run, such as the model script running out, fails that run with the error written down; it never passes and never stops the other scenarios. A turn may confirm with `confirm`, naming the newest confirmation or a turn's, or with `token`, a literal string, which is how a token that was never issued is tried. A scenario file that is not valid YAML fails its own entry with the parse error, and every other entry still runs.
 
@@ -797,7 +850,7 @@ An entry passes only when every run of its scenario passes. An entry without a s
 
 `make evidence` runs the harness and writes `evidence/report.md`. The report gives the time and the commit, marked when the working tree had uncommitted changes, then counts by suite, tasks by tier, and runs by language. It lists every automated entry with its result, the languages run beside those declared, and its note, then every failure with its reason, then every entry not automated. Nothing in it is typed by hand. The report is not committed, because a committed report would always name the commit before the one holding it; CI builds it on every run instead. The harness exits with 1 when any scenario fails, so CI fails with it.
 
-Fourteen entries have scenarios: T06, T07, T08, T10, T11, T13, T22, X01, X06, X07, X08, X09, X17, and X24. Each describes behaviour that already exists, and each note says what the scenario leaves to the scripted model or to later work.
+Fifteen entries have scenarios: T06, T07, T08, T10, T11, T13, T22, T34, X01, X06, X07, X08, X09, X17, and X24. A `run_due` turn, `notice` or `after_cancel_window`, stands in for the app's scheduler: the harness calls `run_due_standing_mandates` at the notice time of the next occurrence of the latest standing mandate, or just after its cancel window. The harness's fixture mandate is valid for 70 days either side of now, so such a run is always inside it. Each describes behaviour that already exists, and each note says what the scenario leaves to the scripted model or to later work.
 
 | Entry | What the scenario shows | What its note says is not covered |
 | --- | --- | --- |
@@ -808,6 +861,7 @@ Fourteen entries have scenarios: T06, T07, T08, T10, T11, T13, T22, X01, X06, X0
 | T11 | With two payees named Joao, the question and the first message reach the model on the next turn, and only the payee the student names is proposed, in English and Portuguese | Asking which is the scripted model's choice; the mandate holds ids, not display names |
 | T13 | A reminder written to the ledger in all three languages | Delivering it when it falls due waits for the app, which will read due reminders from the ledger |
 | T22 | Each turn reaches the model with the earlier turns, tool results included, and is answered in its own language across English, Portuguese, and Chinese | The replies come from the scripted model |
+| T34 | A rent standing mandate created through the confirmation round trip, its notice, its run under R12 at T1 with the receipt against the standing mandate id, and a 1,500 SGD payment under it escalated to T2 under R13, in English and Portuguese | A cancelled run is covered in `tests/test_agent.py` |
 | X01 | A 2,000 SGD request under time pressure refused under R08 | Offering to call the bank number on file waits for the Protect plan and the app |
 | X06 | A split second payment refused under R09 with the running total 2800 | |
 | X07 | A replayed token from an earlier payment is refused by the engine under R10, leaving a proposal and a decision | R11, for a token presented with another action, cannot happen through the loop and is tested in `tests/test_mandate.py` |
@@ -857,15 +911,16 @@ Every change was written test first. The test was run and seen to fail before th
 | `tests/test_schemas.py` | 23 | The optional freeze field on `AgentReply`, Route and Receipt statuses, the receipt idempotency key, freeze results, new tiers including `get_quote`, the mandate id, standing mandates, tool messages and their ids, roles, agent replies and confirmations with their limits and selected route |
 | `tests/test_model_adapter.py` | 20 | Provider selection, fallback, key check, tool calls, both tool round trips, refusal, the fake adapter and a scripted tool loop |
 | `tests/test_fake_router.py` | 16 | The three Brazil routes and their costs, the India route and its purpose block, unknown corridors, both kinds of precheck |
-| `tests/test_agent.py` | 66 | The conversation passed to every model call, each call's messages stored apart with only a count in the ledger and no token anywhere, erasing a conversation without touching the ledger, erasing one student and keeping the others, tool results for every call of an ended turn, the twenty message bound, memory rebuilt by a new loop, provenance across remembered turns, replayed tokens refused under R10 before and after a restart, and never issued, expired, and refused tokens leaving `confirmation_rejected`, pasted text framed as data with its details untrusted, typed details trusted beside a paste, a paste that claims to be the student's turn refused, waiting transfers and payees rebuilt by a new loop, expired, refused, and finished ones not rebuilt, a rebuilt transfer skipping a failed rail, the confirmation round trip and its ledger trail, `act` running a read only tool through the engine and refusing every other tool, mandate versions and a receipt that still resolves to v1, copies of versions, a restart that rebuilds added payees and the version history, re adding a payee as a no op at the proposal and at the confirmation, a payee id from a tool result or pasted text refused under R01, the freeze field on the reply, adding a payee and the cooling refusal that follows, freezing a Wise card and a Revolut card with the honest not supported reply, a freeze token refused for another card, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused by the engine under R01 with an `injection_suspected` entry and the same details allowed when typed, a receipt naming its rail and traced by a new loop, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
+| `tests/test_agent.py` | 73 | Standing mandates created through confirmation, a run with its notice under R12, a cancelled run skipped, an out of pattern amount escalated, a run paid from chat, a refused run from chat, and standing state rebuilt by a new loop, the conversation passed to every model call, each call's messages stored apart with only a count in the ledger and no token anywhere, erasing a conversation without touching the ledger, erasing one student and keeping the others, tool results for every call of an ended turn, the twenty message bound, memory rebuilt by a new loop, provenance across remembered turns, replayed tokens refused under R10 before and after a restart, and never issued, expired, and refused tokens leaving `confirmation_rejected`, pasted text framed as data with its details untrusted, typed details trusted beside a paste, a paste that claims to be the student's turn refused, waiting transfers and payees rebuilt by a new loop, expired, refused, and finished ones not rebuilt, a rebuilt transfer skipping a failed rail, the confirmation round trip and its ledger trail, `act` running a read only tool through the engine and refusing every other tool, mandate versions and a receipt that still resolves to v1, copies of versions, a restart that rebuilds added payees and the version history, re adding a payee as a no op at the proposal and at the confirmation, a payee id from a tool result or pasted text refused under R01, the freeze field on the reply, adding a payee and the cooling refusal that follows, freezing a Wise card and a Revolut card with the honest not supported reply, a freeze token refused for another card, a limit refusal, injection in a tool result, payment details from a tool result or pasted text refused by the engine under R01 with an `injection_suspected` entry and the same details allowed when typed, a receipt naming its rail and traced by a new loop, simulated receipts in three languages and the mismatch note, a rail failure and retry, languages, a T3 request, an expired token, and rebuilding from the ledger |
 | `tests/test_interfaces.py` | 11 | The frozen members of all eight interfaces, the two changed `Rail` signatures, and the engine class matching the wrapper |
 | `tests/test_ledger.py` | 12 | A file ledger written line by line and reloaded intact, a tampered file loaded with its break found, a missing file, chaining, head, copies of the list and of each entry, tamper detection, the contract entry type |
 | `tests/test_suites.py` | 4 | Unique ids and required fields in both suites |
 | `tests/test_api.py` | 33 | Every endpoint: `/ledger` never returning the student's words while the store file holds them, a restart rebuilding memory from the store, health, chat with the token only in its confirmation, pasted text refused by the engine and its limits, the ledger written to its file, a restart keeping a waiting confirmation, the history, payees, and versions, receipt numbers, and trace times, a tampered file found by verify, a retry offer repeating the token, languages on chat and confirm, the confirmation round trip with the token absent from `/confirm` and `/ledger`, a rail failure retried without repeating the token, the ledger filtered by student, verify intact and broken, trace found and not found, precheck, an unknown user on every endpoint, text limits, a missing model key, CORS, and the demo fixture |
-| `tests/test_harness.py` | 10 | `model_saw` and literal tokens, an unreadable scenario failing only its entry, a scenario that should pass passes, one that should fail fails with its reasons, one that raises fails, a missing scenario is not automated, the report's counts, commit, and time, text checks that add up across levels, every real scenario passing, and no orphan scenario files |
+| `tests/test_harness.py` | 11 | A `run_due` turn checking its events, `model_saw` and literal tokens, an unreadable scenario failing only its entry, a scenario that should pass passes, one that should fail fails with its reasons, one that raises fails, a missing scenario is not automated, the report's counts, commit, and time, text checks that add up across levels, every real scenario passing, and no orphan scenario files |
 | `tests/test_conversation_store.py` | 4 | One line per call reloaded in order, only the remembered fields stored, erasing one student from the file and memory without leaving a temporary file, a store in memory |
+| `tests/test_standing.py` | 40 | The standing tiers and warning, R12 within pattern, the tolerance and the window at their edges, every R13 clause, several reasons named at once, R13 cited beside a broken money rule, the money rules still applied, the standing source under R01, creating with its terms, R04, and the money rules, the token signing the terms, cancelling a run, the schedule format and cancel window, and the occurrence arithmetic |
 | `tests/test_knowledge.py` | 4 | Every knowledge entry present, complete, sourced over https, and checked within 30 days |
-| Total | 276 | |
+| Total | 324 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
 
@@ -936,10 +991,12 @@ All times are local time.
 | `57fae94` | 18 Sep 05:08 | Merge pull request #9 from sanyuktaphanse/lane-a/api-hardening |
 | `82dc71b` | 18 Sep 16:23 | Conversation memory; every confirmation attempt leaves a ledger entry; amount ceiling; unique receipt ids |
 | `7ad3825` | 18 Sep 05:25 | Merge pull request #10 from sanyuktaphanse/lane-a/memory-and-attempts |
+| `a04e636` | 18 Sep 16:35 | Conversation memory in its own erasable store; ledger holds money events only |
+| `3f4c96e` | 18 Sep 05:36 | Merge pull request #11 from sanyuktaphanse/lane-a/memory-store |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
-From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them reached `main` through pull request 6, merged as `7b8b674`. The evaluation harness reached `main` through pull request 7, merged as `b425719`. The API reached `main` through pull request 8, merged as `de659e4`. Its hardening reached `main` through pull request 9, merged as `57fae94`. Conversation memory and the confirmation attempts reached `main` through pull request 10, merged as `7ad3825`. The conversation store is on the branch `lane-a/memory-store`.
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them reached `main` through pull request 6, merged as `7b8b674`. The evaluation harness reached `main` through pull request 7, merged as `b425719`. The API reached `main` through pull request 8, merged as `de659e4`. Its hardening reached `main` through pull request 9, merged as `57fae94`. Conversation memory and the confirmation attempts reached `main` through pull request 10, merged as `7ad3825`. The conversation store reached `main` through pull request 11, merged as `3f4c96e`. Standing mandates are on the branch `lane-a/standing-mandates`.
 
 ## Open items
 
@@ -985,3 +1042,7 @@ From `97a6211` onward every change goes on its own branch and reaches `main` thr
 40. Closed. Receipt ids start with the rail's name, so two rails never issue the same id.
 41. The ledger file assumes one API process. Two processes writing to it at once would interleave lines and break the chain.
 42. Closed. The student's words live in `data/conversations.jsonl`, apart from the ledger, and `AgentLoop.erase_conversation(user_id)` removes them without touching the ledger's hash chain.
+43. Nothing calls `run_due_standing_mandates` on a clock yet, and no API endpoint exposes its events. The app, or a scheduler beside the API, needs to call it and show the notices.
+44. A standing run that fails on one rail is not retried on the next route, as a confirmed transfer is; it returns `rail_failed` and leaves the period to the student.
+45. There is no tool to deactivate or change a standing mandate. `active` exists on the model, but only a new mandate version could turn it off, and nothing makes one yet.
+46. Standing runs use the student's mandate currency and its routes; a standing mandate in another currency, such as a parent's allowance from India, waits for a router that quotes it.
