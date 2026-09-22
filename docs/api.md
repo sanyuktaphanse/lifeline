@@ -50,7 +50,7 @@ The token itself is never written to the ledger; the engine recomputes it from t
 | --- | --- | --- |
 | `receipt` | Money moved | The receipt; if `receipt.simulated` is true, `text` already says it was a simulation |
 | `freeze` | A card freeze ran | `freeze.status`: `done`, `not_supported` with `freeze.deep_link` to the issuer's app, or `failed` with `freeze.reason` |
-| `confirmation` | An action waits for the student's yes | The warning for `confirmation.warning_key`, the action, and for a transfer the routes with `selected_route` marked, then a confirm button |
+| `confirmation` | An action waits for the student's yes | The warning for `confirmation.warning_key`, the action, and for a transfer the routes with `selected_route` marked, then a confirm button. When `confirmation.council` is present, what the council advised: `chosen`, `runner_up`, `reason`, `disagreement` and `triggers` |
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
 | none of these | An answer | `text` only |
 
@@ -75,7 +75,7 @@ One message from the student.
 | `user_id` | string | yes | `student_001` in the demo |
 | `text` | string | yes | What the student typed, 1 to 4,000 characters |
 | `pasted_text` | string | no | Anything the student pasted, 1 to 20,000 characters |
-| `lang` | string | no | `en`, `pt`, or `zh`; detected from `text` when absent |
+| `lang` | string | no | `en`, `pt`, or `zh`; detected from `text` when absent, and any other value is refused with 422 |
 
 Request:
 
@@ -273,7 +273,7 @@ The student's yes to a waiting confirmation.
 | --- | --- | --- | --- |
 | `user_id` | string | yes | |
 | `confirmation_token` | string | yes | From the `/chat` response, or from a `/confirm` retry offer |
-| `lang` | string | no | The language of the reply; English when absent |
+| `lang` | string | no | The language of the reply, `en`, `pt` or `zh`; English when absent, and any other value is refused with 422 |
 
 Request:
 
@@ -586,7 +586,7 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
 ]
 ```
 
-The entry kinds are `proposal`, `decision`, `council`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `turn`. A `council` entry holds one whole deliberation of the council and appears only when a council is configured, which the API does not do yet. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
+The entry kinds are `proposal`, `decision`, `council`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `turn`. A `council` entry holds one whole deliberation of the council and appears only when the API runs with a council, which it does when `COUNCIL` in the environment is `on`, `true`, `1` or `yes`, and not otherwise. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
 
 Each `/chat` or `/confirm` call ends with one `turn` entry, which records only how many messages the call added to the student's conversation. The ledger never holds the student's words: they live in a separate store, `data/conversations.jsonl`, one line per call, which git ignores. The API rebuilds each student's memory from that store on start, and the model sees the last twenty messages on every call. A student's conversation can be erased with `AgentLoop.erase_conversation(user_id)`, which removes their lines from the store and from memory and leaves the ledger, and its hash chain, untouched. A `turn` entry:
 
