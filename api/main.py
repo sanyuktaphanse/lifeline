@@ -19,6 +19,7 @@ from contracts.interfaces import Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
+    LanguageCode,
     LedgerEntry,
     Mandate,
     Message,
@@ -58,13 +59,15 @@ class ChatRequest(BaseModel):
     user_id: str
     text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
     pasted_text: str | None = Field(default=None, min_length=1, max_length=MAX_PASTED_CHARS)
-    lang: str | None = None
+    # A language reaches the model inside the system prompt, so a caller may name only a code
+    # Lifeline replies in. Source: LANGUAGES in contracts/schemas.py.
+    lang: LanguageCode | None = None
 
 
 class ConfirmRequest(BaseModel):
     user_id: str
     confirmation_token: str
-    lang: str | None = None
+    lang: LanguageCode | None = None
 
 
 class TraceRequest(BaseModel):
