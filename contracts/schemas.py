@@ -6,6 +6,10 @@ from typing import Annotated, Any, Literal
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+# The languages Lifeline writes replies in. Source: the TEXTS table in core/agent.py, which a
+# test in tests/test_council.py pins to this tuple so the two cannot drift.
+LANGUAGES = ("en", "pt", "zh")
+LanguageCode = Annotated[str, Field(pattern=f"^({'|'.join(LANGUAGES)})$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]
 # Source: docs/decisions.md, 18 September 2026. No student transfer comes near one hundred million.
