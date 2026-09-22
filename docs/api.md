@@ -187,6 +187,7 @@ Response `200`, a transfer waiting for confirmation:
       "rate_source": "fixture",
       "quoted_at": "2026-09-18T08:17:40.409489Z"
     },
+    "council": null,
     "expires_in_seconds": 300
   },
   "decision": {
@@ -499,6 +500,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
       "rate_source": "fixture",
       "quoted_at": "2026-09-18T08:17:40.426357Z"
     },
+    "council": null,
     "expires_in_seconds": 300
   },
   "decision": null,
@@ -584,7 +586,7 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
 ]
 ```
 
-The entry kinds are `proposal`, `decision`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `turn`. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
+The entry kinds are `proposal`, `decision`, `council`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `turn`. A `council` entry holds one whole deliberation of the council and appears only when a council is configured, which the API does not do yet. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
 
 Each `/chat` or `/confirm` call ends with one `turn` entry, which records only how many messages the call added to the student's conversation. The ledger never holds the student's words: they live in a separate store, `data/conversations.jsonl`, one line per call, which git ignores. The API rebuilds each student's memory from that store on start, and the model sees the last twenty messages on every call. A student's conversation can be erased with `AgentLoop.erase_conversation(user_id)`, which removes their lines from the store and from memory and leaves the ledger, and its hash chain, untouched. A `turn` entry:
 

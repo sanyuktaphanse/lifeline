@@ -26,6 +26,12 @@ ANTHROPIC_MAX_TOKENS = 16000
 # Source: project decision on 14 September 2026 to cap DashScope replies at 2048 tokens.
 DASHSCOPE_MAX_TOKENS = 2048
 AUTH_STATUSES = {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}
+# The council may run on a different model from the loop's. Each name below replaces the
+# ordinary one when it is set, so the council needs no provider code of its own.
+COUNCIL_MODEL_VARIABLES = {
+    "ANTHROPIC_MODEL": "ANTHROPIC_COUNCIL_MODEL",
+    "DASHSCOPE_MODEL": "DASHSCOPE_COUNCIL_MODEL",
+}
 
 
 class ModelAdapterError(RuntimeError):
@@ -282,3 +288,24 @@ class ProviderModelAdapter(ModelAdapter):
                 f"{key_variable} is not set. Add it to .env to use {provider}."
             )
         return _PROVIDERS[provider](self._models[provider], api_key, messages, tools)
+
+
+def council_env(env: Mapping[str, str]) -> dict[str, str]:
+    """The environment a council adapter reads: the given one with the council models in place.
+
+    A council model variable that is unset or empty changes nothing, so a council with no
+    variables of its own runs on the same models as the loop.
+    """
+    overlaid = dict(env)
+    for ordinary, council in COUNCIL_MODEL_VARIABLES.items():
+        if env.get(council):
+            overlaid[ordinary] = env[council]
+    return overlaid
+
+
+def council_adapter(env: Mapping[str, str] | None = None) -> ProviderModelAdapter:
+    """An adapter for the council, separate from the loop's, so its calls are its own."""
+    if env is None:
+        load_dotenv()
+        env = os.environ
+    return ProviderModelAdapter(council_env(env))

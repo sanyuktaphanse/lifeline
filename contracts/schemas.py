@@ -253,12 +253,27 @@ class Message(BaseModel):
         return self
 
 
+class CouncilAdvice(BaseModel):
+    """What the council advised, for a frontend to show without reading the reply text.
+
+    Source: docs/decisions.md, 22 September 2026. The full deliberation, the voices
+    included, goes to the ledger as a `council` entry; this is the advice only.
+    """
+
+    chosen: str
+    runner_up: str
+    reason: str
+    disagreement: Annotated[float, Field(ge=0, le=1)]
+    triggers: list[str]
+
+
 class ConfirmationRequest(BaseModel):
     action: Action
     confirmation_token: str
     warning_key: str
     routes: list[Route]
     selected_route: Route | None = None
+    council: CouncilAdvice | None = None
     expires_in_seconds: int = Field(default=300, gt=0)
 
 
