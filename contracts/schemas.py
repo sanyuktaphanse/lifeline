@@ -271,6 +271,30 @@ class CouncilAdvice(BaseModel):
     triggers: list[str]
 
 
+class CouncilVoice(BaseModel):
+    """One voice as the record keeps it: its answer, or its abstention with the raw text."""
+
+    voice: str
+    abstained: bool
+    position: str | None = None
+    confidence: Annotated[float, Field(ge=0, le=1)] | None = None
+    reason: str | None = None
+    evidence: list[str] | None = None
+    raw: str | None = None
+
+
+class CouncilDeliberation(CouncilAdvice):
+    """A whole deliberation: the advice, the question that was asked, and every voice.
+
+    The agent loop validates what a `Council` returns into this model before it reads it, writes
+    it, or shows any of it, so an implementation other than this repository's cannot put a value
+    of the wrong type, or a field nobody asked for, into the ledger or into a reply.
+    """
+
+    question: str
+    voices: list[CouncilVoice]
+
+
 class ConfirmationRequest(BaseModel):
     action: Action
     confirmation_token: str

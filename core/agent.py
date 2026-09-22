@@ -15,6 +15,7 @@ from contracts.schemas import (
     AgentReply,
     ConfirmationRequest,
     CouncilAdvice,
+    CouncilDeliberation,
     Decision,
     FreezeResult,
     LedgerEntry,
@@ -809,24 +810,40 @@ class AgentLoop:
             "routes": [route.model_dump(mode="json", include=COUNCIL_ROUTE_FIELDS) for route in usable],
         }
         try:
-            advice = self._council.deliberate(COUNCIL_QUESTION, context)
-            CouncilAdvice.model_validate(advice)
+            deliberation = CouncilDeliberation.model_validate(
+                self._council.deliberate(COUNCIL_QUESTION, context)
+            )
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, advice never blocks a payment
-            self._write(
-                trail,
-                "note",
-                {
-                    "kind": "council_failed",
-                    "idempotency_key": action.idempotency_key,
-                    "triggers": triggers,
-                    "error": f"{type(error).__name__}: {error}",
-                },
+            self._council_failed(trail, action, triggers, f"{type(error).__name__}: {error}")
+            return None
+        if deliberation.chosen not in {*(route.rail for route in usable), WAIT, NO_ANSWER}:
+            # The reply names the chosen rail, so a position the router never quoted is no answer.
+            self._council_failed(
+                trail, action, triggers, "The council chose a position that is not a quoted route."
             )
             return None
+        # The triggers are the loop's own finding, never a council's claim about them.
+        advice = deliberation.model_copy(update={"triggers": triggers}).model_dump(
+            mode="json", exclude_none=True
+        )
         self._write(
             trail, "council", {"idempotency_key": action.idempotency_key, "council": advice}
         )
         return advice
+
+    def _council_failed(
+        self, trail: _Trail, action: Action, triggers: list[str], error: str
+    ) -> None:
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "council_failed",
+                "idempotency_key": action.idempotency_key,
+                "triggers": triggers,
+                "error": error,
+            },
+        )
 
     def _escalations(
         self,
