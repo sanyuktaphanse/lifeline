@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import threading
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, Field
 
-from contracts.interfaces import Ledger, ModelAdapter
+from contracts.interfaces import Council, Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
@@ -33,9 +33,10 @@ from contracts.schemas import (
 )
 from core.agent import AgentLoop
 from core.conversation_store import ConversationStore
+from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
-from core.model_adapter import ModelAdapterError, ProviderModelAdapter
+from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.fake_router import FakeRouter
 
@@ -51,6 +52,10 @@ MAX_TEXT_CHARS = 4000
 MAX_PASTED_CHARS = 20000
 # Source: docs/decisions.md, 18 September 2026. The scheduler checks for due standing runs once a minute.
 TICK_SECONDS = 60.0
+
+# Source: .env.example. The council costs five model calls per escalated transfer, so it is off
+# unless COUNCIL names one of these values.
+COUNCIL_ON = frozenset({"on", "true", "1", "yes"})
 
 logger = logging.getLogger("lifeline.api")
 
@@ -151,6 +156,18 @@ def _event_without_tokens(event: StandingEvent) -> StandingEvent:
     return event.model_copy(update={"decision": event.decision.model_copy(update={"confirmation_token": None})})
 
 
+def council_for(env: Mapping[str, str] | None = None) -> FiveVoiceCouncil | None:
+    """The council this process runs with, or nothing when `COUNCIL` does not turn it on.
+
+    The council calls the model through its own adapter, built over the council model variables,
+    so its calls are never counted against the agent loop's cap for a turn.
+    """
+    env = environment(env)
+    if env.get("COUNCIL", "").strip().casefold() not in COUNCIL_ON:
+        return None
+    return FiveVoiceCouncil(council_adapter(env))
+
+
 def create_app(
     adapter: ModelAdapter | None = None,
     fixture_path: Path = DEMO_FIXTURE,
@@ -158,6 +175,7 @@ def create_app(
     ledger_path: Path | None = None,
     conversations_path: Path | None = None,
     tick_seconds: float | None = TICK_SECONDS,
+    council: Council | None = None,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
@@ -174,6 +192,7 @@ def create_app(
         balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
         pending={},
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
+        council=council if council is not None else council_for(),
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.

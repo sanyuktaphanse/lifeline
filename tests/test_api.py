@@ -5,10 +5,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 import api.main
-from api.main import DEMO_FIXTURE, create_app, demo_rails
+from api.main import DEMO_FIXTURE, council_for, create_app, demo_rails
 from contracts.schemas import LANGUAGES, Message, Role, ToolCall
+from core.council import FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
-from core.model_adapter import MissingApiKey
+from core.model_adapter import MissingApiKey, ProviderModelAdapter
 from rails.fake_rail import FakeRail
 
 USER = "student_001"
@@ -22,6 +23,8 @@ def ledger_file(tmp_path, monkeypatch):
     path = tmp_path / "data" / "ledger.jsonl"
     monkeypatch.setattr(api.main, "LEDGER_PATH", path)
     monkeypatch.setattr(api.main, "CONVERSATIONS_PATH", tmp_path / "data" / "conversations.jsonl")
+    # No test depends on whoever runs it having the council turned on, or off, in their own shell.
+    monkeypatch.delenv("COUNCIL", raising=False)
     return path
 
 
@@ -477,3 +480,55 @@ def test_chat_still_takes_each_of_the_three_reply_languages():
         body = client.post("/chat", json={"user_id": USER, "text": "Saldo?", "lang": lang}).json()
 
         assert body["lang"] == lang
+
+
+def test_no_council_is_built_unless_the_environment_asks_for_one():
+    assert council_for({}) is None
+    assert council_for({"COUNCIL": ""}) is None
+    assert council_for({"COUNCIL": "off"}) is None
+
+
+def test_the_council_is_built_from_the_council_adapter_when_it_is_on():
+    council = council_for({"COUNCIL": "on", "ANTHROPIC_API_KEY": "test-key", "ANTHROPIC_COUNCIL_MODEL": "claude-sonnet-5"})
+
+    assert isinstance(council, FiveVoiceCouncil)
+    adapter = council._adapter
+    assert isinstance(adapter, ProviderModelAdapter)
+    assert adapter._models["anthropic"] == "claude-sonnet-5"
+
+
+def test_a_transfer_over_http_writes_no_council_entry_without_a_council():
+    client = _client([_call("propose_transfer", RENT)])
+
+    client.post("/chat", json={"user_id": USER, "text": RENT_REQUEST})
+
+    assert _trail_kinds(client) == ["proposal", "decision"]
+
+
+def test_a_transfer_over_http_writes_the_council_entry_when_one_is_wired():
+    voices = [
+        json.dumps({"position": "wise", "confidence": 0.9, "reason": "Wise costs the least.", "evidence": ["wise"]})
+    ] * 5
+    client = _client([_call("propose_transfer", RENT)], council=FiveVoiceCouncil(FakeModelAdapter(voices)))
+
+    body = client.post("/chat", json={"user_id": USER, "text": RENT_REQUEST}).json()
+
+    assert _trail_kinds(client) == ["proposal", "decision", "council"]
+    assert body["confirmation"]["council"]["chosen"] == "wise"
+    assert body["confirmation"]["selected_route"]["rail"] == "wise"
+    assert "Wise costs the least." in body["text"]
+
+
+def test_the_council_entry_over_http_carries_no_token():
+    voices = [
+        json.dumps({"position": "wise", "confidence": 0.9, "reason": "Wise costs the least.", "evidence": ["wise"]})
+    ] * 5
+    client = _client([_call("propose_transfer", RENT)], council=FiveVoiceCouncil(FakeModelAdapter(voices)))
+    body = client.post("/chat", json={"user_id": USER, "text": RENT_REQUEST}).json()
+    token = body["confirmation"]["confirmation_token"]
+
+    entries = client.get(f"/ledger/{USER}").json()
+
+    assert token
+    assert token not in json.dumps(entries)
+    assert [entry["kind"] for entry in entries if entry["kind"] == "council"] == ["council"]

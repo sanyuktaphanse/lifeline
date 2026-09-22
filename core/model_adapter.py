@@ -50,6 +50,18 @@ def _setting(env: Mapping[str, str], name: str, default: str) -> str:
     return env.get(name) or default
 
 
+def environment(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    """The settings a component reads: the ones given, or the process environment with .env loaded.
+
+    Passing an environment is how a test, or a component that wants different models, keeps out of
+    the process environment altogether.
+    """
+    if env is None:
+        load_dotenv()
+        return os.environ
+    return env
+
+
 def _anthropic_assistant_content(message: Message) -> str | list[dict[str, Any]]:
     # Source: claude-api skill model migration guide, an Anthropic assistant turn goes
     # back exactly as received so its thinking blocks stay valid for the next turn.
@@ -243,9 +255,7 @@ _PROVIDER_SETTINGS = {
 
 class ProviderModelAdapter(ModelAdapter):
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
-        if env is None:
-            load_dotenv()
-            env = os.environ
+        env = environment(env)
         self._env = env
         self.provider = _setting(env, "MODEL_PROVIDER", DEFAULT_PROVIDER)
         self.fallback_provider = _setting(
@@ -305,7 +315,4 @@ def council_env(env: Mapping[str, str]) -> dict[str, str]:
 
 def council_adapter(env: Mapping[str, str] | None = None) -> ProviderModelAdapter:
     """An adapter for the council, separate from the loop's, so its calls are its own."""
-    if env is None:
-        load_dotenv()
-        env = os.environ
-    return ProviderModelAdapter(council_env(env))
+    return ProviderModelAdapter(council_env(environment(env)))
