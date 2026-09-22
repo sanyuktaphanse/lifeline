@@ -331,6 +331,8 @@ class _Waiting:
     model: str | None
     display_name: str | None
     failed_rails: set[str] = field(default_factory=set)
+    # The rail the student was asked to confirm, when a council chose it rather than `_choose`.
+    chosen_rail: str | None = None
 
 
 @dataclass
@@ -894,11 +896,12 @@ class AgentLoop:
         return False
 
     @staticmethod
-    def _advised_route(usable: list[Route], advice: dict[str, Any] | None) -> Route | None:
+    def _route_named(routes: list[Route], rail: str | None) -> Route | None:
+        return None if rail is None else next((r for r in routes if r.rail == rail), None)
+
+    def _advised_route(self, usable: list[Route], advice: dict[str, Any] | None) -> Route | None:
         """The route the chair chose, or nothing when it chose to wait or could not answer."""
-        if advice is None:
-            return None
-        return next((route for route in usable if route.rail == advice["chosen"]), None)
+        return None if advice is None else self._route_named(usable, advice["chosen"])
 
     def _council_text(self, lang: str, advice: dict[str, Any] | None) -> str:
         if advice is None or advice["chosen"] == NO_ANSWER:
@@ -1402,6 +1405,13 @@ class AgentLoop:
                     self._close(refused.user_id, refused.action, "refused")
                 elif key in proposals:
                     self._maybe_waiting(user_id, entry, proposals[key], waiting)
+            elif entry.kind == "council":
+                # The council chose the rail the student was asked to confirm, so a rebuild must
+                # restore that rail and not the one `_choose` would pick on its own.
+                key = entry.payload.get("idempotency_key")
+                chosen = entry.payload.get("council", {}).get("chosen")
+                if key in waiting and isinstance(chosen, str):
+                    waiting[key].chosen_rail = chosen
             elif entry.kind == "confirmation":
                 key = entry.payload["idempotency_key"]
                 if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
@@ -1499,7 +1509,8 @@ class AgentLoop:
         action = waited.action
         if action.type is ActionType.TRANSFER:
             routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-            selected = self._choose(routes, pending.failed_rails)
+            restored = self._route_named(self._usable(routes, pending.failed_rails), waited.chosen_rail)
+            selected = restored or self._choose(routes, pending.failed_rails)
             if selected is None:
                 self._close(waited.user_id, action, "no_route")
                 return
