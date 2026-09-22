@@ -17,6 +17,10 @@ DISAGREEMENT_PLACES = 4
 # Source: docs/decisions.md, 22 September 2026. A reason is one sentence, and five of them are
 # read out to the student, so a longer answer is not one sentence and abstains.
 MAX_REASON = 400
+# Source: this file. An abstaining voice's own text is kept as evidence of what it said, cut at
+# this length so a model that answers with a wall of prose cannot fill the ledger with it.
+MAX_RAW = 500
+CUT = " (cut)"
 # The language a voice writes in when the context names one this repository does not reply in.
 DEFAULT_LANGUAGE = "en"
 
@@ -86,6 +90,11 @@ def _evidence_ids(routes: Sequence[Mapping[str, Any]]) -> list[str]:
     return ids
 
 
+def _cut(text: str) -> str:
+    """An abstaining voice's raw text, cut with a marker when it is longer than the record keeps."""
+    return text if len(text) <= MAX_RAW else text[:MAX_RAW] + CUT
+
+
 def _language(code: Any) -> str:
     """The code a voice is told to write its sentence in.
 
@@ -139,9 +148,9 @@ class FiveVoiceCouncil(Council):
         try:
             parsed = VoiceAnswer.model_validate_json(answer.text)
         except ValidationError:
-            return {"voice": name, "abstained": True, "raw": answer.text}
+            return {"voice": name, "abstained": True, "raw": _cut(answer.text)}
         if parsed.position not in (*rails, WAIT):
-            return {"voice": name, "abstained": True, "raw": answer.text}
+            return {"voice": name, "abstained": True, "raw": _cut(answer.text)}
         return {
             "voice": name,
             "abstained": False,

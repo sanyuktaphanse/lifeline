@@ -736,9 +736,9 @@ class AgentLoop:
         advice: dict[str, Any] | None = None
         if action.type is ActionType.TRANSFER:
             routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-            usable = self._usable(routes, set())
-            advice = self._advise(user_id, lang, trail, action, routes, usable)
-            selected = self._advised_route(usable, advice) or self._choose(routes, set())
+            considered = self._considered(routes, set())
+            advice = self._advise(user_id, lang, trail, action, routes, considered)
+            selected = self._advised_route(considered, advice) or self._choose(routes, set())
             if selected is None:
                 return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
             pending.routes, pending.selected_route = routes, selected
@@ -786,7 +786,7 @@ class AgentLoop:
         trail: _Trail,
         action: Action,
         routes: list[Route],
-        usable: list[Route],
+        considered: list[Route],
     ) -> dict[str, Any] | None:
         """Convene the council when a trigger fires, and write what it said.
 
@@ -794,10 +794,10 @@ class AgentLoop:
         never touches the confirmation token, and any failure of its own leaves a note and the
         payment path exactly as it was.
         """
-        if self._council is None or not usable:
+        if self._council is None or not considered:
             return None
         mandate = self._mandates[user_id]
-        triggers = self._escalations(user_id, action, mandate, routes, usable)
+        triggers = self._escalations(user_id, action, mandate, routes, considered)
         if not triggers:
             return None
         context = {
@@ -809,7 +809,7 @@ class AgentLoop:
             "per_txn_limit": str(mandate.per_txn_limit),
             "lang": lang,
             "triggers": triggers,
-            "routes": [route.model_dump(mode="json", include=COUNCIL_ROUTE_FIELDS) for route in usable],
+            "routes": [route.model_dump(mode="json", include=COUNCIL_ROUTE_FIELDS) for route in considered],
         }
         try:
             deliberation = CouncilDeliberation.model_validate(
@@ -818,7 +818,7 @@ class AgentLoop:
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, advice never blocks a payment
             self._council_failed(trail, action, triggers, f"{type(error).__name__}: {error}")
             return None
-        if deliberation.chosen not in {*(route.rail for route in usable), WAIT, NO_ANSWER}:
+        if deliberation.chosen not in {*(route.rail for route in considered), WAIT, NO_ANSWER}:
             # The reply names the chosen rail, so a position the router never quoted is no answer.
             self._council_failed(
                 trail, action, triggers, "The council chose a position that is not a quoted route."
@@ -853,9 +853,13 @@ class AgentLoop:
         action: Action,
         mandate: Mandate,
         routes: list[Route],
-        usable: list[Route],
+        considered: list[Route],
     ) -> list[str]:
-        """Why this transfer deserves a council. An empty list means it does not."""
+        """Why this transfer deserves a council. An empty list means it does not.
+
+        The cheapest and the fastest are compared within the routes `_choose` considers first, so
+        the comparison is between real rails whenever real money can move.
+        """
         triggers: list[str] = []
         # The share is read from the mandate, so no money figure is written here.
         if action.amount is not None and action.amount > mandate.per_txn_limit / 2:
@@ -865,8 +869,8 @@ class AgentLoop:
             triggers.append("first_transfer_on_corridor")
         if not any(past.payee_id == action.payee_id for past in paid):
             triggers.append("first_transfer_to_payee")
-        cheapest = min(usable, key=lambda route: route.fee + route.spread_cost, default=None)
-        fastest = min(usable, key=lambda route: route.arrival_hours, default=None)
+        cheapest = min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
+        fastest = min(considered, key=lambda route: route.arrival_hours, default=None)
         if (
             cheapest is not None
             and fastest is not None
@@ -899,9 +903,9 @@ class AgentLoop:
     def _route_named(routes: list[Route], rail: str | None) -> Route | None:
         return None if rail is None else next((r for r in routes if r.rail == rail), None)
 
-    def _advised_route(self, usable: list[Route], advice: dict[str, Any] | None) -> Route | None:
+    def _advised_route(self, considered: list[Route], advice: dict[str, Any] | None) -> Route | None:
         """The route the chair chose, or nothing when it chose to wait or could not answer."""
-        return None if advice is None else self._route_named(usable, advice["chosen"])
+        return None if advice is None else self._route_named(considered, advice["chosen"])
 
     def _council_text(self, lang: str, advice: dict[str, Any] | None) -> str:
         if advice is None or advice["chosen"] == NO_ANSWER:
@@ -1348,9 +1352,18 @@ class AgentLoop:
             and route.rail not in failed_rails
         ]
 
-    def _choose(self, routes: list[Route], failed_rails: set[str]) -> Route | None:
+    def _considered(self, routes: list[Route], failed_rails: set[str]) -> list[Route]:
+        """The usable routes in the first order `_choose` looks at: the real ones, and the
+        simulated ones only when no real route is usable. The council is shown this set and the
+        escalation rule compares within it, so neither is offered a simulation while real money
+        can move.
+        """
         usable = self._usable(routes, failed_rails)
-        return min(usable, key=lambda route: (route.simulated, route.fee + route.spread_cost), default=None)
+        return [route for route in usable if not route.simulated] or usable
+
+    def _choose(self, routes: list[Route], failed_rails: set[str]) -> Route | None:
+        considered = self._considered(routes, failed_rails)
+        return min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
 
     def _refusal(self, lang: str, decision: Decision) -> str:
         return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=" ".join(decision.reasons))
@@ -1509,7 +1522,7 @@ class AgentLoop:
         action = waited.action
         if action.type is ActionType.TRANSFER:
             routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-            restored = self._route_named(self._usable(routes, pending.failed_rails), waited.chosen_rail)
+            restored = self._route_named(self._considered(routes, pending.failed_rails), waited.chosen_rail)
             selected = restored or self._choose(routes, pending.failed_rails)
             if selected is None:
                 self._close(waited.user_id, action, "no_route")

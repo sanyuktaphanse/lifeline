@@ -1,10 +1,11 @@
 import inspect
 import json
+from decimal import Decimal
 
 from contracts.interfaces import Council, Ledger, MandateEngine, Rail, Router
 from contracts.schemas import LANGUAGES, AgentReply, RouteStatus
 from core.agent import MAX_MODEL_CALLS_PER_TURN, RUNNER_UP_DISAGREEMENT, TEXTS, AgentLoop
-from core.council import MAX_REASON, NO_ANSWER, VOICES, WAIT, FiveVoiceCouncil, reason_for
+from core.council import CUT, MAX_RAW, MAX_REASON, NO_ANSWER, VOICES, WAIT, FiveVoiceCouncil, reason_for
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from rails.fake_rail import FakeRail
@@ -67,12 +68,18 @@ UNUSABLE_RAIL = _split(*[("revolut", 0.9, WISE_REASON)] * len(VOICES))
 
 
 class SlowCheapRouter(FakeRouter):
-    """A router whose cheapest route is not its fastest, which the fixture router never gives."""
+    """A router whose cheapest real route is not its fastest, which the fixture router never gives.
+
+    The bank wire becomes the cheapest route and keeps its 72 hours, so the cheapest and the
+    fastest are different real rails.
+    """
 
     def quote(self, corridor, amount, purpose, urgency):
         routes = super().quote(corridor, amount, purpose, urgency)
         return [
-            route.model_copy(update={"arrival_hours": 96}) if route.rail == "sim_pix" else route
+            route.model_copy(update={"fee": Decimal("1"), "spread_cost": Decimal("0")})
+            if route.rail == "bank_wire"
+            else route
             for route in routes
         ]
 
@@ -703,14 +710,18 @@ def test_a_restart_restores_the_rail_the_student_was_asked_to_confirm():
 
 def test_a_simulated_confirmation_stays_simulated_after_a_restart():
     ledger = HashChainLedger()
+    only_simulated = {"sim_pix": FakeRail(name="sim_pix", simulated=True)}
     first = _setup(
-        [_call("propose_transfer", RENT)], ledger=ledger, council=_council(_split(*[("sim_pix", 0.8, WISE_REASON)] * len(VOICES)))
+        [_call("propose_transfer", RENT)],
+        ledger=ledger,
+        rails=only_simulated,
+        council=_council(_split(*[("sim_pix", 0.8, WISE_REASON)] * len(VOICES))),
     )
     reply = first.loop.handle(USER, _user(RENT_REQUEST))
     token = reply.confirmation.confirmation_token
     assert reply.confirmation.selected_route.simulated is True
 
-    second = _setup([], ledger=ledger)
+    second = _setup([], ledger=ledger, rails=only_simulated)
     paid = second.loop.handle(USER, _user("Yes"), confirmation_token=token)
 
     assert paid.receipt.rail == "sim_pix"
@@ -727,3 +738,62 @@ def test_a_restart_falls_back_to_the_loops_choice_when_the_advised_rail_is_gone(
     second = _setup([], ledger=ledger, rails={"wise": FakeRail(name="wise", simulated=False)})
 
     assert second.pending[token].selected_route.rail == "wise"
+
+
+def test_a_simulated_route_is_offered_only_when_no_real_route_is_usable():
+    adapter = FakeModelAdapter(THREE_TWO)
+    s = _setup([_call("propose_transfer", RENT)], council=FiveVoiceCouncil(adapter))
+
+    s.loop.handle(USER, _user(RENT_REQUEST))
+
+    for context in _contexts(adapter):
+        assert '"rail": "wise"' in context
+        assert '"rail": "bank_wire"' in context
+        assert "sim_pix" not in context
+
+
+def test_the_only_usable_route_is_offered_even_when_it_is_simulated():
+    adapter = FakeModelAdapter(_split(*[("sim_pix", 0.8, WISE_REASON)] * len(VOICES)))
+    s = _setup(
+        [_call("propose_transfer", RENT)],
+        rails={"sim_pix": FakeRail(name="sim_pix", simulated=True)},
+        council=FiveVoiceCouncil(adapter),
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    for context in _contexts(adapter):
+        assert '"rail": "sim_pix"' in context
+    assert _advice(s)["chosen"] == "sim_pix"
+    assert reply.confirmation.selected_route.rail == "sim_pix"
+
+
+def test_a_voice_cannot_choose_a_simulated_route_while_a_real_one_is_usable():
+    s = _rent(_split(*[("sim_pix", 0.9, WISE_REASON)] * len(VOICES)))
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert _advice(s)["chosen"] == NO_ANSWER
+    assert all(voice["abstained"] for voice in _advice(s)["voices"])
+    assert reply.confirmation.selected_route.rail == "wise"
+
+
+def test_an_abstaining_voices_raw_text_is_cut_in_the_record():
+    shouting = "I refuse to answer in JSON. " * 200
+    s = _rent([shouting] * len(VOICES))
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    raw = _advice(s)["voices"][0]["raw"]
+    assert raw == shouting[:MAX_RAW] + CUT
+    assert len(raw) == MAX_RAW + len(CUT)
+    assert reply.confirmation is not None
+
+
+def test_a_raw_text_that_is_already_short_is_kept_whole():
+    s = _rent(NONE_VALID)
+
+    s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert _advice(s)["voices"][0]["raw"] == ABSTAINING
+    assert CUT not in _advice(s)["voices"][0]["raw"]
