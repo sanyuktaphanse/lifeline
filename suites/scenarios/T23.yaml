@@ -1,23 +1,31 @@
 id: T23
-note: Each run leaves the turn's language unset, so the loop detects it from the student's own words rather than being told. The first run mixes a Portuguese question with an English request and is answered in Portuguese; the second is plain English and is answered in English. Typos are not covered, because detect_lang matches whole words from PORTUGUESE_WORDS and a misspelt word is not detected; a scenario with a typo would claim a tolerance the code does not have. The wording of each reply comes from the scripted model; what the scenario checks is the language the loop chose and that the real balances reached the model.
+note: Each run leaves the turn's language unset, so the loop detects it from the student's own words rather than being told. The first run mixes a Portuguese question with an English request, and because the entry is declared at tier T2 it carries the whole T2 trail rather than a read, proposing the rent transfer and confirming it, so the confirmation prompt and the receipt are asserted in the Portuguese the loop detected and the ledger holds a proposal, a decision, a confirmation, an execution, and a receipt. The second run is plain English on a balance read and is answered in English. Typos are not covered, because detect_lang matches whole words from PORTUGUESE_WORDS and a misspelt word is not detected; a scenario with a typo would claim a tolerance the code does not have. Only the answer in the second run is scripted model text; the Portuguese confirmation prompt and receipt in the first run come from the loop's own templates.
 runs:
   - lang: pt
     turns:
-      - user: Quanto tenho? Please tell me the balance in both currencies.
+      - user: Quanto tenho? Please send my 1,200 SGD rent to landlord_sp.
         lang: detect
         model:
           - calls:
-              - name: read_balance
-                arguments: {}
-          - text: Você tem 2.300 SGD e 150 BRL.
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
         expect:
-          reply: answer
+          reply: confirmation
           lang: pt
-          model_saw: ["Quanto tenho? Please tell me the balance in both currencies."]
+          rule_ids: [R11]
+          warning_key: warn.transfer.irreversible
+          must_contain:
+            - "Confirme: enviar 1200 SGD para landlord_sp"
+            - Nada é enviado antes da sua confirmação
+          model_saw: ["Quanto tenho? Please send my 1,200 SGD rent to landlord_sp."]
+      - user: Sim
+        confirm: latest
     expected:
+      reply: receipt
       lang: pt
-      must_contain: [Você tem 2.300 SGD e 150 BRL.]
-      ledger: [proposal, decision, execution]
+      must_contain: [Pronto., 1200 SGD enviados via wise, Recibo wise-0001]
+      must_not_contain: [Please confirm, Done.]
+      ledger: [proposal, decision, confirmation, execution, receipt]
   - lang: en
     turns:
       - user: How much money do I have in my account?
