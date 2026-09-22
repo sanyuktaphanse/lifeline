@@ -20,6 +20,24 @@ FREEZE_SUPPORTED = {"wise": True, "revolut": False}
 REVOLUT_FREEZE_DEEP_LINK = "https://example.invalid/revolut/freeze-card"
 
 
+def scripted_traces(
+    traces: Mapping[str, list[Mapping[str, Any]]] | None,
+) -> dict[str, dict[str, TraceResult]]:
+    """Turn a fixture's traces, a rail name to a list of TraceResult fields, into traces per rail.
+
+    A TraceResult needs a stage time and a fixture gives none, so the time is now; the rail
+    replaces it with the receipt's own time once it has issued that receipt.
+    """
+    now = datetime.now(timezone.utc)
+    return {
+        rail: {
+            trace["receipt_id"]: TraceResult.model_validate({"stage_entered_at": now, **trace})
+            for trace in rail_traces
+        }
+        for rail, rail_traces in (traces or {}).items()
+    }
+
+
 class FakeRail(Rail):
     def __init__(
         self,

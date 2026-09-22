@@ -1,0 +1,28 @@
+id: T29
+note: The scenario builds only the simulated Pix rail, so the loop's own route choice lands on it without the router being touched; with every rail present the loop prefers a real route and the simulated one is never chosen. The receipt carries the rail's simulated flag, so the reply ends with the simulated sentence from the loop's English template, and the ledger holds no simulated_mismatch note, which is what the loop writes when a route and its receipt disagree. The scenario does not cover a real Pix rail, because none exists; sim_pix is a fixture. It runs in English only, the language the entry declares.
+fixtures:
+  rails: [sim_pix]
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.transfer.irreversible
+          must_contain: [over sim_pix, Nothing moves until you confirm]
+      - user: "Yes"
+        confirm: latest
+    expected:
+      reply: receipt
+      must_contain:
+        - Done.
+        - 1200 SGD was sent over sim_pix
+        - Receipt sim_pix-0001
+        - This was a simulation. No real money moved.
+      must_not_contain: [simulated_mismatch, wise-0001, bank_wire-0001]
+      ledger: [proposal, decision, confirmation, execution, receipt]

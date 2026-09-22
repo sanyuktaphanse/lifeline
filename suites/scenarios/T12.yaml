@@ -1,0 +1,33 @@
+id: T12
+note: The scenario builds only the Wise and bank wire rails and makes Wise fail once on the exact idempotency key the loop uses for the proposal, student_001:t1:propose_transfer:1. Wise is the cheapest route, so the loop picks it, the rail refuses, and the loop writes a note saying nothing was charged under that key and offers the bank wire under the same confirmation token. The second confirmation pays over the bank wire. The ledger holds one execution and one receipt, and must_not_contain, which also scans the ledger payloads, catches a Wise receipt and a second bank wire receipt, so exactly one receipt exists after the retry. Which rail fails is a fixture, not a claim about Wise; the wording of the failure is the loop's own template. It runs in English only, the language the entry declares.
+fixtures:
+  rails: [wise, bank_wire]
+  fail_once:
+    - {rail: wise, turn: 1, call: 1}
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.transfer.irreversible
+          must_contain: [over wise, Nothing moves until you confirm]
+      - user: "Yes"
+        confirm: latest
+        expect:
+          reply: confirmation
+          must_contain:
+            - wise failed and nothing was charged under student_001:t1:propose_transfer:1
+            - The next best route is bank_wire
+      - user: "Yes"
+        confirm: latest
+    expected:
+      reply: receipt
+      must_contain: [Done., 1200 SGD was sent over bank_wire, Receipt bank_wire-0001]
+      must_not_contain: [wise-0001, bank_wire-0002, This was a simulation.]
+      ledger: [proposal, decision, confirmation, note, confirmation, execution, receipt]

@@ -1,0 +1,37 @@
+id: T23
+note: Each run leaves the turn's language unset, so the loop detects it from the student's own words rather than being told. The first run mixes a Portuguese question with an English request and is answered in Portuguese; the second is plain English and is answered in English. Typos are not covered, because detect_lang matches whole words from PORTUGUESE_WORDS and a misspelt word is not detected; a scenario with a typo would claim a tolerance the code does not have. The wording of each reply comes from the scripted model; what the scenario checks is the language the loop chose and that the real balances reached the model.
+runs:
+  - lang: pt
+    turns:
+      - user: Quanto tenho? Please tell me the balance in both currencies.
+        lang: detect
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {}
+          - text: Você tem 2.300 SGD e 150 BRL.
+        expect:
+          reply: answer
+          lang: pt
+          model_saw: ["Quanto tenho? Please tell me the balance in both currencies."]
+    expected:
+      lang: pt
+      must_contain: [Você tem 2.300 SGD e 150 BRL.]
+      ledger: [proposal, decision, execution]
+  - lang: en
+    turns:
+      - user: How much money do I have in my account?
+        lang: detect
+        model:
+          - calls:
+              - name: read_balance
+                arguments: {}
+          - text: You have 2,300 SGD and 150 BRL.
+        expect:
+          reply: answer
+          lang: en
+          model_saw: ["How much money do I have in my account?"]
+    expected:
+      lang: en
+      must_contain: [You have 2,300 SGD and 150 BRL.]
+      ledger: [proposal, decision, execution]
