@@ -6,6 +6,10 @@ from typing import Annotated, Any, Literal
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+# The languages Lifeline writes replies in. Source: the TEXTS table in core/agent.py, which a
+# test in tests/test_council.py pins to this tuple so the two cannot drift.
+LANGUAGES = ("en", "pt", "zh")
+LanguageCode = Annotated[str, Field(pattern=f"^({'|'.join(LANGUAGES)})$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]
 # Source: docs/decisions.md, 18 September 2026. No student transfer comes near one hundred million.
@@ -253,12 +257,51 @@ class Message(BaseModel):
         return self
 
 
+class CouncilAdvice(BaseModel):
+    """What the council advised, for a frontend to show without reading the reply text.
+
+    Source: docs/decisions.md, 22 September 2026. The full deliberation, the voices
+    included, goes to the ledger as a `council` entry; this is the advice only.
+    """
+
+    chosen: str
+    runner_up: str
+    reason: str
+    disagreement: Annotated[float, Field(ge=0, le=1)]
+    triggers: list[str]
+
+
+class CouncilVoice(BaseModel):
+    """One voice as the record keeps it: its answer, or its abstention with the raw text."""
+
+    voice: str
+    abstained: bool
+    position: str | None = None
+    confidence: Annotated[float, Field(ge=0, le=1)] | None = None
+    reason: str | None = None
+    evidence: list[str] | None = None
+    raw: str | None = None
+
+
+class CouncilDeliberation(CouncilAdvice):
+    """A whole deliberation: the advice, the question that was asked, and every voice.
+
+    The agent loop validates what a `Council` returns into this model before it reads it, writes
+    it, or shows any of it, so an implementation other than this repository's cannot put a value
+    of the wrong type, or a field nobody asked for, into the ledger or into a reply.
+    """
+
+    question: str
+    voices: list[CouncilVoice]
+
+
 class ConfirmationRequest(BaseModel):
     action: Action
     confirmation_token: str
     warning_key: str
     routes: list[Route]
     selected_route: Route | None = None
+    council: CouncilAdvice | None = None
     expires_in_seconds: int = Field(default=300, gt=0)
 
 

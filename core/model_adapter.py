@@ -26,6 +26,12 @@ ANTHROPIC_MAX_TOKENS = 16000
 # Source: project decision on 14 September 2026 to cap DashScope replies at 2048 tokens.
 DASHSCOPE_MAX_TOKENS = 2048
 AUTH_STATUSES = {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}
+# The council may run on a different model from the loop's. Each name below replaces the
+# ordinary one when it is set, so the council needs no provider code of its own.
+COUNCIL_MODEL_VARIABLES = {
+    "ANTHROPIC_MODEL": "ANTHROPIC_COUNCIL_MODEL",
+    "DASHSCOPE_MODEL": "DASHSCOPE_COUNCIL_MODEL",
+}
 
 
 class ModelAdapterError(RuntimeError):
@@ -42,6 +48,18 @@ class MissingApiKey(ProviderUnavailable):
 
 def _setting(env: Mapping[str, str], name: str, default: str) -> str:
     return env.get(name) or default
+
+
+def environment(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
+    """The settings a component reads: the ones given, or the process environment with .env loaded.
+
+    Passing an environment is how a test, or a component that wants different models, keeps out of
+    the process environment altogether.
+    """
+    if env is None:
+        load_dotenv()
+        return os.environ
+    return env
 
 
 def _anthropic_assistant_content(message: Message) -> str | list[dict[str, Any]]:
@@ -237,9 +255,7 @@ _PROVIDER_SETTINGS = {
 
 class ProviderModelAdapter(ModelAdapter):
     def __init__(self, env: Mapping[str, str] | None = None) -> None:
-        if env is None:
-            load_dotenv()
-            env = os.environ
+        env = environment(env)
         self._env = env
         self.provider = _setting(env, "MODEL_PROVIDER", DEFAULT_PROVIDER)
         self.fallback_provider = _setting(
@@ -282,3 +298,21 @@ class ProviderModelAdapter(ModelAdapter):
                 f"{key_variable} is not set. Add it to .env to use {provider}."
             )
         return _PROVIDERS[provider](self._models[provider], api_key, messages, tools)
+
+
+def council_env(env: Mapping[str, str]) -> dict[str, str]:
+    """The environment a council adapter reads: the given one with the council models in place.
+
+    A council model variable that is unset or empty changes nothing, so a council with no
+    variables of its own runs on the same models as the loop.
+    """
+    overlaid = dict(env)
+    for ordinary, council in COUNCIL_MODEL_VARIABLES.items():
+        if env.get(council):
+            overlaid[ordinary] = env[council]
+    return overlaid
+
+
+def council_adapter(env: Mapping[str, str] | None = None) -> ProviderModelAdapter:
+    """An adapter for the council, separate from the loop's, so its calls are its own."""
+    return ProviderModelAdapter(council_env(environment(env)))

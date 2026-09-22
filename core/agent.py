@@ -8,12 +8,14 @@ from typing import Any
 from pydantic import ValidationError
 
 from contracts.errors import RailError
-from contracts.interfaces import Ledger, MandateEngine, ModelAdapter, Rail, Router
+from contracts.interfaces import Council, Ledger, MandateEngine, ModelAdapter, Rail, Router
 from contracts.schemas import (
     Action,
     ActionType,
     AgentReply,
     ConfirmationRequest,
+    CouncilAdvice,
+    CouncilDeliberation,
     Decision,
     FreezeResult,
     LedgerEntry,
@@ -32,11 +34,27 @@ from contracts.schemas import (
     ToolCall,
 )
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.council import NO_ANSWER, WAIT, reason_for
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 
 ACTOR = "agent"
 URGENCY = "normal"
+# Source: docs/decisions.md, 22 September 2026. A product choice about when the reply names the
+# runner up, not a sourced figure.
+RUNNER_UP_DISAGREEMENT = 0.4
+COUNCIL_QUESTION = "Which of these routes should carry the transfer, or should the student wait?"
+# What a voice is told about each usable route. A route's own fields, nothing added.
+COUNCIL_ROUTE_FIELDS = {
+    "rail",
+    "fee",
+    "spread_cost",
+    "arrival_hours",
+    "status",
+    "simulated",
+    "rule_id",
+    "fee_source_url",
+}
 # Source: ConfirmationRequest.expires_in_seconds in contracts/schemas.py.
 CONFIRMATION_TTL = timedelta(
     seconds=ConfirmationRequest.model_fields["expires_in_seconds"].default
@@ -198,6 +216,9 @@ TEXTS = {
         "frozen": "Done. Card {instrument} is frozen.",
         "freeze_not_supported": "Lifeline could not freeze card {instrument} directly, because the issuer does not allow it. Freeze it now in the issuer's app: {deep_link}",
         "freeze_failed": "Lifeline could not freeze card {instrument}: {reason} Freeze it now in the issuer's app.",
+        "council": "The council chose {rail}. {reason}",
+        "council_runner_up": "The council was divided. The next choice was {rail}. {reason}",
+        "council_wait": "The council advised waiting. {reason}",
     },
     "pt": {
         "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
@@ -219,6 +240,9 @@ TEXTS = {
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
         "freeze_not_supported": "O Lifeline não conseguiu bloquear o cartão {instrument} diretamente, porque o emissor não permite. Bloqueie agora no app do emissor: {deep_link}",
         "freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}: {reason} Bloqueie agora no app do emissor.",
+        "council": "O conselho escolheu {rail}. {reason}",
+        "council_runner_up": "O conselho ficou dividido. A segunda opção foi {rail}. {reason}",
+        "council_wait": "O conselho aconselhou esperar. {reason}",
     },
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
@@ -240,6 +264,9 @@ TEXTS = {
         "frozen": "已完成。卡片 {instrument} 已冻结。",
         "freeze_not_supported": "Lifeline 无法直接冻结卡片 {instrument}，因为发卡机构不允许。请立即在发卡机构的应用中冻结：{deep_link}",
         "freeze_failed": "Lifeline 无法冻结卡片 {instrument}：{reason} 请立即在发卡机构的应用中冻结。",
+        "council": "顾问团选择了 {rail}。{reason}",
+        "council_runner_up": "顾问团意见不一致。第二选择是 {rail}。{reason}",
+        "council_wait": "顾问团建议先等一等。{reason}",
     },
 }
 
@@ -304,6 +331,8 @@ class _Waiting:
     model: str | None
     display_name: str | None
     failed_rails: set[str] = field(default_factory=set)
+    # The rail the student was asked to confirm, when a council chose it rather than `_choose`.
+    chosen_rail: str | None = None
 
 
 @dataclass
@@ -342,14 +371,29 @@ def _bounded(messages: list[Message]) -> list[Message]:
     return kept
 
 
-def _closing_results(calls: list[ToolCall]) -> list[Message]:
+def _closing_results(calls: list[ToolCall], reply: AgentReply) -> list[Message]:
+    """The tool results for a turn the tool ended. The first names the call that ended it.
+
+    A transfer the council advised on carries that advice, so a later question about why the
+    route was chosen can be answered from the conversation rather than guessed at.
+    """
+    advice = reply.confirmation.council if reply.confirmation is not None else None
     results = []
     for index, call in enumerate(calls):
-        outcome = {"turn_ended": "the reply to the student follows"} if index == 0 else {
-            "not_run": "the turn ended at an earlier call"
-        }
+        outcome: dict[str, Any] = (
+            {"turn_ended": "the reply to the student follows"}
+            if index == 0
+            else {"not_run": "the turn ended at an earlier call"}
+        )
+        if index == 0 and advice is not None:
+            outcome["council"] = advice.model_dump(mode="json")
         results.append(
-            Message(role=Role.TOOL, text=json.dumps(outcome), source=Source.TOOL_RESULT, tool_call_id=call.id)
+            Message(
+                role=Role.TOOL,
+                text=json.dumps(outcome, ensure_ascii=False),
+                source=Source.TOOL_RESULT,
+                tool_call_id=call.id,
+            )
         )
     return results
 
@@ -425,8 +469,10 @@ class AgentLoop:
         balances: dict[str, dict[str, Decimal]],
         pending: dict[str, PendingConfirmation],
         conversations: ConversationStore | None = None,
+        council: Council | None = None,
     ) -> None:
         self._adapter = adapter
+        self._council = council
         self._engine = engine
         self._ledger = ledger
         self._router = router
@@ -525,7 +571,7 @@ class AgentLoop:
                 calls += 1
                 outcome = self._run_tool(user_id, mandate, lang, trail, call, calls)
                 if isinstance(outcome, AgentReply):
-                    turn_messages += _closing_results(answer.tool_calls[index:])
+                    turn_messages += _closing_results(answer.tool_calls[index:], outcome)
                     turn_messages.append(Message(role=Role.ASSISTANT, text=outcome.text, lang=lang))
                     return self._finish(trail, turn_messages, outcome)
                 decision, result = outcome
@@ -687,13 +733,19 @@ class AgentLoop:
             provider=trail.provider,
             model=trail.model,
         )
+        advice: dict[str, Any] | None = None
         if action.type is ActionType.TRANSFER:
             routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-            selected = self._choose(routes, set())
+            considered = self._considered(routes, set())
+            advice = self._advise(user_id, lang, trail, action, routes, considered)
+            selected = self._advised_route(considered, advice) or self._choose(routes, set())
             if selected is None:
                 return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
             pending.routes, pending.selected_route = routes, selected
             text = _text(lang, "confirm", **_route_values(action, selected))
+            said = self._council_text(lang, advice)
+            if said:
+                text = f"{text} {said}"
         elif action.type is ActionType.ADD_PAYEE:
             if action.payee_id in self._mandates[user_id].allowed_payees:
                 return self._reply(trail, lang, _text(lang, "payee_exists", payee=action.payee_id), decision=decision)
@@ -723,8 +775,151 @@ class AgentLoop:
             warning_key=warning_key,
             routes=pending.routes,
             selected_route=pending.selected_route,
+            council=None if advice is None else CouncilAdvice.model_validate(advice),
         )
         return self._reply(trail, lang, text, decision=decision, confirmation=confirmation)
+
+    def _advise(
+        self,
+        user_id: str,
+        lang: str,
+        trail: _Trail,
+        action: Action,
+        routes: list[Route],
+        considered: list[Route],
+    ) -> dict[str, Any] | None:
+        """Convene the council when a trigger fires, and write what it said.
+
+        The council is advice. It never removes a route, never changes a field of the action, and
+        never touches the confirmation token, and any failure of its own leaves a note and the
+        payment path exactly as it was.
+        """
+        if self._council is None or not considered:
+            return None
+        mandate = self._mandates[user_id]
+        triggers = self._escalations(user_id, action, mandate, routes, considered)
+        if not triggers:
+            return None
+        context = {
+            "amount": str(action.amount),
+            "currency": action.currency,
+            "corridor": action.corridor,
+            "payee": action.payee_id,
+            "purpose": action.purpose,
+            "per_txn_limit": str(mandate.per_txn_limit),
+            "lang": lang,
+            "triggers": triggers,
+            "routes": [route.model_dump(mode="json", include=COUNCIL_ROUTE_FIELDS) for route in considered],
+        }
+        try:
+            deliberation = CouncilDeliberation.model_validate(
+                self._council.deliberate(COUNCIL_QUESTION, context)
+            )
+        except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, advice never blocks a payment
+            self._council_failed(trail, action, triggers, f"{type(error).__name__}: {error}")
+            return None
+        if deliberation.chosen not in {*(route.rail for route in considered), WAIT, NO_ANSWER}:
+            # The reply names the chosen rail, so a position the router never quoted is no answer.
+            self._council_failed(
+                trail, action, triggers, "The council chose a position that is not a quoted route."
+            )
+            return None
+        # The triggers are the loop's own finding, never a council's claim about them.
+        advice = deliberation.model_copy(update={"triggers": triggers}).model_dump(
+            mode="json", exclude_none=True
+        )
+        self._write(
+            trail, "council", {"idempotency_key": action.idempotency_key, "council": advice}
+        )
+        return advice
+
+    def _council_failed(
+        self, trail: _Trail, action: Action, triggers: list[str], error: str
+    ) -> None:
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "council_failed",
+                "idempotency_key": action.idempotency_key,
+                "triggers": triggers,
+                "error": error,
+            },
+        )
+
+    def _escalations(
+        self,
+        user_id: str,
+        action: Action,
+        mandate: Mandate,
+        routes: list[Route],
+        considered: list[Route],
+    ) -> list[str]:
+        """Why this transfer deserves a council. An empty list means it does not.
+
+        The cheapest and the fastest are compared within the routes `_choose` considers first, so
+        the comparison is between real rails whenever real money can move.
+        """
+        triggers: list[str] = []
+        # The share is read from the mandate, so no money figure is written here.
+        if action.amount is not None and action.amount > mandate.per_txn_limit / 2:
+            triggers.append("above_half_per_txn_limit")
+        paid = [past for past in self._history.get(user_id, []) if past.type is ActionType.TRANSFER]
+        if not any(past.corridor == action.corridor for past in paid):
+            triggers.append("first_transfer_on_corridor")
+        if not any(past.payee_id == action.payee_id for past in paid):
+            triggers.append("first_transfer_to_payee")
+        cheapest = min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
+        fastest = min(considered, key=lambda route: route.arrival_hours, default=None)
+        if (
+            cheapest is not None
+            and fastest is not None
+            and cheapest.rail != fastest.rail
+            and not self._urgency_stated()
+        ):
+            triggers.append("cost_and_speed_differ")
+        if any(route.status in (RouteStatus.DEGRADED, RouteStatus.DOWN) for route in routes):
+            triggers.append("route_degraded_or_down")
+        if self._in_rescue(user_id):
+            triggers.append("rescue_state")
+        return triggers
+
+    def _urgency_stated(self) -> bool:
+        """Whether the student asked for speed.
+
+        URGENCY is the constant `normal` today, so no urgency is ever stated and this is always
+        False. It becomes real the day the loop reads urgency from the student's own words.
+        """
+        return URGENCY != "normal"
+
+    def _in_rescue(self, user_id: str) -> bool:
+        """Whether the student is in a rescue state.
+
+        Stage 6 builds the rescue state and decides this for real. Until then no student is in one.
+        """
+        return False
+
+    @staticmethod
+    def _route_named(routes: list[Route], rail: str | None) -> Route | None:
+        return None if rail is None else next((r for r in routes if r.rail == rail), None)
+
+    def _advised_route(self, considered: list[Route], advice: dict[str, Any] | None) -> Route | None:
+        """The route the chair chose, or nothing when it chose to wait or could not answer."""
+        return None if advice is None else self._route_named(considered, advice["chosen"])
+
+    def _council_text(self, lang: str, advice: dict[str, Any] | None) -> str:
+        if advice is None or advice["chosen"] == NO_ANSWER:
+            return ""
+        if advice["chosen"] == WAIT:
+            return _text(lang, "council_wait", reason=advice["reason"])
+        said = _text(lang, "council", rail=advice["chosen"], reason=advice["reason"])
+        if advice["disagreement"] > RUNNER_UP_DISAGREEMENT:
+            runner_up = advice["runner_up"]
+            second = _text(
+                lang, "council_runner_up", rail=runner_up, reason=reason_for(advice, runner_up)
+            )
+            return f"{said} {second}"
+        return said
 
     def _confirm(self, user_id: str, mandate: Mandate, lang: str, token: str) -> AgentReply:
         pending = self._pending.get(token)
@@ -1146,8 +1341,8 @@ class AgentLoop:
         )
         return self._reply(trail, lang, text, confirmation=confirmation)
 
-    def _choose(self, routes: list[Route], failed_rails: set[str]) -> Route | None:
-        usable = [
+    def _usable(self, routes: list[Route], failed_rails: set[str]) -> list[Route]:
+        return [
             route
             for route in routes
             if route.blocked_reason is None
@@ -1156,7 +1351,19 @@ class AgentLoop:
             and route.rail in self._rails
             and route.rail not in failed_rails
         ]
-        return min(usable, key=lambda route: (route.simulated, route.fee + route.spread_cost), default=None)
+
+    def _considered(self, routes: list[Route], failed_rails: set[str]) -> list[Route]:
+        """The usable routes in the first order `_choose` looks at: the real ones, and the
+        simulated ones only when no real route is usable. The council is shown this set and the
+        escalation rule compares within it, so neither is offered a simulation while real money
+        can move.
+        """
+        usable = self._usable(routes, failed_rails)
+        return [route for route in usable if not route.simulated] or usable
+
+    def _choose(self, routes: list[Route], failed_rails: set[str]) -> Route | None:
+        considered = self._considered(routes, failed_rails)
+        return min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
 
     def _refusal(self, lang: str, decision: Decision) -> str:
         return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=" ".join(decision.reasons))
@@ -1211,6 +1418,13 @@ class AgentLoop:
                     self._close(refused.user_id, refused.action, "refused")
                 elif key in proposals:
                     self._maybe_waiting(user_id, entry, proposals[key], waiting)
+            elif entry.kind == "council":
+                # The council chose the rail the student was asked to confirm, so a rebuild must
+                # restore that rail and not the one `_choose` would pick on its own.
+                key = entry.payload.get("idempotency_key")
+                chosen = entry.payload.get("council", {}).get("chosen")
+                if key in waiting and isinstance(chosen, str):
+                    waiting[key].chosen_rail = chosen
             elif entry.kind == "confirmation":
                 key = entry.payload["idempotency_key"]
                 if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
@@ -1308,7 +1522,8 @@ class AgentLoop:
         action = waited.action
         if action.type is ActionType.TRANSFER:
             routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
-            selected = self._choose(routes, pending.failed_rails)
+            restored = self._route_named(self._considered(routes, pending.failed_rails), waited.chosen_rail)
+            selected = restored or self._choose(routes, pending.failed_rails)
             if selected is None:
                 self._close(waited.user_id, action, "no_route")
                 return

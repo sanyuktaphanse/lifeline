@@ -19,6 +19,8 @@ from core.model_adapter import (
     ModelAdapterError,
     ProviderModelAdapter,
     ProviderUnavailable,
+    council_adapter,
+    council_env,
 )
 
 USER_TEXT = "Quote 1,200 SGD to my landlord in Brazil"
@@ -456,3 +458,49 @@ def test_other_errors_do_not_fall_back(monkeypatch):
     adapter = ProviderModelAdapter(env=KEYS)
     with pytest.raises(anthropic.BadRequestError):
         adapter.complete(MESSAGES, [])
+
+
+def test_the_council_environment_replaces_each_model_when_a_council_model_is_set():
+    env = dict(
+        KEYS,
+        ANTHROPIC_MODEL="claude-opus-5",
+        DASHSCOPE_MODEL="qwen-plus",
+        ANTHROPIC_COUNCIL_MODEL="claude-sonnet-5",
+        DASHSCOPE_COUNCIL_MODEL="qwen-turbo",
+    )
+
+    overlaid = council_env(env)
+
+    assert overlaid["ANTHROPIC_MODEL"] == "claude-sonnet-5"
+    assert overlaid["DASHSCOPE_MODEL"] == "qwen-turbo"
+    assert overlaid["ANTHROPIC_API_KEY"] == env["ANTHROPIC_API_KEY"]
+    assert env["ANTHROPIC_MODEL"] == "claude-opus-5"
+
+
+def test_the_council_environment_leaves_each_model_alone_when_no_council_model_is_set():
+    env = dict(KEYS, ANTHROPIC_MODEL="claude-opus-5", DASHSCOPE_COUNCIL_MODEL="")
+
+    overlaid = council_env(env)
+
+    assert overlaid["ANTHROPIC_MODEL"] == "claude-opus-5"
+    assert "DASHSCOPE_MODEL" not in overlaid
+
+
+def test_the_council_adapter_calls_the_council_model(monkeypatch):
+    anthropic_calls: list = []
+    monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic(anthropic_calls))
+
+    adapter = council_adapter(env=dict(KEYS, ANTHROPIC_COUNCIL_MODEL="claude-sonnet-5"))
+    adapter.complete(MESSAGES, [])
+
+    assert isinstance(adapter, ProviderModelAdapter)
+    assert anthropic_calls[0]["model"] == "claude-sonnet-5"
+
+
+def test_the_council_adapter_falls_back_to_the_ordinary_model(monkeypatch):
+    anthropic_calls: list = []
+    monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic(anthropic_calls))
+
+    council_adapter(env=KEYS).complete(MESSAGES, [])
+
+    assert anthropic_calls[0]["model"] == "claude-opus-5"

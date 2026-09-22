@@ -12,6 +12,7 @@ import yaml
 
 from contracts.schemas import AgentReply, Mandate, Message, Role, Source, StandingEvent, ToolCall
 from core.agent import AgentLoop
+from core.council import VOICES, FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
@@ -127,6 +128,23 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, FakeRail]:
         )
         for name in names
     }
+
+
+def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
+    """The council a scenario asks for, with one scripted reply per voice.
+
+    Without `fixtures.council` the loop is built with no council at all, which is how every
+    scenario written before the council ran and still runs.
+    """
+    scripted = fixtures.get("council")
+    if scripted is None:
+        return None
+    if len(scripted) != len(VOICES):
+        raise ValueError(
+            f"council scripts {len(scripted)} voices, and it needs one for each of "
+            f"{', '.join(VOICES)}"
+        )
+    return FiveVoiceCouncil(FakeModelAdapter(scripted))
 
 
 def _response(response: dict[str, Any], number: int) -> Message:
@@ -265,7 +283,9 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         ]
         ledger = HashChainLedger()
         adapter = FakeModelAdapter(responses)
-        fixtures = scenario.get("fixtures", {})
+        # A run's own fixtures replace the scenario's key by key, so two runs of one entry can
+        # differ in what they are given, such as a council that splits its vote differently.
+        fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
         mandates = {USER: _mandate(fixtures.get("mandate", {}))}
         loop = AgentLoop(
@@ -277,6 +297,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             mandates=mandates,
             balances={USER: balances},
             pending={},
+            council=_council(fixtures),
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):

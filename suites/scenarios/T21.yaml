@@ -1,0 +1,94 @@
+id: T21
+note: >
+  Both runs propose the rent transfer, which fires three escalation triggers in a fresh run, the
+  amount above half the per transaction limit and the first transfer on this corridor and to this
+  payee, so the loop convenes the council before it stores the pending confirmation and the ledger
+  holds a proposal, a decision, and a council entry. The five voices are scripted, in the order
+  cost, speed, safety, rules, and timing. In the first run three choose wise and two choose
+  bank_wire, so the disagreement score is 0.4 exactly and the reply names the chosen rail and the
+  reasons of the voices that agreed with it and does not name the runner up. In the second run two
+  choose wise, two choose bank_wire, and one says wait, so the score is 0.6 and the reply names the
+  runner up as well. The second turn asks why that route was chosen and makes no tool call, and
+  model_saw asserts that both the chair's reason and the chosen rail reached the model as the tool
+  result of the proposal, which is the entry itself: the student can ask what the council said and
+  the answer comes from the conversation. The chair's arithmetic, the selected route, the ledger
+  entry, and the confirmation prompt come from the code; the voices are scripted fixtures and the
+  answer in the second turn is scripted model text, which is what an entry about reading back an
+  explanation can assert without a live model.
+fixtures:
+  council:
+    - '{"position": "wise", "confidence": 0.9, "reason": "Wise costs the least in fees and exchange cost of the routes that can carry this rent.", "evidence": ["wise"]}'
+    - '{"position": "wise", "confidence": 0.8, "reason": "Wise arrives well before the bank wire, which is what a rent payment needs.", "evidence": ["wise", "bank_wire"]}'
+    - '{"position": "wise", "confidence": 0.7, "reason": "Wise is quoted up rather than degraded, so the payment is not exposed to a retry.", "evidence": ["wise"]}'
+    - '{"position": "bank_wire", "confidence": 0.6, "reason": "The bank wire is the route with the clearest record for a first payment to this landlord.", "evidence": ["bank_wire"]}'
+    - '{"position": "bank_wire", "confidence": 0.5, "reason": "Sending over the bank wire today still leaves time before the rent is due.", "evidence": ["bank_wire"]}'
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect:
+          reply: confirmation
+          lang: en
+          warning_key: warn.transfer.irreversible
+          must_contain:
+            - "Please confirm: send 1200 SGD to landlord_sp for rent over wise"
+            - The council chose wise.
+            - Wise costs the least in fees and exchange cost of the routes that can carry this rent.
+            - Wise arrives well before the bank wire, which is what a rent payment needs.
+      - user: Why did the council choose that route?
+        model:
+          - text: The council chose Wise because it costs the least and still arrives before the rent is due, while two voices preferred the bank wire.
+        expect:
+          reply: answer
+          lang: en
+          model_saw:
+            - Wise costs the least in fees and exchange cost of the routes that can carry this rent.
+            - '"chosen": "wise"'
+            - '"disagreement": 0.4'
+    expected:
+      reply: answer
+      lang: en
+      must_contain: [The council chose Wise because it costs the least]
+      must_not_contain: [The council was divided.]
+      ledger: [proposal, decision, council]
+  - lang: en
+    fixtures:
+      council:
+        - '{"position": "wise", "confidence": 0.9, "reason": "Wise costs the least in fees and exchange cost of the routes that can carry this rent.", "evidence": ["wise"]}'
+        - '{"position": "wise", "confidence": 0.8, "reason": "Wise arrives well before the bank wire, which is what a rent payment needs.", "evidence": ["wise", "bank_wire"]}'
+        - '{"position": "bank_wire", "confidence": 0.6, "reason": "The bank wire is the route with the clearest record for a first payment to this landlord.", "evidence": ["bank_wire"]}'
+        - '{"position": "bank_wire", "confidence": 0.5, "reason": "Sending over the bank wire today still leaves time before the rent is due.", "evidence": ["bank_wire"]}'
+        - '{"position": "wait", "confidence": 0.4, "reason": "Nothing in the request says the rent is due today, so waiting for a better rate costs nothing.", "evidence": ["wise"]}'
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect:
+          reply: confirmation
+          lang: en
+          warning_key: warn.transfer.irreversible
+          must_contain:
+            - "Please confirm: send 1200 SGD to landlord_sp for rent over wise"
+            - The council chose wise.
+            - The council was divided. The next choice was bank_wire.
+            - The bank wire is the route with the clearest record for a first payment to this landlord.
+      - user: Why did the council choose that route, and what was the other choice?
+        model:
+          - text: The council chose Wise on cost and speed, and it was divided, because two voices preferred the bank wire and one wanted to wait.
+        expect:
+          reply: answer
+          lang: en
+          model_saw:
+            - '"runner_up": "bank_wire"'
+            - '"disagreement": 0.6'
+    expected:
+      reply: answer
+      lang: en
+      must_contain: [The council chose Wise on cost and speed]
+      ledger: [proposal, decision, council]

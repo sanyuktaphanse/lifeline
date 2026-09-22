@@ -78,7 +78,7 @@ def _honest_rails() -> dict[str, FakeRail]:
     }
 
 
-def _setup(responses, *, ledger=None, rails=None, router=None, store=None) -> Setup:
+def _setup(responses, *, ledger=None, rails=None, router=None, store=None, council=None) -> Setup:
     adapter = FakeModelAdapter(responses)
     ledger = HashChainLedger() if ledger is None else ledger
     store = ConversationStore() if store is None else store
@@ -95,6 +95,7 @@ def _setup(responses, *, ledger=None, rails=None, router=None, store=None) -> Se
         balances={USER: {"SGD": Decimal("2300"), "BRL": Decimal("150")}},
         pending=pending,
         conversations=store,
+        council=council,
     )
     return Setup(loop, adapter, ledger, pending, mandates, store)
 
