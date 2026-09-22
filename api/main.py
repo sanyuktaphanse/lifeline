@@ -35,7 +35,7 @@ from core.conversation_store import ConversationStore
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter
-from rails.fake_rail import FakeRail
+from rails.fake_rail import FakeRail, scripted_traces
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -91,14 +91,7 @@ class Health(BaseModel):
 
 
 def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, FakeRail]:
-    now = datetime.now(timezone.utc)
-    scripted = {
-        rail: {
-            trace["receipt_id"]: TraceResult.model_validate({"stage_entered_at": now, **trace})
-            for trace in rail_traces
-        }
-        for rail, rail_traces in (traces or {}).items()
-    }
+    scripted = scripted_traces(traces)
     return {
         "wise": FakeRail(scripted.get("wise"), name="wise", simulated=False),
         "bank_wire": FakeRail(scripted.get("bank_wire"), name="bank_wire", simulated=False),

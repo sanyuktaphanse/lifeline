@@ -16,7 +16,7 @@ from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
-from rails.fake_rail import FakeRail
+from rails.fake_rail import FakeRail, scripted_traces
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +30,12 @@ TIERS = ("T0", "T1", "T2", "T3")
 TEXT_CHECKS = ("must_contain", "must_not_contain")
 # The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
 TURN_KIND = "turn"
+# Expectations judged against the run itself, not against the final reply.
+RUN_CHECKS = ("ledger", "must_not_contain", "verify")
+# A turn whose language is this one is built without a language, so the loop detects it.
+DETECT = "detect"
+# The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
+PROPOSE_TRANSFER = "propose_transfer"
 
 # Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
 USER = "student_001"
@@ -44,6 +50,8 @@ FIXTURE_MANDATE: dict[str, Any] = {
     "allowed_purposes": ["rent"],
 }
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
+# The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
+FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 
@@ -86,12 +94,38 @@ def _mandate(overrides: dict[str, Any]) -> Mandate:
     return Mandate.model_validate(fields)
 
 
-def _rails() -> dict[str, FakeRail]:
+def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Build, per rail, the idempotency keys the loop will use for the proposals that must fail once.
+
+    The loop's key is the student, the letter t and the turn number, the tool, and the call number
+    within that turn, as `_run_tool` in `core/agent.py` builds it. An entry that the helper cannot
+    express names its `key` in full instead.
+    """
+    keys: dict[str, set[str]] = {}
+    for entry in entries:
+        key = entry.get("key") or f"{USER}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
+        keys.setdefault(entry["rail"], set()).add(key)
+    return keys
+
+
+def _rails(fixtures: dict[str, Any]) -> dict[str, FakeRail]:
+    names = fixtures.get("rails", list(FIXTURE_RAILS))
+    unknown = [name for name in names if name not in FIXTURE_RAILS]
+    if unknown:
+        raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
+    traces = scripted_traces(fixtures.get("traces"))
+    failing = _fail_once_keys(fixtures.get("fail_once", []))
+    stray = sorted({*traces, *failing} - set(names))
+    if stray:
+        raise ValueError(f"traces or fail_once name rails {stray}, which this scenario does not build")
     return {
-        "wise": FakeRail(name="wise", simulated=False),
-        "bank_wire": FakeRail(name="bank_wire", simulated=False),
-        "sim_pix": FakeRail(name="sim_pix", simulated=True),
-        "revolut": FakeRail(name="revolut", simulated=False),
+        name: FakeRail(
+            traces.get(name),
+            fail_once_keys=failing.get(name, ()),
+            name=name,
+            simulated=FIXTURE_RAILS[name],
+        )
+        for name in names
     }
 
 
@@ -197,9 +231,27 @@ def _token(confirm: Any, replies: list[AgentReply]) -> str:
     return source.confirmation.confirmation_token
 
 
+def _turn_lang(turn: dict[str, Any], run: dict[str, Any]) -> str:
+    """The language of a turn: its own, or the run's, which is also what a detect turn is reported as."""
+    lang = turn.get("lang", run["lang"])
+    return run["lang"] if lang == DETECT else lang
+
+
+def _message(turn: dict[str, Any], run: dict[str, Any]) -> Message:
+    """The student's message. A detect turn passes no language, so the loop detects it from the text."""
+    fields: dict[str, Any] = {
+        "role": Role.USER,
+        "text": turn["user"],
+        "source": Source(turn.get("source", Source.USER_TURN.value)),
+    }
+    lang = turn.get("lang", run["lang"])
+    if lang != DETECT:
+        fields["lang"] = lang
+    return Message(**fields)
+
+
 def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult:
-    langs = [turn.get("lang", run["lang"]) for turn in run["turns"]]
-    result = RunResult(langs=list(dict.fromkeys(langs)))
+    result = RunResult(langs=list(dict.fromkeys(_turn_lang(turn, run) for turn in run["turns"])))
     shared, own = scenario.get("expected", {}), run.get("expected", {})
     expected = {**shared, **own}
     for key in TEXT_CHECKS:
@@ -221,7 +273,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
-            rails=_rails(),
+            rails=_rails(fixtures),
             mandates=mandates,
             balances={USER: balances},
             pending={},
@@ -232,22 +284,26 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
                 events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
                 result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
                 continue
-            message = Message(
-                role=Role.USER,
-                text=turn["user"],
-                lang=turn.get("lang", run["lang"]),
-                source=Source(turn.get("source", Source.USER_TURN.value)),
+            if "tamper" in turn:
+                # entries() returns copies, so the stored list is reached the way tests/test_ledger.py does.
+                ledger._entries[turn["tamper"]["seq"] - 1].payload.update(turn["tamper"]["payload"])
+                continue
+            message = _message(turn, run)
+            pasted = (
+                Message(role=Role.USER, text=turn["pasted"], source=Source.PASTED_TEXT)
+                if turn.get("pasted")
+                else None
             )
             token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
             before = len(adapter.calls)
-            reply = loop.handle(USER, message, confirmation_token=token)
+            reply = loop.handle(USER, message, confirmation_token=token, pasted=pasted)
             replies.append(reply)
             result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
             result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))
     except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, the error becomes a failed run in the report
         result.failures.append(f"error: {type(error).__name__}: {error}")
         return result
-    final = {key: value for key, value in expected.items() if key not in ("ledger", "must_not_contain")}
+    final = {key: value for key, value in expected.items() if key not in RUN_CHECKS}
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
@@ -259,7 +315,10 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         if text in ledger_text:
             result.failures.append(f"ledger contains {text!r}")
     broken = ledger.verify()
-    if broken is not None:
+    if "verify" in expected:
+        if broken != expected["verify"]:
+            result.failures.append(f"ledger verify returned {broken}, expected a break at entry {expected['verify']}")
+    elif broken is not None:
         result.failures.append(f"ledger chain breaks at entry {broken}")
     return result
 

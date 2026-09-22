@@ -1,6 +1,6 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, then the conversation's own erasable store, then standing mandates under rules R12 and R13, then their follow up: receipts linked to the mandate version, the scheduler endpoint and tick, retry on the next route, and stopping a standing mandate, and then scenarios for every suite entry the code can already satisfy, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 18 September 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, then the conversation's own erasable store, then standing mandates under rules R12 and R13, then their follow up: receipts linked to the mandate version, the scheduler endpoint and tick, retry on the next route, and stopping a standing mandate, and then scenarios for every suite entry the code can already satisfy, and then the harness features those scenarios were missing, a choice of rails, a rail that fails once, scripted traces, a turn whose language the loop detects, a paste beside the student's words, and a tampered ledger entry, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
 Every Python excerpt below is copied exactly from the file it names. Read the files in the order they appear here, because each one builds on the ones before it.
 
@@ -1718,6 +1718,27 @@ REVOLUT_FREEZE_DEEP_LINK = "https://example.invalid/revolut/freeze-card"
 `FAIL_ONCE_KEY` is the default idempotency key that fails once. `FREEZE_SUPPORTED` maps each issuer the fake knows to whether it can freeze a card there. The deep link uses `example.invalid`, a domain reserved so that it can never resolve, which keeps the placeholder harmless if it ever reaches a screen by mistake.
 
 ```python
+def scripted_traces(
+    traces: Mapping[str, list[Mapping[str, Any]]] | None,
+) -> dict[str, dict[str, TraceResult]]:
+    """Turn a fixture's traces, a rail name to a list of TraceResult fields, into traces per rail.
+
+    A TraceResult needs a stage time and a fixture gives none, so the time is now; the rail
+    replaces it with the receipt's own time once it has issued that receipt.
+    """
+    now = datetime.now(timezone.utc)
+    return {
+        rail: {
+            trace["receipt_id"]: TraceResult.model_validate({"stage_entered_at": now, **trace})
+            for trace in rail_traces
+        }
+        for rail, rail_traces in (traces or {}).items()
+    }
+```
+
+`scripted_traces` turns the traces a fixture writes, a rail name to a list of `TraceResult` fields, into the mapping a `FakeRail` takes. It lives here rather than in the API because both the API and the harness build rails from such a fixture, and the two must read it the same way. `model_validate` checks each trace against the schema, so a fixture cannot script a trace the contract would reject. The stage time is the only field a fixture leaves out, because it belongs to the receipt, not to the script.
+
+```python
 class FakeRail(Rail):
     def __init__(
         self,
@@ -3268,7 +3289,7 @@ from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
-from rails.fake_rail import FakeRail
+from rails.fake_rail import FakeRail, scripted_traces
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -3282,6 +3303,12 @@ TIERS = ("T0", "T1", "T2", "T3")
 TEXT_CHECKS = ("must_contain", "must_not_contain")
 # The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
 TURN_KIND = "turn"
+# Expectations judged against the run itself, not against the final reply.
+RUN_CHECKS = ("ledger", "must_not_contain", "verify")
+# A turn whose language is this one is built without a language, so the loop detects it.
+DETECT = "detect"
+# The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
+PROPOSE_TRANSFER = "propose_transfer"
 
 # Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
 USER = "student_001"
@@ -3296,11 +3323,13 @@ FIXTURE_MANDATE: dict[str, Any] = {
     "allowed_purposes": ["rent"],
 }
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
+# The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
+FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 ```
 
-The harness imports the same pieces a test of the agent loop uses: the fake model adapter, the hash chained ledger, the deterministic engine, the fake router, and the fake rail. It never imports a real model or a real rail, so running it costs nothing and needs no keys. `SUITES_DIR`, `SCENARIOS_DIR`, and `REPORT_PATH` are built from `ROOT`, the folder above `core/`, so the harness works from any current directory. `PASSED`, `FAILED`, and `NOT_AUTOMATED` are the only three results an entry can have. `TEXT_CHECKS` names the two expectations that add up across levels, as explained below. The fixtures are the same student, mandate, and balances as the agent tests, and the comment says they are fixtures and names this file as their source, because rule 4 of the project forbids a limit without a source. `FIXTURE_VALIDITY` is seventy days either side of now, so a standing run that falls due up to two months ahead is still inside the fixture mandate.
+The harness imports the same pieces a test of the agent loop uses: the fake model adapter, the hash chained ledger, the deterministic engine, the fake router, and the fake rail. It never imports a real model or a real rail, so running it costs nothing and needs no keys. `SUITES_DIR`, `SCENARIOS_DIR`, and `REPORT_PATH` are built from `ROOT`, the folder above `core/`, so the harness works from any current directory. `PASSED`, `FAILED`, and `NOT_AUTOMATED` are the only three results an entry can have. `TEXT_CHECKS` names the two expectations that add up across levels, as explained below, and `RUN_CHECKS` names the three that are judged against the run rather than against its final reply. `DETECT` is the language a turn gives when it wants the loop to detect one, and `PROPOSE_TRANSFER` is the tool a `fail_once` entry names when it does not name one itself. The fixtures are the same student, mandate, and balances as the agent tests, and the comment says they are fixtures and names this file as their source, because rule 4 of the project forbids a limit without a source. `FIXTURE_RAILS` is the set of rails a scenario may ask for with the simulated flag of each, which is why a scenario that names only `sim_pix` gets a simulated receipt. `FIXTURE_VALIDITY` is seventy days either side of now, so a standing run that falls due up to two months ahead is still inside the fixture mandate.
 
 ```python
 @dataclass
@@ -3344,16 +3373,46 @@ def _mandate(overrides: dict[str, Any]) -> Mandate:
     return Mandate.model_validate(fields)
 
 
-def _rails() -> dict[str, FakeRail]:
+def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
+    """Build, per rail, the idempotency keys the loop will use for the proposals that must fail once.
+
+    The loop's key is the student, the letter t and the turn number, the tool, and the call number
+    within that turn, as `_run_tool` in `core/agent.py` builds it. An entry that the helper cannot
+    express names its `key` in full instead.
+    """
+    keys: dict[str, set[str]] = {}
+    for entry in entries:
+        key = entry.get("key") or f"{USER}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
+        keys.setdefault(entry["rail"], set()).add(key)
+    return keys
+
+
+def _rails(fixtures: dict[str, Any]) -> dict[str, FakeRail]:
+    names = fixtures.get("rails", list(FIXTURE_RAILS))
+    unknown = [name for name in names if name not in FIXTURE_RAILS]
+    if unknown:
+        raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
+    traces = scripted_traces(fixtures.get("traces"))
+    failing = _fail_once_keys(fixtures.get("fail_once", []))
+    stray = sorted({*traces, *failing} - set(names))
+    if stray:
+        raise ValueError(f"traces or fail_once name rails {stray}, which this scenario does not build")
     return {
-        "wise": FakeRail(name="wise", simulated=False),
-        "bank_wire": FakeRail(name="bank_wire", simulated=False),
-        "sim_pix": FakeRail(name="sim_pix", simulated=True),
-        "revolut": FakeRail(name="revolut", simulated=False),
+        name: FakeRail(
+            traces.get(name),
+            fail_once_keys=failing.get(name, ()),
+            name=name,
+            simulated=FIXTURE_RAILS[name],
+        )
+        for name in names
     }
 ```
 
-`load_suite` reads any of the YAML files; `or []` turns an empty file into an empty list. `_mandate` builds the fixture mandate valid from 30 days ago until 30 days ahead, and lets a scenario override any field. `model_validate` checks the result against the `Mandate` schema, so a scenario cannot build a mandate the code would reject. `_rails` gives each route a fake rail with the name and simulated flag of the route it stands for, plus a Revolut rail for freezes.
+`load_suite` reads any of the YAML files; `or []` turns an empty file into an empty list. `_mandate` builds the fixture mandate valid from 30 days ago until 30 days ahead, and lets a scenario override any field. `model_validate` checks the result against the `Mandate` schema, so a scenario cannot build a mandate the code would reject.
+
+`_fail_once_keys` builds the idempotency key a scenario wants a rail to refuse once. The loop makes that key itself, in `_run_tool`, from the student, the turn number, the tool, and the number of the call within the turn, so a scenario that names the turn and the call gets the same string the loop will present, `student_001:t1:propose_transfer:1` for a transfer proposed by the first call of the first turn. A case the helper cannot express gives its `key` in full instead. Before this the harness rails carried only the default key `txn-fail-once`, which the loop never uses, so no scenario could make a rail fail.
+
+`_rails` builds the rails one scenario needs. By default it builds all four, as before. A scenario that lists `rails` gets only those, and since the loop's `_choose` skips any route whose rail it does not hold, listing only `sim_pix` makes the simulated route the chosen one without the router being touched. The traces come from `scripted_traces`, shared with `demo_rails` in `api/main.py`, so a scenario scripts them exactly as `fixtures/demo_user.yaml` does. A rail name that is not one of the four, or traces and failures named for a rail the scenario did not build, raise rather than pass silently; the error becomes a failed run in the report.
 
 ```python
 def _response(response: dict[str, Any], number: int) -> Message:
@@ -3470,9 +3529,30 @@ def _token(confirm: Any, replies: list[AgentReply]) -> str:
 `_token` finds the confirmation token a turn confirms with. `latest` takes the newest reply that asked for confirmation. A number takes the reply of that turn, counting from one, which is how X07 replays the first payment's token and X08 confirms an earlier proposal. A turn that names a reply without a confirmation raises an error, which fails the run.
 
 ```python
+def _turn_lang(turn: dict[str, Any], run: dict[str, Any]) -> str:
+    """The language of a turn: its own, or the run's, which is also what a detect turn is reported as."""
+    lang = turn.get("lang", run["lang"])
+    return run["lang"] if lang == DETECT else lang
+
+
+def _message(turn: dict[str, Any], run: dict[str, Any]) -> Message:
+    """The student's message. A detect turn passes no language, so the loop detects it from the text."""
+    fields: dict[str, Any] = {
+        "role": Role.USER,
+        "text": turn["user"],
+        "source": Source(turn.get("source", Source.USER_TURN.value)),
+    }
+    lang = turn.get("lang", run["lang"])
+    if lang != DETECT:
+        fields["lang"] = lang
+    return Message(**fields)
+```
+
+`_message` builds the student's message for a turn. A turn whose language is `detect` is built without a language at all, so `model_fields_set` on the message lacks it and `handle` calls `detect_lang` on the text, which is the path the API takes when a request names no language. Passing `None` would not do, because `Message.lang` has the default `en` and naming the field, even as nothing, counts as setting it. `_turn_lang` reports such a turn under the run's own language, so `detect` never reaches the report's table of runs by language.
+
+```python
 def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult:
-    langs = [turn.get("lang", run["lang"]) for turn in run["turns"]]
-    result = RunResult(langs=list(dict.fromkeys(langs)))
+    result = RunResult(langs=list(dict.fromkeys(_turn_lang(turn, run) for turn in run["turns"])))
     shared, own = scenario.get("expected", {}), run.get("expected", {})
     expected = {**shared, **own}
     for key in TEXT_CHECKS:
@@ -3494,7 +3574,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
-            rails=_rails(),
+            rails=_rails(fixtures),
             mandates=mandates,
             balances={USER: balances},
             pending={},
@@ -3505,22 +3585,26 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
                 events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
                 result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
                 continue
-            message = Message(
-                role=Role.USER,
-                text=turn["user"],
-                lang=turn.get("lang", run["lang"]),
-                source=Source(turn.get("source", Source.USER_TURN.value)),
+            if "tamper" in turn:
+                # entries() returns copies, so the stored list is reached the way tests/test_ledger.py does.
+                ledger._entries[turn["tamper"]["seq"] - 1].payload.update(turn["tamper"]["payload"])
+                continue
+            message = _message(turn, run)
+            pasted = (
+                Message(role=Role.USER, text=turn["pasted"], source=Source.PASTED_TEXT)
+                if turn.get("pasted")
+                else None
             )
             token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
             before = len(adapter.calls)
-            reply = loop.handle(USER, message, confirmation_token=token)
+            reply = loop.handle(USER, message, confirmation_token=token, pasted=pasted)
             replies.append(reply)
             result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
             result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))
     except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, the error becomes a failed run in the report
         result.failures.append(f"error: {type(error).__name__}: {error}")
         return result
-    final = {key: value for key, value in expected.items() if key not in ("ledger", "must_not_contain")}
+    final = {key: value for key, value in expected.items() if key not in RUN_CHECKS}
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
@@ -3532,12 +3616,17 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         if text in ledger_text:
             result.failures.append(f"ledger contains {text!r}")
     broken = ledger.verify()
-    if broken is not None:
+    if "verify" in expected:
+        if broken != expected["verify"]:
+            result.failures.append(f"ledger verify returned {broken}, expected a break at entry {expected['verify']}")
+    elif broken is not None:
         result.failures.append(f"ledger chain breaks at entry {broken}")
     return result
 ```
 
-`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger, and `verify` must find the hash chain intact. A turn with `run_due` calls `run_due_standing_mandates` at that time and checks the events instead of a reply.
+`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. A turn with `pasted` builds a second message, also from the student but with the source `pasted_text`, and hands it to `handle` beside the first, which is the path the API's `pasted_text` field takes; that is what makes an attack arriving as a paste honest in the harness, rather than one message with its whole source changed. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger.
+
+A turn with `run_due` calls `run_due_standing_mandates` at that time and checks the events instead of a reply. A turn with `tamper` changes the payload of one stored entry, named by its `seq`, after the turns before it have run. `entries` returns copies, so the tamper reaches `_entries`, the stored list, the way the ledger's own tests do; the comment says so, because reaching a private name is otherwise a smell. Every later entry was hashed over the old payload, so the chain breaks there. Last comes `verify`. A run with no `verify` expectation must leave the chain intact, as before. A run that expects one passes only when `verify` returns exactly that sequence number, and the check that the chain is intact is replaced by it rather than added to, which is the only way a scenario can show the break being caught and still pass.
 
 ```python
 def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -> list[EntryResult]:
@@ -3771,14 +3860,7 @@ Each request body is a pydantic model, so FastAPI rejects a missing field, a wro
 
 ```python
 def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, FakeRail]:
-    now = datetime.now(timezone.utc)
-    scripted = {
-        rail: {
-            trace["receipt_id"]: TraceResult.model_validate({"stage_entered_at": now, **trace})
-            for trace in rail_traces
-        }
-        for rail, rail_traces in (traces or {}).items()
-    }
+    scripted = scripted_traces(traces)
     return {
         "wise": FakeRail(scripted.get("wise"), name="wise", simulated=False),
         "bank_wire": FakeRail(scripted.get("bank_wire"), name="bank_wire", simulated=False),
@@ -3787,7 +3869,7 @@ def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None) -> dict[st
     }
 ```
 
-`demo_rails` builds the same four fake rails as the harness, named after the routes they stand for, and gives each the traces the fixture scripts for it. A `TraceResult` needs a stage time, so the scripted trace starts with the time the API starts, and the rail replaces it with the receipt's own time once it has issued that receipt. A test passes its own rails, such as a Wise rail that fails once.
+`demo_rails` builds the same four fake rails as the harness, named after the routes they stand for, and gives each the traces the fixture scripts for it. The traces themselves are built by `scripted_traces` in `rails/fake_rail.py`, which the harness imports too, so a scenario's `traces` fixture and `fixtures/demo_user.yaml` have exactly one meaning between them. A test passes its own rails, such as a Wise rail that fails once.
 
 ```python
 def _load_fixture(path: Path) -> dict[str, Any]:
@@ -4365,12 +4447,19 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_harness.py` | `test_a_scenario_that_raises_is_a_failure_not_a_crash` | A scenario that runs out of scripted answers is reported as failed with the error |
 | `test_harness.py` | `test_a_missing_scenario_is_reported_as_not_automated` | An entry with no scenario has no runs, is not automated, and is listed so in the report |
 | `test_harness.py` | `test_the_report_counts_are_computed_and_carry_the_commit_and_time` | The suite, tier, and language counts follow from the results, and the report names the commit and the time it was given |
-| `test_harness.py` | `test_every_real_scenario_passes_and_every_other_entry_is_not_automated` | The 36 real scenarios pass and every other entry of both suites is not automated |
+| `test_harness.py` | `test_every_real_scenario_passes_and_every_other_entry_is_not_automated` | The 41 real scenarios pass and every other entry of both suites is not automated |
 | `test_harness.py` | `test_every_scenario_file_names_an_entry_in_a_suite` | Every scenario file is one of the 36 and names a suite entry |
 | `test_harness.py` | `test_a_runs_text_checks_add_to_the_scenarios_instead_of_replacing_them` | A string the scenario requires is still checked in a run that adds its own |
 | `test_harness.py` | `test_model_saw_checks_what_the_model_received_and_a_literal_token_can_be_confirmed` | A string the model never received fails `model_saw` with that string named, and a literal token is tried |
 | `test_harness.py` | `test_a_run_due_turn_checks_the_events_it_returns` | A `run_due` turn expecting a run where a notice came fails, naming both |
 | `test_harness.py` | `test_a_scenario_file_that_cannot_be_read_fails_its_entry_without_stopping_the_others` | A malformed scenario fails its entry with the parse error while the other entries still run |
+| `test_harness.py` | `test_a_scenario_chooses_which_rails_exist` | A scenario listing only `sim_pix` is paid on the simulated rail, and the same scenario on the default four is paid on another |
+| `test_harness.py` | `test_a_scenario_makes_a_rail_fail_once_on_the_key_the_loop_will_use` | Wise fails on the key the loop builds from the turn and the call, the bank wire pays the retry, and a literal `key` does the same |
+| `test_harness.py` | `test_a_scenario_scripts_the_traces_a_rail_can_answer` | A scripted trace answers the loop's trace tool, and without one the rail's refusal reaches the ledger |
+| `test_harness.py` | `test_a_turn_can_leave_the_language_unset_so_the_loop_detects_it` | A `detect` turn is answered in the language of its text, is reported under the run's language, and the same turn with a language given is not |
+| `test_harness.py` | `test_a_turn_can_carry_a_paste_beside_the_students_words` | A paste sent beside the student's words reaches the model and is untrusted, and the same words typed by the student are not |
+| `test_harness.py` | `test_a_tamper_turn_breaks_the_chain_where_expected_verify_says` | A tampered entry makes verify name its sequence number, and a run expecting another number fails |
+| `test_harness.py` | `test_a_tamper_turn_without_expected_verify_still_fails_the_run` | A tampered run with no `verify` expectation fails on the broken chain, so it can never pass by accident |
 | `test_agent.py` | `test_the_receipt_names_the_executing_rail_and_a_new_loop_can_still_trace_it` | A rail named `wise_backend` behind the `wise` route names the receipt and the reply, and a new loop over the ledger still traces the receipt through the right rail |
 
 Twenty seven parametrized tests add fifty four extra runs, which is how 283 test functions become 337 tests.
@@ -4403,7 +4492,7 @@ def load(path):
 
 `with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, numbers, and dates, and never creates arbitrary Python objects from the file.
 
-A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Thirty six entries have one; `docs/technical-reference.md` lists them, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 30 still needs. This is X17 in full:
+A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Forty one entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 25 still needs. This is X17 in full:
 
 ```yaml
 id: X17
