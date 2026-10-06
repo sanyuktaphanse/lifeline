@@ -5,7 +5,17 @@ from decimal import Decimal
 from contracts.interfaces import Council, Ledger, MandateEngine, Rail, Router
 from contracts.schemas import LANGUAGES, AgentReply, RouteStatus
 from core.agent import MAX_MODEL_CALLS_PER_TURN, RUNNER_UP_DISAGREEMENT, TEXTS, AgentLoop
-from core.council import CUT, MAX_RAW, MAX_REASON, NO_ANSWER, VOICES, WAIT, FiveVoiceCouncil, reason_for
+from core.council import (
+    BRIEFS,
+    CONTRACT,
+    CUT,
+    MAX_RAW,
+    MAX_REASON,
+    NO_ANSWER,
+    VOICES,
+    WAIT,
+    FiveVoiceCouncil,
+)
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from rails.fake_rail import FakeRail
@@ -15,6 +25,14 @@ from tests.test_agent import RENT, RENT_REQUEST, USER, Setup, _call, _kinds, _sa
 WISE_REASON = "Wise costs the least of the routes that can carry this rent."
 WIRE_REASON = "The bank wire is the route this landlord has been paid over before."
 WAIT_REASON = "Waiting until tomorrow costs nothing and the rent is not due yet."
+CHEAP_REASON = "Wise has the lowest fee and no exchange cost."
+FAST_REASON = "Wise arrives within a day, well before the bank wire."
+RULES_REASON = "Wise is allowed for rent under the mandate's limits."
+TIMING_REASON = "Nothing in the context says waiting would lower the cost."
+SAFETY_WAIT_REASON = (
+    "This is a first transfer to a new payee above half the limit, so verify the landlord's "
+    "details or send a small test amount first."
+)
 CONFIRM_TEXT = (
     "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD "
     "and exchange cost 0 SGD. Nothing moves until you confirm."
@@ -176,7 +194,54 @@ def test_the_reply_names_the_chosen_rail_and_its_reason():
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
-    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {' '.join([WISE_REASON] * 3)}"
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON}"
+
+
+def test_the_spoken_reason_is_the_one_sentence_of_the_most_confident_agreeing_voice():
+    s = _rent(
+        _split(
+            ("wise", 0.7, CHEAP_REASON),
+            ("wise", 0.9, FAST_REASON),
+            ("wise", 0.8, RULES_REASON),
+            ("bank_wire", 0.95, WIRE_REASON),
+            ("wise", 0.6, TIMING_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {FAST_REASON}"
+    for other in (CHEAP_REASON, RULES_REASON, TIMING_REASON, WIRE_REASON):
+        assert other not in reply.text
+    # The full composed reason is unchanged as data, for the app to show on request.
+    assert reply.confirmation.council.reason == " ".join(
+        [CHEAP_REASON, FAST_REASON, RULES_REASON, TIMING_REASON]
+    )
+
+
+def test_voices_equally_confident_are_spoken_for_by_the_first_in_voice_order():
+    s = _rent(
+        _split(
+            ("wise", 0.8, CHEAP_REASON),
+            ("wise", 0.8, FAST_REASON),
+            ("wise", 0.8, RULES_REASON),
+            ("wise", 0.8, TIMING_REASON),
+            ("wise", 0.8, WISE_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON}"
+
+
+def test_the_spoken_sentence_is_in_the_students_language():
+    s = _rent(_split(*[("wise", 0.8, "A Wise cobra a menor taxa.")] * len(VOICES)))
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST, lang="pt"))
+
+    assert reply.text.endswith("O conselho escolheu wise. A Wise cobra a menor taxa.")
+    assert reply.text.count("A Wise cobra a menor taxa.") == 1
 
 
 def test_the_advice_reaches_the_model_as_the_tool_result_of_the_proposal():
@@ -337,9 +402,29 @@ def test_two_of_five_agreeing_score_above_the_threshold_and_show_the_runner_up()
     assert advice["chosen"] == "wise"
     assert advice["runner_up"] == "bank_wire"
     assert reply.text == (
-        f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {' '.join([WISE_REASON] * 2)} "
-        f"{RUNNER_UP_SENTENCE} {' '.join([WIRE_REASON] * 2)}"
+        f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON} "
+        f"{RUNNER_UP_SENTENCE} {WIRE_REASON}"
     )
+
+
+def test_the_runner_up_is_spoken_for_by_its_most_confident_voice():
+    second_wire = "The bank wire leaves a paper trail the landlord's bank already knows."
+    s = _rent(
+        _split(
+            ("wise", 0.9, CHEAP_REASON),
+            ("wise", 0.8, FAST_REASON),
+            ("bank_wire", 0.5, WIRE_REASON),
+            ("bank_wire", 0.7, second_wire),
+            (WAIT, 0.4, WAIT_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert reply.text == (
+        f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} {RUNNER_UP_SENTENCE} {second_wire}"
+    )
+    assert WIRE_REASON not in reply.text
 
 
 def test_an_abstention_counts_in_neither_the_tally_nor_the_share():
@@ -384,7 +469,9 @@ def test_every_voice_saying_wait_makes_the_chair_say_wait_and_still_offers_the_c
     advice = _advice(s)
     assert advice["chosen"] == WAIT
     assert advice["disagreement"] == 0.0
-    assert reply.text == f"{CONFIRM_TEXT} {WAIT_SENTENCE} {' '.join([WAIT_REASON] * len(VOICES))}"
+    # The safety voice waited, so its sentence comes first; the chair's sentence is the cost
+    # voice's, the first of five equally confident voices.
+    assert reply.text == f"{WAIT_REASON} {CONFIRM_TEXT} {WAIT_SENTENCE} {WAIT_REASON}"
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
     assert reply.confirmation.council.chosen == WAIT
@@ -403,15 +490,142 @@ def test_no_voice_validating_gives_no_answer_and_the_loop_proceeds_as_before():
     assert reply.text == CONFIRM_TEXT
 
 
-def test_the_runner_up_reason_is_read_from_the_voices_that_chose_it():
-    s = _rent(TWO_TWO_WAIT)
-    s.loop.handle(USER, _user(RENT_REQUEST))
+# A wait from the safety voice always reaches the student
+
+
+def test_a_safety_wait_is_shown_before_the_prompt_at_a_low_disagreement():
+    # The 26 September real run: four voices chose Wise and the safety voice said wait.
+    s = _rent(
+        _split(
+            ("wise", 0.86, CHEAP_REASON),
+            ("wise", 0.86, FAST_REASON),
+            (WAIT, 0.68, SAFETY_WAIT_REASON),
+            ("wise", 0.74, RULES_REASON),
+            ("wise", 0.79, TIMING_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert _advice(s)["disagreement"] == 0.2
+    assert _advice(s)["chosen"] == "wise"
+    assert reply.text == f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON}"
+    assert reply.confirmation is not None
+    assert reply.confirmation.selected_route.rail == "wise"
+
+
+def test_a_safety_wait_and_the_runner_up_are_both_shown_above_the_threshold():
+    s = _rent(
+        _split(
+            ("wise", 0.9, CHEAP_REASON),
+            ("wise", 0.8, FAST_REASON),
+            (WAIT, 0.7, SAFETY_WAIT_REASON),
+            ("bank_wire", 0.6, WIRE_REASON),
+            ("bank_wire", 0.5, WIRE_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert _advice(s)["disagreement"] == 0.6
+    assert reply.text == (
+        f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} "
+        f"{RUNNER_UP_SENTENCE} {WIRE_REASON}"
+    )
+    assert reply.confirmation is not None
+    assert reply.confirmation.selected_route.rail == "wise"
+
+
+def test_a_wait_from_any_other_voice_alone_is_not_shown_below_the_threshold():
+    for waiting in ("cost", "speed", "rules", "timing"):
+        positions = [("wise", 0.8, WISE_REASON)] * len(VOICES)
+        positions[VOICES.index(waiting)] = (WAIT, 0.95, WAIT_REASON)
+        s = _rent(_split(*positions))
+
+        reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+        assert _advice(s)["disagreement"] == 0.2
+        assert WAIT_REASON not in reply.text, waiting
+        assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON}"
+        assert reply.confirmation is not None
+        assert reply.confirmation.selected_route.rail == "wise"
+
+
+def test_an_abstaining_safety_voice_adds_no_sentence():
+    replies = _split(*[("wise", 0.8, WISE_REASON)] * len(VOICES))
+    replies[VOICES.index("safety")] = ABSTAINING
+    s = _rent(replies)
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON}"
+
+
+def test_a_safety_wait_that_is_also_the_chairs_wait_is_said_once():
+    s = _rent(
+        _split(
+            (WAIT, 0.5, WAIT_REASON),
+            (WAIT, 0.5, WAIT_REASON),
+            (WAIT, 0.9, SAFETY_WAIT_REASON),
+            (WAIT, 0.5, WAIT_REASON),
+            (WAIT, 0.5, WAIT_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert _advice(s)["chosen"] == WAIT
+    assert reply.text == f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {WAIT_SENTENCE}"
+    assert reply.text.count(SAFETY_WAIT_REASON) == 1
+    assert reply.confirmation is not None
+
+
+def test_a_safety_wait_that_is_also_the_runner_up_is_said_once():
+    s = _rent(
+        _split(
+            ("wise", 0.9, CHEAP_REASON),
+            ("wise", 0.8, FAST_REASON),
+            (WAIT, 0.9, SAFETY_WAIT_REASON),
+            (WAIT, 0.5, WAIT_REASON),
+            (WAIT, 0.4, WAIT_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
     advice = _advice(s)
+    assert (advice["chosen"], advice["runner_up"], advice["disagreement"]) == ("wise", WAIT, 0.6)
+    assert reply.text == (
+        f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} "
+        "The council was divided. The next choice was wait."
+    )
+    assert reply.text.count(SAFETY_WAIT_REASON) == 1
+    assert reply.confirmation is not None
 
-    assert reason_for(advice, "bank_wire") == " ".join([WIRE_REASON] * 2)
-    assert reason_for(advice, WAIT) == WAIT_REASON
-    assert reason_for(advice, "sim_pix") == ""
+
+# The voice contract
+
+
+def test_the_contract_tells_every_voice_to_use_only_facts_in_the_context():
+    rule = (
+        "Use only facts present in the context, and if the context contains no due date, "
+        "deadline or late fee, do not mention one."
+    )
+    adapter = FakeModelAdapter(THREE_TWO)
+    s = _setup([_call("propose_transfer", RENT)], council=FiveVoiceCouncil(adapter))
+
+    s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert rule in CONTRACT
+    for system in _systems(adapter):
+        assert rule in system
+
+
+def test_no_brief_suggests_a_fact_the_context_does_not_carry():
+    # The 26 September run: a brief that offered a rent's due date as an example got a due date back.
+    for name, brief in BRIEFS.items():
+        for invented in ("due date", "deadline", "late fee", "such as"):
+            assert invented not in brief, (name, invented)
 
 
 # The council never executes, never blocks, and never holds a secret

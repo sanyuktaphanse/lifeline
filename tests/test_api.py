@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import anthropic
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 
@@ -9,7 +11,7 @@ from api.main import DEMO_FIXTURE, council_for, create_app, demo_rails
 from contracts.schemas import LANGUAGES, Message, Role, ToolCall
 from core.council import FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
-from core.model_adapter import MissingApiKey, ProviderModelAdapter
+from core.model_adapter import MissingApiKey, ModelAdapterError, ProviderModelAdapter
 from rails.fake_rail import FakeRail
 
 USER = "student_001"
@@ -23,8 +25,10 @@ def ledger_file(tmp_path, monkeypatch):
     path = tmp_path / "data" / "ledger.jsonl"
     monkeypatch.setattr(api.main, "LEDGER_PATH", path)
     monkeypatch.setattr(api.main, "CONVERSATIONS_PATH", tmp_path / "data" / "conversations.jsonl")
-    # No test depends on whoever runs it having the council turned on, or off, in their own shell.
-    monkeypatch.delenv("COUNCIL", raising=False)
+    # No test depends on whoever runs it having the council turned on, or off, in their own shell
+    # or their own .env. An empty value is set rather than the variable removed, because load_dotenv
+    # fills in a removed variable from .env but never overrides one that is set.
+    monkeypatch.setenv("COUNCIL", "")
     return path
 
 
@@ -222,6 +226,61 @@ def test_a_model_that_cannot_answer_is_a_503_with_the_reason():
 
     assert response.status_code == 503
     assert "ANTHROPIC_API_KEY" in response.json()["detail"]
+
+
+PROVIDER_KEY = "test-anthropic-key-that-must-not-leak"
+WORKSPACE_MESSAGE = "This key is not scoped to a workspace."
+
+
+def test_a_provider_status_error_on_chat_is_a_503_naming_the_provider_and_the_reason(monkeypatch):
+    # The 22 September failure: the SDK raised a 400, which escaped the adapter as a 500.
+    request = httpx2.Request(
+        "POST", "https://api.anthropic.com/v1/messages", headers={"x-api-key": PROVIDER_KEY}
+    )
+    error = anthropic.BadRequestError(
+        WORKSPACE_MESSAGE, response=httpx2.Response(400, request=request), body=None
+    )
+
+    class Refusing:
+        def __init__(self, **kwargs):
+            def create(**request):
+                raise error
+
+            self.messages = type("Messages", (), {"create": staticmethod(create)})()
+
+    monkeypatch.setattr(anthropic, "Anthropic", Refusing)
+    adapter = ProviderModelAdapter(env={"ANTHROPIC_API_KEY": PROVIDER_KEY})
+    client = TestClient(create_app(adapter=adapter, council=None), raise_server_exceptions=False)
+
+    response = client.post("/chat", json={"user_id": USER, "text": "hi"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": f"anthropic: 400 {WORKSPACE_MESSAGE}"}
+    assert PROVIDER_KEY not in response.text
+
+
+def test_a_provider_error_on_confirm_is_a_503_naming_the_provider_and_the_reason(monkeypatch):
+    # /confirm makes no model call today, so the fake is the loop itself raising the adapter's error.
+    client = _client([_call("propose_transfer", RENT)])
+    token = _propose(client)
+    loop = client.app.state.loop
+
+    def raising(*args, **kwargs):
+        raise ModelAdapterError(
+            "anthropic: 429 Number of request tokens has exceeded your rate limit.",
+            provider="anthropic",
+            status_code=429,
+        )
+
+    monkeypatch.setattr(loop, "handle", raising)
+
+    response = client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "anthropic: 429 Number of request tokens has exceeded your rate limit."
+    }
+    assert token not in response.text
 
 
 @pytest.mark.parametrize(

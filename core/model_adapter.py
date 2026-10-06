@@ -8,6 +8,7 @@ from typing import Any
 import anthropic
 import dashscope
 import requests
+from dashscope.common.error import RequestFailure
 from dotenv import load_dotenv
 
 from contracts.interfaces import ModelAdapter
@@ -26,6 +27,7 @@ ANTHROPIC_MAX_TOKENS = 16000
 # Source: project decision on 14 September 2026 to cap DashScope replies at 2048 tokens.
 DASHSCOPE_MAX_TOKENS = 2048
 AUTH_STATUSES = {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}
+REDACTED = "[redacted]"
 # The council may run on a different model from the loop's. Each name below replaces the
 # ordinary one when it is set, so the council needs no provider code of its own.
 COUNCIL_MODEL_VARIABLES = {
@@ -35,7 +37,14 @@ COUNCIL_MODEL_VARIABLES = {
 
 
 class ModelAdapterError(RuntimeError):
-    pass
+    """A provider failure, naming the provider and the status it answered with when there was one."""
+
+    def __init__(
+        self, message: str, provider: str | None = None, status_code: int | None = None
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.status_code = status_code
 
 
 class ProviderUnavailable(ModelAdapterError):
@@ -60,6 +69,18 @@ def environment(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
         load_dotenv()
         return os.environ
     return env
+
+
+def _status_failure(
+    error_class: type[ModelAdapterError],
+    provider: str,
+    status_code: int,
+    detail: str,
+    api_key: str,
+) -> ModelAdapterError:
+    """An error carrying the provider, the status and the provider's own words, never the key."""
+    message = f"{provider}: {status_code} {detail}".replace(api_key, REDACTED)
+    return error_class(message, provider=provider, status_code=status_code)
 
 
 def _anthropic_assistant_content(message: Message) -> str | list[dict[str, Any]]:
@@ -131,12 +152,16 @@ def _call_anthropic(
 
     try:
         response = anthropic.Anthropic(api_key=api_key).messages.create(**request)
-    except (
-        anthropic.APIConnectionError,
-        anthropic.AuthenticationError,
-        anthropic.PermissionDeniedError,
-    ) as exc:
-        raise ProviderUnavailable(f"anthropic: {exc}") from exc
+    except anthropic.APIConnectionError as exc:
+        raise ProviderUnavailable(f"anthropic: {exc}", provider="anthropic") from exc
+    except anthropic.APIStatusError as exc:
+        # Every status the SDK raises becomes the adapter's own error, so nothing else reaches a
+        # caller. Only 401 and 403 mean the provider is unavailable and switch to the fallback.
+        # The SDK error is not chained, because its request still holds the key in its headers.
+        error_class = ProviderUnavailable if exc.status_code in AUTH_STATUSES else ModelAdapterError
+        raise _status_failure(
+            error_class, "anthropic", exc.status_code, exc.message, api_key
+        ) from None
 
     if response.stop_reason == "refusal":
         raise ModelAdapterError("anthropic declined the request.")
@@ -209,6 +234,7 @@ def _call_dashscope(
     api_key: str,
     messages: Sequence[Message],
     tools: Sequence[dict[str, Any]],
+    base_url: str | None = None,
 ) -> Message:
     request: dict[str, Any] = {
         "model": model,
@@ -219,17 +245,32 @@ def _call_dashscope(
     }
     if tools:
         request["tools"] = [_dashscope_tool(tool) for tool in tools]
+    if base_url:
+        # Source: dashscope 1.27.3 client/base_api.py, base_address replaces
+        # dashscope.base_http_api_url for this one call, so no process wide setting changes.
+        request["base_address"] = base_url
 
     try:
         response = dashscope.Generation.call(**request)
     except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
-        raise ProviderUnavailable(f"dashscope: {exc}") from exc
+        raise ProviderUnavailable(f"dashscope: {exc}", provider="dashscope") from exc
+    except RequestFailure as exc:
+        error_class = ProviderUnavailable if exc.http_code in AUTH_STATUSES else ModelAdapterError
+        raise _status_failure(
+            error_class, "dashscope", exc.http_code, f"{exc.name} {exc.message}", api_key
+        ) from None
 
-    failure = f"dashscope: {response.status_code} {response.code} {response.message}"
-    if response.status_code in AUTH_STATUSES:
-        raise ProviderUnavailable(failure)
     if response.status_code != HTTPStatus.OK:
-        raise ModelAdapterError(failure)
+        error_class = (
+            ProviderUnavailable if response.status_code in AUTH_STATUSES else ModelAdapterError
+        )
+        raise _status_failure(
+            error_class,
+            "dashscope",
+            response.status_code,
+            f"{response.code} {response.message}",
+            api_key,
+        )
 
     message = response.output.choices[0].message
     return Message(
@@ -241,9 +282,7 @@ def _call_dashscope(
     )
 
 
-_PROVIDERS: dict[
-    str, Callable[[str, str, Sequence[Message], Sequence[dict[str, Any]]], Message]
-] = {
+_PROVIDERS: dict[str, Callable[..., Message]] = {
     "anthropic": _call_anthropic,
     "dashscope": _call_dashscope,
 }
@@ -251,6 +290,9 @@ _PROVIDER_SETTINGS = {
     "anthropic": ("ANTHROPIC_MODEL", DEFAULT_ANTHROPIC_MODEL, "ANTHROPIC_API_KEY"),
     "dashscope": ("DASHSCOPE_MODEL", DEFAULT_DASHSCOPE_MODEL, "DASHSCOPE_API_KEY"),
 }
+# A Model Studio key works only against the endpoint of the region it was created in. The URL is
+# never written here; docs/technical-reference.md cites the page that lists each region's endpoint.
+_PROVIDER_BASE_URLS = {"dashscope": "DASHSCOPE_BASE_URL"}
 
 
 class ProviderModelAdapter(ModelAdapter):
@@ -297,7 +339,11 @@ class ProviderModelAdapter(ModelAdapter):
             raise MissingApiKey(
                 f"{key_variable} is not set. Add it to .env to use {provider}."
             )
-        return _PROVIDERS[provider](self._models[provider], api_key, messages, tools)
+        extra: dict[str, str] = {}
+        base_url_variable = _PROVIDER_BASE_URLS.get(provider)
+        if base_url_variable and self._env.get(base_url_variable):
+            extra["base_url"] = self._env[base_url_variable]
+        return _PROVIDERS[provider](self._models[provider], api_key, messages, tools, **extra)
 
 
 def council_env(env: Mapping[str, str]) -> dict[str, str]:

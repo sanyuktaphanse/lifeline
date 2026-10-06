@@ -6,6 +6,7 @@ import dashscope
 import httpx2
 import pytest
 from anthropic.types import TextBlock, ThinkingBlock, ToolUseBlock
+from dashscope.common.error import RequestFailure
 from dashscope.api_entities.dashscope_response import (
     DashScopeAPIResponse,
     GenerationResponse,
@@ -117,15 +118,6 @@ def _dashscope_tool_call_message(arguments: str) -> dict:
             }
         ],
     }
-
-
-@pytest.fixture(autouse=True)
-def no_real_provider_calls(monkeypatch):
-    def refuse(*args, **kwargs):
-        raise AssertionError("A test reached a real provider SDK.")
-
-    monkeypatch.setattr(anthropic, "Anthropic", refuse)
-    monkeypatch.setattr(dashscope.Generation, "call", refuse)
 
 
 def test_fake_adapter_returns_scripted_responses_in_order():
@@ -447,17 +439,164 @@ def test_fallback_is_tried_only_once(monkeypatch):
     assert len(dashscope_calls) == 1
 
 
-def test_other_errors_do_not_fall_back(monkeypatch):
-    error = anthropic.BadRequestError(
-        "bad request",
-        response=httpx2.Response(400, request=_anthropic_request()),
-        body=None,
+def _status_error(error_class, status: int, message: str):
+    # The request carries the key in its headers, as a real call does, so a test can show the key
+    # never travels with the error the adapter raises.
+    request = httpx2.Request(
+        "POST", "https://api.anthropic.com/v1/messages", headers={"x-api-key": KEYS["ANTHROPIC_API_KEY"]}
     )
+    return error_class(message, response=httpx2.Response(status, request=request), body=None)
+
+
+def _carries_no_key(error: BaseException, key: str) -> None:
+    assert key not in str(error)
+    assert key not in repr(error)
+    assert all(key not in str(arg) for arg in error.args)
+    assert error.__cause__ is None
+    assert error.__context__ is None or error.__suppress_context__
+
+
+@pytest.mark.parametrize(
+    ("error_class", "status", "message"),
+    [
+        (anthropic.BadRequestError, 400, "This key is not scoped to a workspace."),
+        (anthropic.RateLimitError, 429, "Number of request tokens has exceeded your rate limit."),
+        (anthropic.InternalServerError, 500, "Internal server error."),
+        (anthropic.APIStatusError, 418, "An unexpected status."),
+    ],
+    ids=["400", "429", "500", "any_status"],
+)
+def test_every_anthropic_status_error_becomes_a_model_adapter_error_and_does_not_fall_back(
+    monkeypatch, error_class, status, message
+):
+    dashscope_calls: list = []
+    monkeypatch.setattr(
+        anthropic, "Anthropic", _fake_anthropic([], error=_status_error(error_class, status, message))
+    )
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
+
+    with pytest.raises(ModelAdapterError) as excinfo:
+        ProviderModelAdapter(env=KEYS).complete(MESSAGES, [])
+
+    error = excinfo.value
+    assert not isinstance(error, ProviderUnavailable)
+    assert (error.provider, error.status_code) == ("anthropic", status)
+    assert str(error) == f"anthropic: {status} {message}"
+    _carries_no_key(error, KEYS["ANTHROPIC_API_KEY"])
+    assert dashscope_calls == []
+
+
+def test_a_provider_message_that_echoes_the_key_is_redacted(monkeypatch):
+    key = KEYS["ANTHROPIC_API_KEY"]
+    error = _status_error(anthropic.BadRequestError, 400, f"The key {key} is not scoped to a workspace.")
     monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic([], error=error))
 
-    adapter = ProviderModelAdapter(env=KEYS)
-    with pytest.raises(anthropic.BadRequestError):
-        adapter.complete(MESSAGES, [])
+    with pytest.raises(ModelAdapterError) as excinfo:
+        ProviderModelAdapter(env=KEYS).complete(MESSAGES, [])
+
+    assert str(excinfo.value) == "anthropic: 400 The key [redacted] is not scoped to a workspace."
+    _carries_no_key(excinfo.value, key)
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_an_anthropic_auth_status_names_its_status_and_still_falls_back(monkeypatch, status):
+    error_class = anthropic.AuthenticationError if status == 401 else anthropic.PermissionDeniedError
+    error = _status_error(error_class, status, "invalid x-api-key")
+    monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic([], error=error))
+    monkeypatch.setattr(
+        dashscope.Generation, "call", _fake_dashscope([], status_code=401)
+    )
+
+    with pytest.raises(ProviderUnavailable) as excinfo:
+        ProviderModelAdapter(env=KEYS).complete(MESSAGES, [])
+
+    # The fallback's error is the one raised, as before; the primary's status reached the log.
+    assert (excinfo.value.provider, excinfo.value.status_code) == ("dashscope", 401)
+
+
+def _fake_dashscope_status(calls: list, status: int, code: str, message: str):
+    def call(**kwargs):
+        calls.append(kwargs)
+        return GenerationResponse.from_api_response(
+            DashScopeAPIResponse(status_code=status, code=code, message=message)
+        )
+
+    return call
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "message"),
+    [
+        (400, "InvalidParameter", "The model is not available in this region."),
+        (429, "Throttling.RateQuota", "Requests rate limit exceeded."),
+        (500, "InternalError", "An internal error has occured."),
+    ],
+    ids=["400", "429", "500"],
+)
+def test_every_dashscope_status_becomes_a_model_adapter_error_and_does_not_fall_back(
+    monkeypatch, status, code, message
+):
+    anthropic_calls: list = []
+    monkeypatch.setattr(
+        dashscope.Generation, "call", _fake_dashscope_status([], status, code, message)
+    )
+    monkeypatch.setattr(anthropic, "Anthropic", _fake_anthropic(anthropic_calls))
+
+    with pytest.raises(ModelAdapterError) as excinfo:
+        ProviderModelAdapter(
+            env=dict(KEYS, MODEL_PROVIDER="dashscope", FALLBACK_MODEL_PROVIDER="anthropic")
+        ).complete(MESSAGES, [])
+
+    error = excinfo.value
+    assert not isinstance(error, ProviderUnavailable)
+    assert (error.provider, error.status_code) == ("dashscope", status)
+    assert str(error) == f"dashscope: {status} {code} {message}"
+    _carries_no_key(error, KEYS["DASHSCOPE_API_KEY"])
+    assert anthropic_calls == []
+
+
+def test_a_dashscope_request_failure_raised_by_the_sdk_becomes_a_model_adapter_error(monkeypatch):
+    key = KEYS["DASHSCOPE_API_KEY"]
+
+    def call(**kwargs):
+        raise RequestFailure(
+            request_id="req-1", message=f"Rate limited for {key}.", name="Throttling", http_code=429
+        )
+
+    monkeypatch.setattr(dashscope.Generation, "call", call)
+
+    with pytest.raises(ModelAdapterError) as excinfo:
+        ProviderModelAdapter(env=dict(KEYS, MODEL_PROVIDER="dashscope")).complete(MESSAGES, [])
+
+    error = excinfo.value
+    assert not isinstance(error, ProviderUnavailable)
+    assert (error.provider, error.status_code) == ("dashscope", 429)
+    assert str(error) == "dashscope: 429 Throttling Rate limited for [redacted]."
+    _carries_no_key(error, key)
+
+
+def test_dashscope_uses_its_base_url_when_one_is_set(monkeypatch):
+    dashscope_calls: list = []
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
+    base_url = "https://dashscope.example/api/v1"
+
+    ProviderModelAdapter(
+        env=dict(KEYS, MODEL_PROVIDER="dashscope", DASHSCOPE_BASE_URL=base_url)
+    ).complete(MESSAGES, [])
+
+    assert dashscope_calls[0]["base_address"] == base_url
+
+
+@pytest.mark.parametrize("env", [{}, {"DASHSCOPE_BASE_URL": ""}], ids=["unset", "empty"])
+def test_dashscope_sends_no_base_url_when_none_is_set(monkeypatch, env):
+    dashscope_calls: list = []
+    monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
+    default_url = dashscope.base_http_api_url
+
+    ProviderModelAdapter(env=dict(KEYS, MODEL_PROVIDER="dashscope", **env)).complete(MESSAGES, [])
+
+    assert "base_address" not in dashscope_calls[0]
+    assert dashscope.base_http_api_url == default_url
 
 
 def test_the_council_environment_replaces_each_model_when_a_council_model_is_set():
