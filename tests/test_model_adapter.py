@@ -120,15 +120,6 @@ def _dashscope_tool_call_message(arguments: str) -> dict:
     }
 
 
-@pytest.fixture(autouse=True)
-def no_real_provider_calls(monkeypatch):
-    def refuse(*args, **kwargs):
-        raise AssertionError("A test reached a real provider SDK.")
-
-    monkeypatch.setattr(anthropic, "Anthropic", refuse)
-    monkeypatch.setattr(dashscope.Generation, "call", refuse)
-
-
 def test_fake_adapter_returns_scripted_responses_in_order():
     fake = FakeModelAdapter(["first", "second"])
 

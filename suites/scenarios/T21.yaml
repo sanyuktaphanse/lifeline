@@ -9,7 +9,7 @@ note: >
   sentence, the reason of the most confident voice that agreed with it, the cost voice at 0.9, and
   not the speed voice's, and does not name the runner up. In the second run two
   choose wise, two choose bank_wire, and one says wait, so the score is 0.6 and the reply names the
-  runner up as well. The second turn asks why that route was chosen and makes no tool call, and
+  runner up as well, with one sentence for it too, the reason of its most confident voice. The second turn asks why that route was chosen and makes no tool call, and
   model_saw asserts that both the chair's reason and the chosen rail reached the model as the tool
   result of the proposal, which is the entry itself: the student can ask what the council said and
   the answer comes from the conversation. The chair's arithmetic, the selected route, the ledger
@@ -80,6 +80,9 @@ runs:
             - The council chose wise.
             - The council was divided. The next choice was bank_wire.
             - The bank wire is the route with the clearest record for a first payment to this landlord.
+          must_not_contain:
+            - Wise arrives well before the bank wire, which is what a rent payment needs.
+            - Sending over the bank wire today still leaves time before the rent is due.
       - user: Why did the council choose that route, and what was the other choice?
         model:
           - text: The council chose Wise on cost and speed, and it was divided, because two voices preferred the bank wire and one wanted to wait.

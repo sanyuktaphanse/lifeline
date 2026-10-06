@@ -41,7 +41,7 @@ BRIEFS = {
     ),
     "speed": (
         "You are the speed voice. You weigh only when the money arrives and what arriving late "
-        "would cost the student, such as a rent paid after its due date."
+        "would cost the student."
     ),
     "safety": (
         "You are the safety voice. You weigh only what could go wrong, an irreversible payment, a "

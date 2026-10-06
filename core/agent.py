@@ -34,7 +34,7 @@ from contracts.schemas import (
     ToolCall,
 )
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
-from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, reason_for, safety_wait
+from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 
@@ -269,6 +269,17 @@ TEXTS = {
         "council_wait": "顾问团建议先等一等。{reason}",
     },
 }
+
+
+def _spoken(advice: dict[str, Any], position: str) -> str:
+    """The one sentence read out for a position: its most confident voice's reason.
+
+    A safety wait is already read out before the prompt, so it is not said a second time here.
+    """
+    speaker = most_confident(advice, position) or {}
+    if position == WAIT and speaker.get("voice") == SAFETY:
+        return ""
+    return str(speaker.get("reason", ""))
 
 
 def _amounts_in(text: str) -> set[Decimal]:
@@ -913,23 +924,20 @@ class AgentLoop:
         return None if advice is None else self._route_named(considered, advice["chosen"])
 
     def _council_text(self, lang: str, advice: dict[str, Any] | None) -> str:
-        """What the student hears: the chosen rail and one sentence, the most confident agreeing
-        voice's. The full composed reason stays in the confirmation's `council` field."""
+        """What the student hears: the chosen rail and one sentence, and above the threshold the
+        runner up and one sentence. The full composed reason stays in the confirmation's `council`
+        field."""
         if advice is None or advice["chosen"] == NO_ANSWER:
             return ""
-        speaker = most_confident(advice, advice["chosen"]) or {}
-        reason = str(speaker.get("reason", ""))
-        if advice["chosen"] == WAIT:
-            # A safety wait is already read out before the prompt, so it is not said twice.
-            if speaker.get("voice") == SAFETY:
-                reason = ""
-            return _text(lang, "council_wait", reason=reason).rstrip()
-        said = _text(lang, "council", rail=advice["chosen"], reason=reason)
+        chosen = advice["chosen"]
+        if chosen == WAIT:
+            return _text(lang, "council_wait", reason=_spoken(advice, WAIT)).rstrip()
+        said = _text(lang, "council", rail=chosen, reason=_spoken(advice, chosen)).rstrip()
         if advice["disagreement"] > RUNNER_UP_DISAGREEMENT:
             runner_up = advice["runner_up"]
             second = _text(
-                lang, "council_runner_up", rail=runner_up, reason=reason_for(advice, runner_up)
-            )
+                lang, "council_runner_up", rail=runner_up, reason=_spoken(advice, runner_up)
+            ).rstrip()
             return f"{said} {second}"
         return said
 

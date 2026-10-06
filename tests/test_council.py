@@ -6,6 +6,7 @@ from contracts.interfaces import Council, Ledger, MandateEngine, Rail, Router
 from contracts.schemas import LANGUAGES, AgentReply, RouteStatus
 from core.agent import MAX_MODEL_CALLS_PER_TURN, RUNNER_UP_DISAGREEMENT, TEXTS, AgentLoop
 from core.council import (
+    BRIEFS,
     CONTRACT,
     CUT,
     MAX_RAW,
@@ -403,8 +404,28 @@ def test_two_of_five_agreeing_score_above_the_threshold_and_show_the_runner_up()
     assert advice["runner_up"] == "bank_wire"
     assert reply.text == (
         f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON} "
-        f"{RUNNER_UP_SENTENCE} {' '.join([WIRE_REASON] * 2)}"
+        f"{RUNNER_UP_SENTENCE} {WIRE_REASON}"
     )
+
+
+def test_the_runner_up_is_spoken_for_by_its_most_confident_voice():
+    second_wire = "The bank wire leaves a paper trail the landlord's bank already knows."
+    s = _rent(
+        _split(
+            ("wise", 0.9, CHEAP_REASON),
+            ("wise", 0.8, FAST_REASON),
+            ("bank_wire", 0.5, WIRE_REASON),
+            ("bank_wire", 0.7, second_wire),
+            (WAIT, 0.4, WAIT_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert reply.text == (
+        f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} {RUNNER_UP_SENTENCE} {second_wire}"
+    )
+    assert WIRE_REASON not in reply.text
 
 
 def test_an_abstention_counts_in_neither_the_tally_nor_the_share():
@@ -521,7 +542,7 @@ def test_a_safety_wait_and_the_runner_up_are_both_shown_above_the_threshold():
     assert _advice(s)["disagreement"] == 0.6
     assert reply.text == (
         f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} "
-        f"{RUNNER_UP_SENTENCE} {' '.join([WIRE_REASON] * 2)}"
+        f"{RUNNER_UP_SENTENCE} {WIRE_REASON}"
     )
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
@@ -571,6 +592,29 @@ def test_a_safety_wait_that_is_also_the_chairs_wait_is_said_once():
     assert reply.confirmation is not None
 
 
+def test_a_safety_wait_that_is_also_the_runner_up_is_said_once():
+    s = _rent(
+        _split(
+            ("wise", 0.9, CHEAP_REASON),
+            ("wise", 0.8, FAST_REASON),
+            (WAIT, 0.9, SAFETY_WAIT_REASON),
+            (WAIT, 0.5, WAIT_REASON),
+            (WAIT, 0.4, WAIT_REASON),
+        )
+    )
+
+    reply = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    advice = _advice(s)
+    assert (advice["chosen"], advice["runner_up"], advice["disagreement"]) == ("wise", WAIT, 0.6)
+    assert reply.text == (
+        f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} "
+        "The council was divided. The next choice was wait."
+    )
+    assert reply.text.count(SAFETY_WAIT_REASON) == 1
+    assert reply.confirmation is not None
+
+
 # The voice contract
 
 
@@ -587,6 +631,13 @@ def test_the_contract_tells_every_voice_to_use_only_facts_in_the_context():
     assert rule in CONTRACT
     for system in _systems(adapter):
         assert rule in system
+
+
+def test_no_brief_suggests_a_fact_the_context_does_not_carry():
+    # The 26 September run: a brief that offered a rent's due date as an example got a due date back.
+    for name, brief in BRIEFS.items():
+        for invented in ("due date", "deadline", "late fee", "such as"):
+            assert invented not in brief, (name, invented)
 
 
 # The council never executes, never blocks, and never holds a secret
