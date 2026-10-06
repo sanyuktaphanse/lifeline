@@ -15,7 +15,6 @@ from core.council import (
     VOICES,
     WAIT,
     FiveVoiceCouncil,
-    reason_for,
 )
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
@@ -489,17 +488,6 @@ def test_no_voice_validating_gives_no_answer_and_the_loop_proceeds_as_before():
     assert advice["disagreement"] == 0.0
     assert reply.confirmation.selected_route.rail == "wise"
     assert reply.text == CONFIRM_TEXT
-
-
-def test_the_runner_up_reason_is_read_from_the_voices_that_chose_it():
-    s = _rent(TWO_TWO_WAIT)
-    s.loop.handle(USER, _user(RENT_REQUEST))
-
-    advice = _advice(s)
-
-    assert reason_for(advice, "bank_wire") == " ".join([WIRE_REASON] * 2)
-    assert reason_for(advice, WAIT) == WAIT_REASON
-    assert reason_for(advice, "sim_pix") == ""
 
 
 # A wait from the safety voice always reaches the student

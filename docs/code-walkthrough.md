@@ -2092,19 +2092,9 @@ def _language(code: Any) -> str:
     or from the student's message therefore cannot become arbitrary text inside a voice's prompt.
     """
     return code if code in LANGUAGES else DEFAULT_LANGUAGE
-
-
-def reason_for(result: Mapping[str, Any], position: str) -> str:
-    """The plain reason for one position, composed from the voices that took it."""
-    return " ".join(
-        str(voice.get("reason", ""))
-        for voice in result.get("voices", [])
-        if not voice.get("abstained", True) and voice.get("position") == position
-    )
 ```
 
-`_evidence_ids` builds the list of ids a voice is allowed to cite, from the routes it is being shown: each rail's name, and the `rule_id` and `fee_source_url` a route carries when it has them. The fixture router fills neither of those on the Singapore to Brazil routes, so today the list is the three rail names. `_language` narrows a language to one of the three this repository replies in, reading anything else as English, so a code that came from a caller or from the student's message cannot become free text inside a voice's prompt. `reason_for`, given a finished deliberation and a position, joins the reasons of the voices that took that position. Until 6 October the agent loop used it to read out the runner up's reasons; the loop now speaks one sentence per position, so only a test reads it.
-
+`_evidence_ids` builds the list of ids a voice is allowed to cite, from the routes it is being shown: each rail's name, and the `rule_id` and `fee_source_url` a route carries when it has them. The fixture router fills neither of those on the Singapore to Brazil routes, so today the list is the three rail names. `_language` narrows a language to one of the three this repository replies in, reading anything else as English, so a code that came from a caller or from the student's message cannot become free text inside a voice's prompt.
 ```python
 def most_confident(result: Mapping[str, Any], position: str) -> Mapping[str, Any] | None:
     """The answering voice that took this position with the highest confidence.
@@ -4744,7 +4734,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 441 tests. Each was written before the code it checks and was seen to fail first.
+There are 440 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -5185,7 +5175,6 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_council.py` | `test_a_position_that_is_not_a_usable_rail_abstains` | A rail the loop is not holding abstains |
 | `test_council.py` | `test_every_voice_saying_wait_makes_the_chair_say_wait_and_still_offers_the_confirmation` | Wait is advice: the safety voice's sentence comes first, the reply says the council advised waiting, and the confirmation the engine allowed still stands |
 | `test_council.py` | `test_no_voice_validating_gives_no_answer_and_the_loop_proceeds_as_before` | With no valid voice the outcome is `no_answer` and the reply is the plain confirmation |
-| `test_council.py` | `test_the_runner_up_reason_is_read_from_the_voices_that_chose_it` | `reason_for` composes any position's reason and answers empty for a position nobody took |
 | `test_council.py` | `test_a_safety_wait_is_shown_before_the_prompt_at_a_low_disagreement` | The 26 September split: a safety wait at a disagreement of 0.2 is read out before the prompt and the confirmation is still offered |
 | `test_council.py` | `test_a_safety_wait_and_the_runner_up_are_both_shown_above_the_threshold` | Above 0.4 the safety wait and the runner up are both read out |
 | `test_council.py` | `test_a_wait_from_any_other_voice_alone_is_not_shown_below_the_threshold` | A wait from cost, speed, rules or timing alone stays out of the reply at 0.2 |
@@ -5221,7 +5210,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_council.py` | `test_an_abstaining_voices_raw_text_is_cut_in_the_record` | A wall of prose is cut at `MAX_RAW` with its marker |
 | `test_council.py` | `test_a_raw_text_that_is_already_short_is_kept_whole` | A short raw text is kept whole |
 
-Thirty one parametrized tests add sixty one extra runs, which is how 380 test functions become 441 tests.
+Thirty one parametrized tests add sixty one extra runs, which is how 379 test functions become 440 tests.
 
 ## The suites and their scenarios
 

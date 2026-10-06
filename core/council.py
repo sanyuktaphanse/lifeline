@@ -108,15 +108,6 @@ def _language(code: Any) -> str:
     return code if code in LANGUAGES else DEFAULT_LANGUAGE
 
 
-def reason_for(result: Mapping[str, Any], position: str) -> str:
-    """The plain reason for one position, composed from the voices that took it."""
-    return " ".join(
-        str(voice.get("reason", ""))
-        for voice in result.get("voices", [])
-        if not voice.get("abstained", True) and voice.get("position") == position
-    )
-
-
 def most_confident(result: Mapping[str, Any], position: str) -> Mapping[str, Any] | None:
     """The answering voice that took this position with the highest confidence.
 
