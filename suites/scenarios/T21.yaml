@@ -5,8 +5,9 @@ note: >
   payee, so the loop convenes the council before it stores the pending confirmation and the ledger
   holds a proposal, a decision, and a council entry. The five voices are scripted, in the order
   cost, speed, safety, rules, and timing. In the first run three choose wise and two choose
-  bank_wire, so the disagreement score is 0.4 exactly and the reply names the chosen rail and the
-  reasons of the voices that agreed with it and does not name the runner up. In the second run two
+  bank_wire, so the disagreement score is 0.4 exactly and the reply names the chosen rail and one
+  sentence, the reason of the most confident voice that agreed with it, the cost voice at 0.9, and
+  not the speed voice's, and does not name the runner up. In the second run two
   choose wise, two choose bank_wire, and one says wait, so the score is 0.6 and the reply names the
   runner up as well. The second turn asks why that route was chosen and makes no tool call, and
   model_saw asserts that both the chair's reason and the chosen rail reached the model as the tool
@@ -38,6 +39,7 @@ runs:
             - "Please confirm: send 1200 SGD to landlord_sp for rent over wise"
             - The council chose wise.
             - Wise costs the least in fees and exchange cost of the routes that can carry this rent.
+          must_not_contain:
             - Wise arrives well before the bank wire, which is what a rent payment needs.
       - user: Why did the council choose that route?
         model:

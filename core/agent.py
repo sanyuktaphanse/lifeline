@@ -34,7 +34,7 @@ from contracts.schemas import (
     ToolCall,
 )
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
-from core.council import NO_ANSWER, WAIT, reason_for
+from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, reason_for, safety_wait
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 
@@ -746,6 +746,11 @@ class AgentLoop:
             said = self._council_text(lang, advice)
             if said:
                 text = f"{text} {said}"
+            # The council advises and the student decides, so a safety wait is read out before the
+            # prompt whatever the score, and the confirmation is still offered.
+            warned = "" if advice is None else safety_wait(advice)
+            if warned:
+                text = f"{warned} {text}"
         elif action.type is ActionType.ADD_PAYEE:
             if action.payee_id in self._mandates[user_id].allowed_payees:
                 return self._reply(trail, lang, _text(lang, "payee_exists", payee=action.payee_id), decision=decision)
@@ -908,11 +913,18 @@ class AgentLoop:
         return None if advice is None else self._route_named(considered, advice["chosen"])
 
     def _council_text(self, lang: str, advice: dict[str, Any] | None) -> str:
+        """What the student hears: the chosen rail and one sentence, the most confident agreeing
+        voice's. The full composed reason stays in the confirmation's `council` field."""
         if advice is None or advice["chosen"] == NO_ANSWER:
             return ""
+        speaker = most_confident(advice, advice["chosen"]) or {}
+        reason = str(speaker.get("reason", ""))
         if advice["chosen"] == WAIT:
-            return _text(lang, "council_wait", reason=advice["reason"])
-        said = _text(lang, "council", rail=advice["chosen"], reason=advice["reason"])
+            # A safety wait is already read out before the prompt, so it is not said twice.
+            if speaker.get("voice") == SAFETY:
+                reason = ""
+            return _text(lang, "council_wait", reason=reason).rstrip()
+        said = _text(lang, "council", rail=advice["chosen"], reason=reason)
         if advice["disagreement"] > RUNNER_UP_DISAGREEMENT:
             runner_up = advice["runner_up"]
             second = _text(

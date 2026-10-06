@@ -849,7 +849,7 @@ Response `200`:
 | `403` | `/trace` or `/precheck` refused by the mandate engine | `{"detail": {"rule_ids": [...], "reasons": [...]}}` |
 | `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long | FastAPI's validation detail |
 | `403` | `/standing/run_due` when `LIFELINE_ENV` is `production` | `{"detail": "<reason>"}` |
-| `503` | `/chat` could not reach a model, such as a missing key | `{"detail": "<reason>"}` |
+| `503` | `/chat` or `/confirm` could not get an answer from a model, such as a missing key or a status error from the provider; the reason names the provider and, when there was one, the status | `{"detail": "<reason>"}` |
 
 Unknown user, `404`:
 
@@ -885,6 +885,14 @@ No model available, `503`:
 ```json
 {
   "detail": "ANTHROPIC_API_KEY is not set. Add it to .env to use anthropic."
+}
+```
+
+A status error from the provider, `503`. This is the error of 22 September, a key not scoped to a workspace:
+
+```json
+{
+  "detail": "anthropic: 400 This key is not scoped to a workspace."
 }
 ```
 
