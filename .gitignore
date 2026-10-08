@@ -6,3 +6,7 @@ evidence/
 data/
 .pytest_tmp/
 .harness_tmp/
+.DS_Store
+anaconda_projects/
+data_*/
+lifeline_main.zip
