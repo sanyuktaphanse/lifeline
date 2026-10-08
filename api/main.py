@@ -42,7 +42,7 @@ from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
-from core.monthly import is_month, render
+from core.monthly import is_month
 from core.reminders import reminders_of, split
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
@@ -465,18 +465,10 @@ def create_app(
             # The month is never echoed, so nothing a caller sends comes back in the error.
             raise HTTPException(status_code=422, detail="month must be a four digit year, a hyphen and a two digit month.")
         with lock:
-            chosen = month or loop.latest_month(user)
-            # The note runs as the T0 tool monthly_summary, through the engine, so the request leaves a
-            # proposal, a decision and an execution; the text is rendered as the tick renders it.
-            decision, result = loop.act(user, "monthly_summary", {"month": chosen})
-            refused(decision)
-            lang = loop.student_lang(user)
-        if "summary" not in result:
-            raise HTTPException(status_code=422, detail=result.get("error", "No note for that month."))
-        summary = result["summary"]
-        return MonthlyNote(
-            user_id=user, month=chosen, lang=lang, text=render(summary, lang), summary=summary, seqs=result["seqs"]
-        )
+            # A read, as GET /ledger and GET /reminders are: the note is built by monthly_note, the code the
+            # chat tool and the tick render with, and nothing is written to the ledger.
+            note = loop.monthly_note(user, month or loop.latest_month(user))
+        return MonthlyNote.model_validate(note)
 
     @app.get("/reminders/{user}")
     def reminders(user: str, now: AwareDatetime | None = None) -> Reminders:

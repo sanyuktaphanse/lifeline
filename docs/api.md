@@ -1557,7 +1557,7 @@ Response `200`, with the token and the times replaced by placeholders:
 
 The monthly note for one calendar month, in UTC, built from the student's ledger alone with no model. The optional query parameter `month` is written `YYYY-MM`; without it the note is for the month of the student's latest ledger entry, or the current month when there is none. The note is in the language of the student's latest turn, as the scheduler's note is.
 
-The request runs the T0 tool `monthly_summary` through the engine, as `/trace` and `/precheck` do, so it leaves a `proposal`, a `decision` and an `execution` in the ledger. The text is rendered from the summary that execution recorded, by the same code the chat tool and the scheduler use, so the three give the same text for the same month and language.
+The request is a read, as `GET /ledger/{user_id}` is, and writes nothing to the ledger, so the app may fetch it whenever the student opens the note. It is built by the same code the chat tool and the scheduler use, so the three give the same text for the same month and language.
 
 The response carries the text, the `summary` with the entry sequences behind every figure, and `seqs`, every one of those sequences once and in order. The summary holds the transfers sent per currency and corridor with their fees and exchange cost, `taxes` with `on_file` false while no route carries a tax line, the `routes` used, and in `comparisons` one item per transfer sent: `compared` true with the bank wire's cost, the route's cost and the saving, and `quote_seq`, only when the ledger holds a `get_quote` for that transfer's corridor and amount in the same turn, and `compared` false otherwise. `unusual` counts payees added, rescues started and suspected injections, beside `refusals`, and `coming` lists the standing runs and reminders due in the following month. The text names a reminder by its due date only.
 
@@ -1650,7 +1650,7 @@ The response carries the text, the `summary` with the entry sequences behind eve
 }
 ```
 
-A month that is not `YYYY-MM`, such as `2026-13`, `26-10` or one in fullwidth digits, is a `422` whose detail never repeats what was sent, and nothing is written:
+A month that is not `YYYY-MM`, such as `2026-13`, `26-10` or one in fullwidth digits, is a `422` whose detail never repeats what was sent:
 
 ```json
 {

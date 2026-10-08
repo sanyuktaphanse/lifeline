@@ -366,7 +366,7 @@ TOOL_ACTIONS = {
     "record_cash_withdrawal": ActionType.RECORD_CASH_WITHDRAWAL,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
-DIRECT_TOOLS = ("trace_transfer", "precheck", "monthly_summary")
+DIRECT_TOOLS = ("trace_transfer", "precheck")
 REQUIRED_ARGUMENTS = {
     "propose_transfer": ACTION_FIELDS,
     "get_quote": ("corridor", "amount"),

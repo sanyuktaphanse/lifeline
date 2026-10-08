@@ -141,17 +141,16 @@ def _trail(client: TestClient) -> list[dict]:
     return [e for e in client.get(f"/ledger/{USER}").json() if e["kind"] not in ("turn", "anchor")]
 
 
-def test_the_note_endpoint_runs_monthly_summary_as_a_t0_action_through_the_engine():
+def test_a_get_of_the_note_leaves_the_ledger_length_unchanged():
     client = _client([_call("propose_transfer", RENT)])
     _pay_rent(client)
-    before = len(_trail(client))
+    before = len(client.get(f"/ledger/{USER}").json())
 
-    client.get(f"/note/{USER}/monthly", params={"month": _month()})
+    for _ in range(3):
+        assert client.get(f"/note/{USER}/monthly", params={"month": _month()}).status_code == 200
+    client.get(f"/note/{USER}/monthly")
 
-    added = _trail(client)[before:]
-    assert [e["kind"] for e in added] == ["proposal", "decision", "execution"]
-    assert added[1]["payload"]["decision"]["tier"] == "T0"
-    assert added[2]["payload"]["action"]["type"] == "monthly_summary"
+    assert len(client.get(f"/ledger/{USER}").json()) == before
 
 
 def test_a_malformed_month_writes_nothing():
