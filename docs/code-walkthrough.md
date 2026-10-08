@@ -9834,6 +9834,7 @@ mandate:
   allowed_corridors: [IN>SG]
   # Exactly as in_upi_paynow_purpose_001 states them.
   allowed_purposes: [maintenance_of_relatives_abroad, gift]
+  # Fixture: the parent's cooling period for a new payee, the same 24 hours the demo student's mandate uses.
   cooling_hours: 24
   # Fixture: the student was added long before any demo, so they are never inside the cooling period.
   payee_added_at:

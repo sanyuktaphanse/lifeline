@@ -14,11 +14,14 @@ mandate:
   allowed_corridors: [IN>SG]
   # Exactly as in_upi_paynow_purpose_001 states them.
   allowed_purposes: [maintenance_of_relatives_abroad, gift]
+  # Fixture: the parent's cooling period for a new payee, the same 24 hours the demo student's mandate uses.
   cooling_hours: 24
   # Fixture: the student was added long before any demo, so they are never inside the cooling period.
   payee_added_at:
     student_001: "2026-01-01T00:00:00Z"
+# Fixture: the mandate is valid from the moment the API starts for this many days, as the demo student's is.
 valid_days: 365
+# Fixture: the parent's rupee balance, enough for the demo's transfers. Not a real account.
 balances:
   INR: "200000"
 # The parent's resilience plan. Every value is a fixture.
