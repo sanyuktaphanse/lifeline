@@ -12,7 +12,7 @@ The API listens on `http://127.0.0.1:8000`. FastAPI also serves interactive docu
 
 `/chat` calls the model named in `.env`, so it needs `ANTHROPIC_API_KEY` or `DASHSCOPE_API_KEY` there, as `.env.example` lists. Every other endpoint works without keys. The router and the rails are fakes, so no real money moves and every fee is a fixture.
 
-There is one demo user, `student_001`, loaded from `fixtures/demo_user.yaml`: an SGD mandate with a per transaction limit of 1,500, a daily limit of 2,500, the payee `landlord_sp`, the corridor `SG>BR`, the purpose `rent`, and balances of 2,300 SGD and 150 BRL. The mandate is valid from midnight UTC of the day the demo ledger began, for 365 days.
+There is one demo user, `student_001`, loaded from `fixtures/demo_user.yaml`: an SGD mandate with a per transaction limit of 1,500, a daily limit of 2,500, the payees `landlord_sp` and `self_sg`, the student's own Singapore account, the corridors `SG>BR` and `SG>SG`, the purposes `rent` and `emergency`, balances of 2,300 SGD and 150 BRL, and a resilience plan for the rescue. The mandate is valid from midnight UTC of the day the demo ledger began, for 365 days.
 
 CORS allows `http://localhost` and `http://127.0.0.1` on any port, for `GET` and `POST` with a `Content-Type` header. No other origin is allowed.
 
@@ -31,6 +31,7 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 5. every token already used or closed, so a replay after a restart is still refused and recorded;
 6. the receipts each fake rail issued, so receipt numbers continue and a trace still finds its receipt;
 7. the last twenty messages of each student's conversation, read from `data/conversations.jsonl`, so the model keeps its context.
+8. every rescue in progress, at the step it had reached, with the card it chose, the result of its freeze, and the backup card payments moved to, so a rescue can be finished after a restart.
 
 The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete both files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
 
@@ -44,7 +45,7 @@ The token itself is never written to the ledger; the engine recomputes it from t
 
 ## Reading an AgentReply
 
-`/chat` and `/confirm` both return an `AgentReply`. Show `text` to the student in every case, then look at the other fields in this order.
+`/chat` and `/confirm` both return an `AgentReply`, and the rescue endpoints return one with a `rescue` field added. Show `text` to the student in every case, then look at the other fields in this order.
 
 | Field present | What happened | What to show |
 | --- | --- | --- |
@@ -840,6 +841,401 @@ Response `200`:
 ]
 ```
 
+## Rescue
+
+A rescue walks the student through a lost or stolen card, one step at a time, from the resilience plan in `fixtures/demo_user.yaml`. It calls no model, so it works without keys. Every step goes through the mandate engine or leaves a ledger note, and the confirmation round trip is the same as on `/confirm`: a freeze and the emergency allowance each wait for the student's yes. `docs/technical-reference.md` describes every step.
+
+Both endpoints return a `RescueReply`: an `AgentReply`, read exactly as above, with one more field, `rescue`.
+
+| Field | Meaning |
+| --- | --- |
+| `rescue.state_before`, `rescue.state_after` | The machine's state before and after this call: `S0` to `S9`, `done`, or null when no rescue has started |
+| `rescue.do_now` | What the student does next, as a key to translate in the app |
+| `rescue.card_names` | The card names from the plan, filled only when `do_now` is `choose_card`; show them as buttons and send the chosen name back as `text` |
+| `rescue.live_instrument` | The backup card payments moved to, or null |
+| `rescue.issuer_link` | The issuer's link from the freeze result, or null when Lifeline has none |
+
+| `do_now` | What to show | What to send to `/rescue/step` |
+| --- | --- | --- |
+| `answer_identity_question` | `text`, which holds the question from the plan, and an answer box | `text`: the answer |
+| `choose_card` | The names in `card_names` | `text`: one name exactly as listed |
+| `confirm_freeze` | The freeze confirmation with `warn.freeze.card` | `confirmation_token` from `confirmation` |
+| `confirm_transfer_or_skip` | The allowance confirmation with `warn.transfer.irreversible`, and two buttons | Confirm: `confirmation_token`. Continue without money: no token |
+| `done` | `text`, the rescue's summary | nothing |
+| `start_rescue` | A button to start a rescue | `/rescue/start` |
+
+The demo plan names the cards `Wise debit card`, `wise:card_01`, which is the primary card, and `Revolut card`, `revolut:card_02`, which is the backup. The emergency allowance is 300 SGD to `self_sg`, the student's own Singapore account on the corridor `SG>SG`, a fixture inside the mandate's limits. The identity answer is `7Q2K`. Every value is a fixture.
+
+Rules the app must keep:
+
+1. Only the student's own words start or move a rescue. These endpoints take no pasted text. Never send a pasted message as `text`, because it would count as the student's own.
+2. The identity answer is compared in code and never written to the ledger, to a reply, or to the conversation. Do not store it in the app.
+3. A wrong answer leaves the machine at `S1` and does nothing else. The family notice reports it.
+4. A freeze that comes back `not_supported` or `failed` still moves the rescue on, because the reply has told the student the truth. Show `freeze.deep_link` as a button.
+5. The family notice is written to the ledger as a `note` of kind `family_notice`, with its `text`, `lang`, and `to`, the trusted contact's name and channel. Nothing is sent: the app delivers it.
+
+### POST /rescue/start
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `user_id` | string | yes | |
+| `trigger` | string | yes | `card_lost` or `card_stolen`; anything else is a `422` |
+| `text` | string | yes | The student's words, 1 to 4,000 characters |
+| `lang` | string | no | `en`, `pt`, or `zh`; detected from `text` when absent, and kept for every later step |
+
+Request:
+
+```json
+{
+  "user_id": "student_001",
+  "trigger": "card_lost",
+  "text": "I lost my Wise card"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "text": "Lifeline started a rescue. First answer the question you set before you left: What are the last four characters of your student pass number?",
+  "lang": "en",
+  "confirmation": null,
+  "decision": null,
+  "receipt": null,
+  "freeze": null,
+  "ledger_seqs": [
+    1,
+    2,
+    3
+  ],
+  "provider": null,
+  "model": null,
+  "rescue": {
+    "state_before": null,
+    "state_after": "S1",
+    "do_now": "answer_identity_question",
+    "card_names": [],
+    "live_instrument": null,
+    "issuer_link": null
+  }
+}
+```
+
+Calling it again while a rescue is running restarts nothing; the reply says a rescue is in progress and gives the current `do_now`.
+
+### POST /rescue/step
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `user_id` | string | yes | |
+| `text` | string | no | The identity answer or the card name; empty when the step only confirms or continues |
+| `confirmation_token` | string | no | The token from the last `confirmation`, at `confirm_freeze` and `confirm_transfer_or_skip` |
+| `lang` | string | no | `en`, `pt`, or `zh`; the rescue's language when absent |
+
+A wrong answer:
+
+```json
+{
+  "user_id": "student_001",
+  "text": "1234"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "text": "That answer does not match your plan, so Lifeline did nothing. Try again: What are the last four characters of your student pass number?",
+  "lang": "en",
+  "confirmation": null,
+  "decision": null,
+  "receipt": null,
+  "freeze": null,
+  "ledger_seqs": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "provider": null,
+  "model": null,
+  "rescue": {
+    "state_before": "S1",
+    "state_after": "S1",
+    "do_now": "answer_identity_question",
+    "card_names": [],
+    "live_instrument": null,
+    "issuer_link": null
+  }
+}
+```
+
+The right answer. The freeze of the plan's primary card waits for confirmation:
+
+```json
+{
+  "user_id": "student_001",
+  "text": "7Q2K"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "text": "That answer matches your plan. Please confirm: freeze card wise:card_01. Nothing changes until you confirm.",
+  "lang": "en",
+  "confirmation": {
+    "action": {
+      "type": "freeze_card",
+      "source": "user_turn",
+      "idempotency_key": "student_001:t3:freeze_card:2",
+      "requested_at": "2026-10-08T08:32:11.735566Z",
+      "amount": null,
+      "currency": null,
+      "corridor": null,
+      "payee_id": null,
+      "purpose": null,
+      "instrument_id": "wise:card_01",
+      "standing_mandate_id": null,
+      "standing_terms": null,
+      "confirmation_token": null
+    },
+    "confirmation_token": "c23903bef15f761d6351daeadbf604095b02bfc8f13d09697f2136791eb49155",
+    "warning_key": "warn.freeze.card",
+    "routes": [],
+    "selected_route": null,
+    "council": null,
+    "expires_in_seconds": 300
+  },
+  "decision": {
+    "allowed": true,
+    "reasons": [],
+    "rule_ids": [
+      "R11"
+    ],
+    "tier": "T2",
+    "requires_confirmation": true,
+    "warning_key": "warn.freeze.card",
+    "confirmation_token": null
+  },
+  "receipt": null,
+  "freeze": null,
+  "ledger_seqs": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14
+  ],
+  "provider": null,
+  "model": null,
+  "rescue": {
+    "state_before": "S1",
+    "state_after": "S2",
+    "do_now": "confirm_freeze",
+    "card_names": [],
+    "live_instrument": null,
+    "issuer_link": null
+  }
+}
+```
+
+Confirming the freeze. The card is frozen, the wallet check and the reroute run at once, and the allowance waits for confirmation:
+
+```json
+{
+  "user_id": "student_001",
+  "confirmation_token": "c23903bef15f761d6351daeadbf604095b02bfc8f13d09697f2136791eb49155"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "text": "Done. Card wise:card_01 is frozen. Your plan says a phone wallet holds this card. Remove the card from the wallet on your phone, because Lifeline cannot do that for you. From now on use your backup card revolut:card_02. If you need money now, confirm this transfer; if not, continue without it. Please confirm: send 300 SGD to self_sg for emergency over wise, fee 0 SGD and exchange cost 0 SGD. Nothing moves until you confirm.",
+  "lang": "en",
+  "confirmation": {
+    "action": {
+      "type": "transfer",
+      "source": "user_turn",
+      "idempotency_key": "student_001:t4:propose_transfer:3",
+      "requested_at": "2026-10-08T08:32:11.737136Z",
+      "amount": "300",
+      "currency": "SGD",
+      "corridor": "SG>SG",
+      "payee_id": "self_sg",
+      "purpose": "emergency",
+      "instrument_id": null,
+      "standing_mandate_id": null,
+      "standing_terms": null,
+      "confirmation_token": null
+    },
+    "confirmation_token": "ef1452a94bec109bf2e0e2a1575e61c8099cf16e82d215f779fdca1f27be701c",
+    "warning_key": "warn.transfer.irreversible",
+    "routes": [
+      {
+        "rail": "wise",
+        "corridor": "SG>SG",
+        "amount": "300",
+        "currency_from": "SGD",
+        "currency_to": "SGD",
+        "fee": "0",
+        "spread_cost": "0",
+        "tax_lines": [],
+        "arrival_hours": 1.0,
+        "status": "up",
+        "simulated": false,
+        "limit_ok": true,
+        "blocked_reason": null,
+        "rule_id": null,
+        "fee_source_url": null,
+        "rate_source": "fixture",
+        "quoted_at": "2026-10-08T08:32:11.737319Z"
+      }
+    ],
+    "selected_route": {
+      "rail": "wise",
+      "corridor": "SG>SG",
+      "amount": "300",
+      "currency_from": "SGD",
+      "currency_to": "SGD",
+      "fee": "0",
+      "spread_cost": "0",
+      "tax_lines": [],
+      "arrival_hours": 1.0,
+      "status": "up",
+      "simulated": false,
+      "limit_ok": true,
+      "blocked_reason": null,
+      "rule_id": null,
+      "fee_source_url": null,
+      "rate_source": "fixture",
+      "quoted_at": "2026-10-08T08:32:11.737319Z"
+    },
+    "council": null,
+    "expires_in_seconds": 300
+  },
+  "decision": {
+    "allowed": true,
+    "reasons": [],
+    "rule_ids": [
+      "R11"
+    ],
+    "tier": "T2",
+    "requires_confirmation": true,
+    "warning_key": "warn.transfer.irreversible",
+    "confirmation_token": null
+  },
+  "receipt": null,
+  "freeze": {
+    "status": "done",
+    "deep_link": null,
+    "reason": null
+  },
+  "ledger_seqs": [
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28
+  ],
+  "provider": null,
+  "model": null,
+  "rescue": {
+    "state_before": "S2",
+    "state_after": "S5",
+    "do_now": "confirm_transfer_or_skip",
+    "card_names": [],
+    "live_instrument": "revolut:card_02",
+    "issuer_link": null
+  }
+}
+```
+
+Confirming the allowance. The transfer is paid, and the replacement, the plan rewrite, and the family notice run at once:
+
+```json
+{
+  "user_id": "student_001",
+  "confirmation_token": "ef1452a94bec109bf2e0e2a1575e61c8099cf16e82d215f779fdca1f27be701c"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "text": "Done. 300 SGD was sent over wise. Receipt wise-0001. Lifeline has no sourced link to the issuer's app. Order a replacement card in the issuer's app. Wise estimates that a replacement Wise card takes 3 working days to arrive in Singapore. Working days are Monday to Friday and do not include weekends or public holidays. (https://wise.com/help/articles/2935787/how-do-i-replace-or-cancel-my-wise-card) You have no standing payments to stop. Lifeline wrote a notice for Ana, and the app delivers it. The rescue is complete.",
+  "lang": "en",
+  "confirmation": null,
+  "decision": {
+    "allowed": true,
+    "reasons": [],
+    "rule_ids": [
+      "R11"
+    ],
+    "tier": "T2",
+    "requires_confirmation": false,
+    "warning_key": "warn.transfer.irreversible",
+    "confirmation_token": null
+  },
+  "receipt": {
+    "receipt_id": "wise-0001",
+    "rail": "wise",
+    "amount": "300",
+    "currency": "SGD",
+    "status": "completed",
+    "stage_entered_at": "2026-10-08T08:32:11.738252Z",
+    "mandate_ref": "mandate-student_001-v1",
+    "idempotency_key": "student_001:t4:propose_transfer:3",
+    "simulated": false,
+    "executed_at": "2026-10-08T08:32:11.738252Z",
+    "standing_mandate_id": null
+  },
+  "freeze": null,
+  "ledger_seqs": [
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41
+  ],
+  "provider": null,
+  "model": null,
+  "rescue": {
+    "state_before": "S5",
+    "state_after": "done",
+    "do_now": "done",
+    "card_names": [],
+    "live_instrument": "revolut:card_02",
+    "issuer_link": null
+  }
+}
+```
+
+A token that belongs to another action is refused with a `confirmation_rejected` entry whose reason is `not_this_rescue_step`, and the action it belongs to keeps waiting. A step with no rescue running answers that none is in progress, with `do_now` set to `start_rescue`.
+
 ## Errors
 
 | Status | When | Body |
@@ -847,7 +1243,7 @@ Response `200`:
 | `404` | The `user_id` is not known, on every endpoint | `{"detail": "No user <id>."}` |
 | `404` | `/trace` for a receipt this student does not hold | `{"detail": "<reason>"}` |
 | `403` | `/trace` or `/precheck` refused by the mandate engine | `{"detail": {"rule_ids": [...], "reasons": [...]}}` |
-| `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long | FastAPI's validation detail |
+| `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long, or a rescue `trigger` or a `lang` is outside its list | FastAPI's validation detail |
 | `403` | `/standing/run_due` when `LIFELINE_ENV` is `production` | `{"detail": "<reason>"}` |
 | `503` | `/chat` or `/confirm` could not get an answer from a model, such as a missing key or a status error from the provider; the reason names the provider and, when there was one, the status | `{"detail": "<reason>"}` |
 
