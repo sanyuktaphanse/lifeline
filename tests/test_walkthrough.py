@@ -55,3 +55,16 @@ def test_the_walkthrough_covers_the_rescue():
     for name in ("def rescue_start", "def rescue_step", "def _run_on", "def _family_notice", "def _rebuild_rescue"):
         assert any(name in excerpt for path, _, excerpt in excerpts() if path == "core/agent.py"), name
     assert "MAX_IDENTITY_ATTEMPTS" in text
+
+
+def test_the_walkthrough_covers_the_simulated_rails():
+    files = {path for path, _, _ in excerpts()}
+
+    assert {
+        "rails/sim/base.py",
+        "rails/sim/rules.py",
+        "rails/sim/upi_paynow.py",
+        "rails/sim/pix.py",
+        "rails/sim/cn_bank_remit.py",
+        "rails/inbound.py",
+    } <= files

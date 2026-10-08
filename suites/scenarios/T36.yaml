@@ -1,0 +1,55 @@
+id: T36
+note: Parents in China want to send the semester's costs to Singapore. The scripted model runs the precheck remit_from_china and quotes China to Singapore for paying the institution and for funding the student. Every fact the model is given comes from an entry. The precheck gives the Bank of China checklist from cn_boc_anxin_009, the annual quota from cn_fx_quota_001 and the identity rule from cn_cdd_004, and that no sourced duration is on file. The quote for tuition comes back blocked, because NUS asks for Flywire or Convera, with NUS's own sentences from sg_nus_fee_payment_003, including that a family member can pay through Convera, that the payer is identity checked, and the 2 to 3 business days. The quote for funding the student comes back blocked for want of a sourced duration. All three pass the engine at T0. The reply is scripted model text that repeats only those entries and gives no date; what the scenario asserts is what the router gave the model. The NUS entry was opened by SP because the tool was blocked, the Bank of China entry is checked once by Claude Code, and the two Chinese side entries cite a news aggregator, so all wait for a check.
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution, proposal, decision, execution, proposal, decision, execution]
+runs:
+  - lang: zh
+    turns:
+      - user: 我父母在中国，想把我这学期的费用汇到新加坡，银行会要什么材料，什么时候开始办？
+        model:
+          - calls:
+              - name: precheck
+                arguments: {action_kind: remit_from_china, provider: cn_bank_remit_sim}
+              - name: get_quote
+                arguments: {corridor: "CN>SG", amount: "30000", currency: CNY, purpose: tuition}
+              - name: get_quote
+                arguments: {corridor: "CN>SG", amount: "30000", currency: CNY, purpose: living_costs}
+          - text: 给你本人汇生活费：中国银行要求护照、身份证或户口本、录取通知书原件（cn_boc_anxin_009），Lifeline 没有关于所需时间的有来源数据。交学费：家人可以通过 Convera GlobalPay 代付，付款人要通过身份核验，学校可能要求你提供与付款人关系的证明，Convera 付款通常在线下转账完成后 2 至 3 个工作日到达 NUS（sg_nus_fee_payment_003）。中国方面：年度购汇便利额度为 5 万美元（cn_fx_quota_001），每笔 5,000 元人民币或 1,000 美元及以上需要身份核验（cn_cdd_004）。
+        expect: {reply: answer, lang: zh}
+      - user: 这些信息来自哪里？
+        model:
+          - text: 来自上面列出的条目。
+        expect:
+          reply: answer
+          model_saw: &facts
+            - '"documents_likely": ["passport", "ID card or Hukou book", "enrollment or admission letter"]'
+            - '"rule_ids": ["cn_boc_anxin_009", "cn_fx_quota_001", "cn_cdd_004"]'
+            - "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency."
+            - "cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification"
+            - "Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009."
+            - "NUS asks for payment through Flywire or Convera, and Lifeline has no sourced rule on file for a direct bank remittance to the institution."
+            - "A student, a family member or a third party can make a payment on the student's behalf through Convera GlobalPay"
+            - "as part of KYC checks the payer must provide their details and authenticate the payment"
+            - "A Convera payment is typically delivered to NUS within 2 to 3 business days after the offline transfer is completed."
+            - "Sources: sg_nus_fee_payment_003, cn_edu_remit_002."
+            - "Funding the student is a remittance to their own account. Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009."
+  - lang: en
+    turns:
+      - user: My parents in China want to send my semester's costs to Singapore. What will the bank ask for and when should they start?
+        model:
+          - calls:
+              - name: precheck
+                arguments: {action_kind: remit_from_china, provider: cn_bank_remit_sim}
+              - name: get_quote
+                arguments: {corridor: "CN>SG", amount: "30000", currency: CNY, purpose: tuition}
+              - name: get_quote
+                arguments: {corridor: "CN>SG", amount: "30000", currency: CNY, purpose: living_costs}
+          - text: "Funding you: Bank of China asks for the originals of the passport, the ID card or Hukou book, and the enrollment or admission letter (cn_boc_anxin_009); Lifeline has no sourced duration for it. Paying NUS: a family member can pay through Convera GlobalPay, the payer is identity checked and NUS may ask you for documents about your relationship with them, and a Convera payment is typically delivered within 2 to 3 business days after the offline transfer is completed (sg_nus_fee_payment_003). On the Chinese side: an annual quota of 50,000 US dollars (cn_fx_quota_001) and identity verification from 5,000 yuan (cn_cdd_004)."
+        expect: {reply: answer, lang: en}
+      - user: Where does each of those come from?
+        model:
+          - text: From the entries named beside each one.
+        expect:
+          reply: answer
+          model_saw: *facts

@@ -10,7 +10,7 @@ make dev
 
 The API listens on `http://127.0.0.1:8000`. FastAPI also serves interactive documentation at `http://127.0.0.1:8000/docs` and the machine readable schema at `http://127.0.0.1:8000/openapi.json`.
 
-`/chat` calls the model named in `.env`, so it needs `ANTHROPIC_API_KEY` or `DASHSCOPE_API_KEY` there, as `.env.example` lists. Every other endpoint works without keys. The router and the rails are fakes, so no real money moves and every fee is a fixture.
+`/chat` calls the model named in `.env`, so it needs `ANTHROPIC_API_KEY` or `DASHSCOPE_API_KEY` there, as `.env.example` lists. Every other endpoint works without keys. The router and the rails are fakes or simulations, so no real money moves and every fee is a fixture. Three rails are simulated with rules read from sourced knowledge entries: `sim_pix` on Singapore to Brazil, which pays only a payee with a Pix key on file; `upi_paynow_sim` on India to Singapore, open only for the RBI's two purposes and under its daily cap; and `cn_bank_remit_sim` on China to Singapore, which the router always quotes blocked and Lifeline never proposes, and which carries a parent's transfer the student can trace. `SIM_RAILS=off` in `.env` leaves out the last two; they are on otherwise.
 
 There is one demo user, `student_001`, loaded from `fixtures/demo_user.yaml`: an SGD mandate with a per transaction limit of 1,500, a daily limit of 2,500, the payees `landlord_sp` and `self_sg`, the student's own Singapore account, the corridors `SG>BR` and `SG>SG`, the purposes `rent` and `emergency`, balances of 2,300 SGD and 150 BRL, and a resilience plan for the rescue. The mandate is valid from midnight UTC of the day the demo ledger began, for 365 days.
 
@@ -704,6 +704,33 @@ Response `200`:
 }
 ```
 
+A parent's transfer to the student is traceable too. The demo fixture seeds one on the simulated China rail, `cn_bank_remit_sim-in-0001`, sent 100 hours before the API started, which the rail moves through its stages on its own simulated clock. Nothing about it is written to the ledger, because the student did not send it. When no knowledge entry gives a duration, `typical_duration_hours` is null, `typical_duration_source` names the entry and says so, and one of the next steps says it too. The first next step is the provider's own word for the stage; `status` is the nearest receipt status. Request:
+
+```json
+{
+  "user_id": "student_001",
+  "receipt_id": "cn_bank_remit_sim-in-0001"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "receipt_id": "cn_bank_remit_sim-in-0001",
+  "status": "funded",
+  "stage_entered_at": "2026-10-04T06:50:54.050963Z",
+  "typical_duration_hours": null,
+  "typical_duration_source": "cn_boc_anxin_009: no sourced duration on file",
+  "next_steps": [
+    "cn_bank_remit_sim stage: released.",
+    "This is a simulated rail. No real money moves.",
+    "Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009."
+  ],
+  "warnings": []
+}
+```
+
 Response `404` for a receipt this student does not hold, or one the rail has no status for:
 
 ```json
@@ -746,6 +773,41 @@ Response `200`:
 
 An `action_kind` the router knows nothing about returns empty lists and `ready` null, not an error.
 
+
+For money from China, `action_kind` `remit_from_china` returns only what knowledge entries say: the Bank of China checklist for funding the student's own account as the documents, and as the review triggers the Chinese side's annual quota, its identity rule, and that no duration is on file. `rule_ids` names the entries. Request:
+
+```json
+{
+  "user_id": "student_001",
+  "action_kind": "remit_from_china",
+  "provider": "cn_bank_remit_sim"
+}
+```
+
+Response `200`:
+
+```json
+{
+  "provider": "cn_bank_remit_sim",
+  "action_kind": "remit_from_china",
+  "documents_likely": [
+    "passport",
+    "ID card or Hukou book",
+    "enrollment or admission letter"
+  ],
+  "review_triggers": [
+    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting.",
+    "From 1 January 2026, cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification under the joint due diligence measures of the People's Bank, the financial regulator, and the securities regulator. Splitting a transfer across people is structuring.",
+    "Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009."
+  ],
+  "ready": null,
+  "rule_ids": [
+    "cn_boc_anxin_009",
+    "cn_fx_quota_001",
+    "cn_cdd_004"
+  ]
+}
+```
 ## Standing mandates
 
 A standing mandate is a recurring transfer the student confirms once, such as monthly rent. It is set up through `/chat` and `/confirm` like any T2 action, with the warning key `warn.standing.new`. Its runs happen on their own:

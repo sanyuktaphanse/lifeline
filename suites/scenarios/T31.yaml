@@ -1,0 +1,47 @@
+id: T31
+note: A parent's transfer from China to the student's own account in Singapore has not arrived. It is seeded on the simulated China rail from fixtures.inbound_receipts, sent 100 hours ago, and the rail moves it through its stages on a simulated clock of 48 hours a stage, a fixture, so it stands at released. The scripted model traces it by its receipt id; the trace passes the engine at T0, and on the next turn the model is seen to have received the status, the provider's own stage wording, that no duration is on file, and the entry that says so, cn_boc_anxin_009. No ledger entry is written for the seeded transfer itself, because the student did not send it. The scripted model supplies the trace call and the replies; the scenario asserts what the rail gave the model. The entry is checked once, by Claude Code, and waits for a person's check.
+fixtures:
+  inbound_receipts:
+    cn_bank_remit_sim:
+      - {receipt_id: cn_bank_remit_sim-in-0001, amount: "20000", currency: CNY, corridor: "CN>SG", status: created, sender: parent, sent_hours_ago: 100}
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution]
+  must_not_contain: ["No receipt"]
+runs:
+  - lang: en
+    turns:
+      - user: My parent's transfer cn_bank_remit_sim-in-0001 has not arrived. Trace it and tell me what to do.
+        model:
+          - calls:
+              - name: trace_transfer
+                arguments: {receipt_id: cn_bank_remit_sim-in-0001}
+          - text: It has been released by the bank and has not arrived yet. Lifeline has no sourced time for it.
+        expect: {reply: answer, lang: en}
+      - user: What did the bank say exactly?
+        model:
+          - text: The stage is released.
+        expect:
+          reply: answer
+          model_saw: &trace
+            - '"status": "funded"'
+            - "cn_bank_remit_sim stage: released."
+            - "This is a simulated rail. No real money moves."
+            - '"typical_duration_hours": null'
+            - "Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009."
+            - '"typical_duration_source": "cn_boc_anxin_009: no sourced duration on file"'
+  - lang: zh
+    turns:
+      - user: 我父母的转账 cn_bank_remit_sim-in-0001 还没到账，请帮我查一下该怎么办。
+        model:
+          - calls:
+              - name: trace_transfer
+                arguments: {receipt_id: cn_bank_remit_sim-in-0001}
+          - text: 银行已放款，资金尚未到账。Lifeline 没有关于到账时间的有来源数据。
+        expect: {reply: answer, lang: zh}
+      - user: 银行具体是怎么说的？
+        model:
+          - text: 当前阶段是 released。
+        expect:
+          reply: answer
+          model_saw: *trace
