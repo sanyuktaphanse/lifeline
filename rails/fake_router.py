@@ -15,6 +15,10 @@ UPI_PAYNOW_PURPOSES = frozenset({"allowance", "family_support"})
 # Fake: written in the knowledge base id style, but no such entry exists in rails/knowledge/.
 FAKE_UPI_PAYNOW_PURPOSE_RULE = "in_upi_paynow_purpose_001"
 CENT = Decimal("0.01")
+# Fixture: a transfer inside Singapore to the student's own account, for a rescue's emergency
+# allowance. Not a published Wise fee or arrival time.
+WISE_DOMESTIC_FEE = Decimal("0")
+WISE_DOMESTIC_HOURS = 1
 
 
 class FakeRouter(Router):
@@ -57,6 +61,20 @@ class FakeRouter(Router):
                     arrival_hours=72,
                     simulated=False,
                 ),
+            ]
+        if corridor == "SG>SG":
+            return [
+                self._route(
+                    "wise",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "SGD",
+                    quoted_at,
+                    fee=WISE_DOMESTIC_FEE,
+                    arrival_hours=WISE_DOMESTIC_HOURS,
+                    simulated=False,
+                )
             ]
         if corridor == "IN>SG":
             blocked = purpose not in UPI_PAYNOW_PURPOSES

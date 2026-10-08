@@ -16,6 +16,7 @@ from contracts.interfaces import (
 )
 from contracts.schemas import Action, ActionType, FreezeResult, Mandate
 from core.mandate import DeterministicMandateEngine, check, confirmation_token_for
+from core.tiers import TIERS
 
 FROZEN_INTERFACES = {
     MandateEngine: {"check", "confirmation_token_for"},
@@ -98,3 +99,32 @@ def test_engine_and_check_wrapper_give_the_same_decision():
     assert engine.confirmation_token_for(action, mandate) == confirmation_token_for(
         action, mandate
     )
+
+
+# Pinned so that adding or retiering an action type is a change someone has to make here on purpose.
+# Source: docs/decisions.md, 18 September 2026 and 8 October 2026.
+FROZEN_ACTION_TIERS = {
+    "transfer": "T2",
+    "read_balance": "T0",
+    "set_reminder": "T1",
+    "add_payee": "T2",
+    "freeze_card": "T2",
+    "change_limit": "T3",
+    "change_mandate": "T3",
+    "export_credentials": "T3",
+    "trace_transfer": "T0",
+    "precheck": "T0",
+    "get_quote": "T0",
+    "create_standing_mandate": "T2",
+    "cancel_standing_run": "T1",
+    "deactivate_standing_mandate": "T1",
+    "rescue_identity_check": "T1",
+    "check_wallet_token": "T0",
+    "reroute_to_backup": "T1",
+    "notify_family": "T1",
+}
+
+
+def test_action_types_and_their_tiers_are_pinned():
+    assert {kind.value: tier.value for kind, tier in TIERS.items()} == FROZEN_ACTION_TIERS
+    assert [kind.value for kind in ActionType] == list(FROZEN_ACTION_TIERS)

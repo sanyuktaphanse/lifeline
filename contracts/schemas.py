@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Annotated, Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 # The languages Lifeline writes replies in. Source: the TEXTS table in core/agent.py, which a
@@ -50,6 +50,10 @@ class ActionType(str, Enum):
     CREATE_STANDING_MANDATE = "create_standing_mandate"
     CANCEL_STANDING_RUN = "cancel_standing_run"
     DEACTIVATE_STANDING_MANDATE = "deactivate_standing_mandate"
+    RESCUE_IDENTITY_CHECK = "rescue_identity_check"
+    CHECK_WALLET_TOKEN = "check_wallet_token"
+    REROUTE_TO_BACKUP = "reroute_to_backup"
+    NOTIFY_FAMILY = "notify_family"
 
 
 class RouteStatus(str, Enum):
@@ -329,3 +333,119 @@ class StandingEvent(BaseModel):
     cancel_until: AwareDatetime | None = None
     decision: Decision | None = None
     receipt: Receipt | None = None
+
+
+# A card is named as issuer:card, such as wise:card_01, and nothing else: no spaces, no prose.
+# Source: docs/decisions.md, 8 October 2026.
+INSTRUMENT_ID = r"[a-z0-9_]+:[A-Za-z0-9_]+"
+
+
+class PlanCard(BaseModel):
+    """One card the student listed before departure, by the name they gave it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    instrument_id: str = Field(pattern=f"^{INSTRUMENT_ID}$")
+
+
+class TrustedContact(BaseModel):
+    """Who the student asks for help. A name and a channel only: no phone number, no email."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+    channel: str = Field(min_length=1)
+
+
+class IdentityCheck(BaseModel):
+    """A question and its answer, set before departure. The answer never prints, never dumps, and
+    never appears in a validation error."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    question: str = Field(min_length=1)
+    expected_answer: SecretStr = Field(min_length=1)
+
+
+class Plan(BaseModel):
+    """The student's resilience plan, which a rescue reads and never writes.
+
+    Source: docs/decisions.md, 8 October 2026. The emergency allowance is the amount a rescue
+    proposes as an ordinary T2 transfer; it is never an authority to pay.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    cards: list[PlanCard] = Field(min_length=1)
+    primary_instrument: str | None = None
+    backup_instrument: str | None = None
+    backup_route: str | None = None
+    wallet_token_present: bool
+    trusted_contact: TrustedContact
+    cash_plan: list[str] = Field(default_factory=list)
+    replacement_estimates: dict[str, str] = Field(default_factory=dict)
+    emergency_allowance: PositiveAmount
+    emergency_payee: str = Field(min_length=1)
+    emergency_corridor: Corridor
+    emergency_purpose: str = Field(min_length=1)
+    family_notice_opt_in: bool
+    identity_check: IdentityCheck
+
+    @model_validator(mode="after")
+    def _names_only_its_own_cards(self) -> "Plan":
+        names = [card.name.strip().casefold() for card in self.cards]
+        if len(set(names)) != len(names):
+            raise ValueError("Two cards in the plan share a name, ignoring case.")
+        listed = {card.instrument_id for card in self.cards}
+        for field_name in ("primary_instrument", "backup_instrument"):
+            value = getattr(self, field_name)
+            if value is not None and value not in listed:
+                raise ValueError(f"{field_name} {value} is not one of the plan's cards.")
+        if self.backup_instrument is not None and self.backup_instrument == self.primary_instrument:
+            raise ValueError("The backup instrument cannot be the primary instrument.")
+        return self
+
+
+class RescueState(str, Enum):
+    S0 = "S0"
+    S1 = "S1"
+    S2 = "S2"
+    S3 = "S3"
+    S4 = "S4"
+    S5 = "S5"
+    S6 = "S6"
+    S7 = "S7"
+    S8 = "S8"
+    S9 = "S9"
+    DONE = "done"
+
+
+class RescueTrigger(str, Enum):
+    CARD_LOST = "card_lost"
+    CARD_STOLEN = "card_stolen"
+
+
+# What the student does next, as a key the app turns into a screen in any language.
+RescueDoNow = Literal[
+    "start_rescue",
+    "answer_identity_question",
+    "locked",
+    "choose_card",
+    "confirm_freeze",
+    "confirm_transfer_or_skip",
+    "done",
+]
+
+
+class RescueProgress(BaseModel):
+    state_before: RescueState | None
+    state_after: RescueState | None
+    do_now: RescueDoNow
+    card_names: list[str] = Field(default_factory=list)
+    live_instrument: str | None = None
+    issuer_link: str | None = None
+
+
+class RescueReply(AgentReply):
+    rescue: RescueProgress

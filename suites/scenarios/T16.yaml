@@ -1,0 +1,28 @@
+id: T16
+note: A rescue on a plan with no backup card. After the identity answer and the confirmed freeze of the primary Wise card, the wallet token check finds no backup, so the machine goes from S3 straight to S6. There the reply lists the cash pickup option from the knowledge entry the plan names and the message template for the trusted contact, who is named with a channel and never a phone number. No transfer is proposed at all, so no money goes to anyone, and no new payee is added. The cash pickup entry is checked by SP and still needs a second check before the demo. The scripted model supplies nothing; every call in a rescue is built by code.
+fixtures:
+  plan:
+    backup_instrument: null
+    backup_route: null
+expected:
+  ledger: [note, note, proposal, decision, execution, note, proposal, decision, confirmation, execution, note, proposal, decision, execution, note, note, note, note, note, note, proposal, decision, note, execution, note]
+  notes: [rescue_started, rescue_transition, rescue_transition, rescue_transition, rescue_transition, rescue_cash_options, rescue_transition, rescue_replacement, rescue_transition, rescue_transition, family_notice, rescue_transition]
+  reply: freeze
+  rescue_state: done
+  must_contain: [Card wise:card_01 is frozen, Western Union agent location in Singapore, "Message for Ana on whatsapp:", The rescue is complete]
+  must_not_contain: ["7Q2K", send 300 SGD]
+runs:
+  - lang: en
+    turns:
+      - rescue: start
+        trigger: card_lost
+        user: I lost my only card
+        expect:
+          rescue_state: S1
+      - rescue: step
+        user: 7Q2K
+        expect:
+          reply: confirmation
+          rescue_state: S2
+      - rescue: step
+        confirm: latest

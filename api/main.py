@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, Field
@@ -23,8 +25,11 @@ from contracts.schemas import (
     LedgerEntry,
     Mandate,
     Message,
+    Plan,
     PrecheckResult,
     Receipt,
+    RescueReply,
+    RescueTrigger,
     Role,
     Route,
     Source,
@@ -72,6 +77,21 @@ class ChatRequest(BaseModel):
 class ConfirmRequest(BaseModel):
     user_id: str
     confirmation_token: str
+    lang: LanguageCode | None = None
+
+
+class RescueStartRequest(BaseModel):
+    user_id: str
+    trigger: RescueTrigger
+    text: str = Field(min_length=1, max_length=MAX_TEXT_CHARS)
+    lang: LanguageCode | None = None
+
+
+class RescueStepRequest(BaseModel):
+    user_id: str
+    # Empty when the step only confirms, or when the student continues without the allowance.
+    text: str = Field(default="", max_length=MAX_TEXT_CHARS)
+    confirmation_token: str | None = None
     lang: LanguageCode | None = None
 
 
@@ -139,7 +159,7 @@ def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> None:
             rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
 
 
-def _without_tokens(reply: AgentReply) -> AgentReply:
+def _without_tokens[R: AgentReply](reply: R) -> R:
     update: dict[str, Any] = {}
     if reply.decision is not None:
         update["decision"] = reply.decision.model_copy(update={"confirmation_token": None})
@@ -193,6 +213,7 @@ def create_app(
         pending={},
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
         council=council if council is not None else council_for(),
+        plans={user_id: Plan.model_validate(fixture["plan"])},
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
@@ -241,6 +262,14 @@ def create_app(
     async def model_unavailable(request: Request, error: ModelAdapterError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(error)})
 
+    @app.exception_handler(RequestValidationError)
+    async def invalid(request: Request, error: RequestValidationError) -> JSONResponse:
+        errors = error.errors()
+        if request.url.path.startswith("/rescue/"):
+            # A rescue request can hold the identity answer, so its 422 never echoes what was sent.
+            errors = [{name: value for name, value in item.items() if name != "input"} for item in errors]
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
+
     def known(user: str) -> str:
         if user not in users:
             raise HTTPException(status_code=404, detail=f"No user {user}.")
@@ -279,6 +308,22 @@ def create_app(
         message = Message(role=Role.USER, text="", **fields)
         with lock:
             reply = loop.handle(known(request.user_id), message, confirmation_token=request.confirmation_token)
+        return _without_tokens(reply)
+
+    @app.post("/rescue/start")
+    def rescue_start(request: RescueStartRequest) -> RescueReply:
+        fields = {"lang": request.lang} if request.lang else {}
+        message = Message(role=Role.USER, text=request.text, **fields)
+        with lock:
+            reply = loop.rescue_start(known(request.user_id), request.trigger.value, message)
+        return _without_tokens(reply)
+
+    @app.post("/rescue/step")
+    def rescue_step(request: RescueStepRequest) -> RescueReply:
+        fields = {"lang": request.lang} if request.lang else {}
+        message = Message(role=Role.USER, text=request.text, **fields)
+        with lock:
+            reply = loop.rescue_step(known(request.user_id), message, confirmation_token=request.confirmation_token)
         return _without_tokens(reply)
 
     @app.get("/ledger/{user}")

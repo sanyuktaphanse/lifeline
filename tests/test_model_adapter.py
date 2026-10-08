@@ -175,13 +175,16 @@ def test_empty_values_fall_back_to_the_defaults():
 
 
 def test_provider_is_selected_from_the_environment_variable(monkeypatch):
-    monkeypatch.setenv("MODEL_PROVIDER", "dashscope")
-    monkeypatch.setenv("FALLBACK_MODEL_PROVIDER", "anthropic")
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-dashscope-key")
+    # An explicit mapping, so a local .env that names another model cannot turn this test red.
+    env = {
+        "MODEL_PROVIDER": "dashscope",
+        "FALLBACK_MODEL_PROVIDER": "anthropic",
+        "DASHSCOPE_API_KEY": "test-dashscope-key",
+    }
     dashscope_calls: list = []
     monkeypatch.setattr(dashscope.Generation, "call", _fake_dashscope(dashscope_calls))
 
-    adapter = ProviderModelAdapter()
+    adapter = ProviderModelAdapter(env=env)
     reply = adapter.complete(MESSAGES, [])
 
     assert adapter.provider == "dashscope"

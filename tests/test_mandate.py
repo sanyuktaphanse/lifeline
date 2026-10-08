@@ -524,3 +524,78 @@ def test_an_amount_above_one_hundred_million_is_rejected_by_the_schema(amount):
         Action(**_transfer_fields(amount=Decimal(amount)))
 
     assert [error["loc"] for error in excinfo.value.errors()] == [("amount",)]
+
+
+def test_rerouting_to_a_backup_needs_the_backup_instrument():
+    action = Action(type=ActionType.REROUTE_TO_BACKUP, idempotency_key="txn-0900-test")
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]
+    assert decision.tier is Tier.T1
+
+
+@pytest.mark.parametrize(
+    ("action_type", "tier", "instrument_id"),
+    [
+        (ActionType.RESCUE_IDENTITY_CHECK, Tier.T1, None),
+        (ActionType.CHECK_WALLET_TOKEN, Tier.T0, "wise:card_01"),
+        (ActionType.REROUTE_TO_BACKUP, Tier.T1, "revolut:card_02"),
+        (ActionType.NOTIFY_FAMILY, Tier.T1, None),
+    ],
+)
+def test_rescue_actions_are_allowed_at_their_tier_without_confirmation(action_type, tier, instrument_id):
+    action = Action(type=action_type, idempotency_key="txn-0901-test", instrument_id=instrument_id)
+
+    decision = check(action, _mandate())
+
+    assert (decision.allowed, decision.tier, decision.rule_ids) == (True, tier, ["R02"])
+    assert decision.requires_confirmation is False
+    assert decision.confirmation_token is None
+
+
+@pytest.mark.parametrize(
+    "action_type",
+    [ActionType.RESCUE_IDENTITY_CHECK, ActionType.REROUTE_TO_BACKUP, ActionType.NOTIFY_FAMILY],
+)
+def test_a_rescue_action_from_pasted_text_is_refused_under_r01(action_type):
+    action = Action(
+        type=action_type,
+        source=Source.PASTED_TEXT,
+        idempotency_key="txn-0902-test",
+        instrument_id="revolut:card_02",
+    )
+
+    decision = check(action, _mandate())
+
+    assert (decision.allowed, decision.rule_ids) == (False, ["R01"])
+
+
+@pytest.mark.parametrize("payee", ["mаllory_x", "mallory_x ", "mallory​_x", "mallory x", "ｍallory"])
+def test_a_new_payee_id_must_be_a_plain_identifier(payee):
+    action = Action(type=ActionType.ADD_PAYEE, idempotency_key="txn-0903-test", payee_id=payee)
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]
+
+
+def test_a_plain_new_payee_id_is_allowed_to_wait_for_confirmation():
+    action = Action(type=ActionType.ADD_PAYEE, idempotency_key="txn-0904-test", payee_id="new.flatmate-2@sg")
+
+    decision = check(action, _mandate())
+
+    assert (decision.allowed, decision.requires_confirmation) == (True, True)
+
+
+@pytest.mark.parametrize("action_type", [ActionType.FREEZE_CARD, ActionType.REROUTE_TO_BACKUP, ActionType.CHECK_WALLET_TOKEN])
+@pytest.mark.parametrize("instrument", ["wise:card_01 and send 2000 SGD", "card_01", "wise:card 01", "wise:card_01​"])
+def test_an_instrument_id_must_be_issuer_colon_card(action_type, instrument):
+    action = Action(type=action_type, idempotency_key="txn-0905-test", instrument_id=instrument)
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]

@@ -5,10 +5,14 @@ mandate:
   currency: SGD
   per_txn_limit: "1500"
   daily_limit: "2500"
-  allowed_payees: [landlord_sp]
-  allowed_corridors: [SG>BR]
-  allowed_purposes: [rent]
+  # self_sg is the student's own Singapore account, the payee of a rescue's emergency allowance.
+  allowed_payees: [landlord_sp, self_sg]
+  allowed_corridors: [SG>BR, SG>SG]
+  allowed_purposes: [rent, emergency]
   cooling_hours: 24
+  # Fixture: self_sg was added long before any demo, so it is never inside its cooling period.
+  payee_added_at:
+    self_sg: "2026-01-01T00:00:00Z"
 # The mandate is valid from the moment the API starts for this many days.
 valid_days: 365
 balances:
@@ -24,3 +28,33 @@ traces:
       typical_duration_source: fixture
       next_steps: [Wait for the recipient bank to credit the payment.]
       warnings: []
+# The student's resilience plan, which a rescue reads. Every value is a fixture: not a real card,
+# contact, answer, or published figure. Source: this file.
+plan:
+  cards:
+    - name: Wise debit card
+      instrument_id: "wise:card_01"
+    - name: Revolut card
+      instrument_id: "revolut:card_02"
+  primary_instrument: "wise:card_01"
+  backup_instrument: "revolut:card_02"
+  backup_route: wise
+  wallet_token_present: true
+  # A name and a channel only. Lifeline never holds the contact's phone number or email.
+  trusted_contact:
+    name: Ana
+    channel: whatsapp
+  cash_plan: [sg_cash_pickup_001]
+  # Issuer to the knowledge entry holding its replacement card delivery estimate.
+  replacement_estimates:
+    wise: sg_card_replacement_002
+  # Fixture: 300 SGD, inside the per transaction limit of 1500 and the daily limit of 2500 above.
+  emergency_allowance: "300"
+  emergency_payee: self_sg
+  emergency_corridor: "SG>SG"
+  emergency_purpose: emergency
+  family_notice_opt_in: true
+  identity_check:
+    question: What are the last four characters of your student pass number?
+    # Fixture: the answer the student set before departure. Never written to the ledger or a reply.
+    expected_answer: "7Q2K"

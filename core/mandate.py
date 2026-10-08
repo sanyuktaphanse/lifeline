@@ -2,12 +2,13 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from collections.abc import Sequence
 from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
-from contracts.schemas import Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
+from contracts.schemas import INSTRUMENT_ID, Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
 from core.standing import occurrence_containing
 from core.tiers import TIERS
 
@@ -25,6 +26,11 @@ WARNING_KEYS = {
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
 # confirmation rule R11, before and after the student confirms.
 ALLOWED_RULE = {Tier.T0: "R02", Tier.T1: "R02", Tier.T2: "R11"}
+# Source: docs/decisions.md, 8 October 2026. A new payee id is plain ASCII letters, digits, and
+# the joiners . @ - _, so a lookalike letter, a space, or an invisible character cannot pass for one.
+CARD_ACTIONS = (ActionType.FREEZE_CARD, ActionType.REROUTE_TO_BACKUP, ActionType.CHECK_WALLET_TOKEN)
+PLAIN_INSTRUMENT_ID = re.compile(INSTRUMENT_ID)
+PLAIN_PAYEE_ID = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 
 
 def _confirm_secret() -> bytes:
@@ -201,10 +207,23 @@ class DeterministicMandateEngine(MandateEngine):
         if action.type is ActionType.ADD_PAYEE and not action.payee_id:
             rule_ids.append("R04")
             reasons.append("Adding a payee needs a payee id, and this one has none.")
+        elif action.type is ActionType.ADD_PAYEE and not PLAIN_PAYEE_ID.fullmatch(action.payee_id or ""):
+            rule_ids.append("R04")
+            reasons.append(
+                f"Payee id {action.payee_id!r} is not plain letters, digits, and . @ - _, so it could pass for another."
+            )
 
         if action.type is ActionType.FREEZE_CARD and not action.instrument_id:
             rule_ids.append("R04")
             reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
+
+        if action.type in CARD_ACTIONS and action.instrument_id and not PLAIN_INSTRUMENT_ID.fullmatch(action.instrument_id):
+            rule_ids.append("R04")
+            reasons.append(f"Instrument id {action.instrument_id!r} is not written as issuer:card.")
+
+        if action.type is ActionType.REROUTE_TO_BACKUP and not action.instrument_id:
+            rule_ids.append("R04")
+            reasons.append("Rerouting to a backup needs the backup's instrument id, and this one has none.")
 
         if action.type is ActionType.CREATE_STANDING_MANDATE:
             missing = [

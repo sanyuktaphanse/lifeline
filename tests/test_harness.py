@@ -14,8 +14,8 @@ from core.harness import (
 
 SCENARIOS = {
     "T01", "T02", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14",
-    "T15", "T17", "T21", "T22", "T23", "T29", "T32", "T34", "X01", "X02", "X03", "X04", "X05",
-    "X06", "X07", "X08", "X09", "X12", "X13", "X14", "X16", "X17", "X18", "X19", "X20",
+    "T15", "T16", "T17", "T21", "T22", "T23", "T29", "T32", "T34", "X01", "X02", "X03", "X04", "X05",
+    "X06", "X07", "X08", "X09", "X11", "X12", "X13", "X14", "X16", "X17", "X18", "X19", "X20",
     "X21", "X22", "X23", "X24", "X26",
 }
 
@@ -415,3 +415,87 @@ def test_a_tamper_turn_without_expected_verify_still_fails_the_run(tmp_path):
 
     assert result.status == "failed"
     assert result.runs[0].failures == ["ledger chain breaks at entry 2"]
+
+
+RESCUE_TURNS = [
+    {"rescue": "start", "trigger": "card_lost", "user": "I lost my card", "expect": {"rescue_state": "S1", "do_now": "answer_identity_question"}},
+    {"rescue": "step", "user": "7Q2K", "expect": {"rescue_state": "S2", "reply": "confirmation"}},
+    {"rescue": "step", "confirm": "latest", "expect": {"reply": "freeze"}},
+]
+
+
+def _rescue(expected: dict, fixtures: dict | None = None, turns: list | None = None) -> dict:
+    run = {"lang": "en", "turns": turns or RESCUE_TURNS, "expected": expected}
+    if fixtures is not None:
+        run["fixtures"] = fixtures
+    return {"id": "T07", "runs": [run]}
+
+
+def test_a_scenario_runs_a_rescue_with_the_demo_plan(tmp_path):
+    suites = _suites(tmp_path)
+    _write_scenario(suites, _rescue({"rescue_state": "S5", "do_now": "confirm_transfer_or_skip", "reply": "freeze"}))
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert [run.failures for run in result.runs] == [[]]
+
+
+def test_a_scenario_plan_overrides_the_demo_plan(tmp_path):
+    suites = _suites(tmp_path)
+    expected = {
+        "rescue_state": "done",
+        "notes": [
+            "rescue_started", "rescue_transition", "rescue_transition", "rescue_transition",
+            "rescue_transition", "rescue_cash_options", "rescue_transition", "rescue_replacement",
+            "rescue_transition", "rescue_transition", "family_notice", "rescue_transition",
+        ],
+    }
+    fixtures = {"plan": {"backup_instrument": None, "backup_route": None}}
+    _write_scenario(suites, _rescue(expected, fixtures))
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert [run.failures for run in result.runs] == [[]]
+
+
+def test_a_wrong_rescue_state_or_note_trail_fails_the_run(tmp_path):
+    suites = _suites(tmp_path)
+    _write_scenario(suites, _rescue({"rescue_state": "S9", "notes": ["rescue_started"]}))
+
+    failures = _by_id(evaluate(suites, suites / "scenarios"))["T07"].runs[0].failures
+
+    assert any("rescue state was S5, expected S9" in failure for failure in failures)
+    assert any("notes were" in failure for failure in failures)
+
+
+def test_an_unknown_rescue_turn_is_a_failure(tmp_path):
+    suites = _suites(tmp_path)
+    _write_scenario(suites, _rescue({}, turns=[{"rescue": "jump", "user": "go"}]))
+
+    failures = _by_id(evaluate(suites, suites / "scenarios"))["T07"].runs[0].failures
+
+    assert any("rescue must be start or step" in failure for failure in failures)
+
+
+def test_a_family_notice_expectation_reads_the_notice_the_run_wrote(tmp_path):
+    suites = _suites(tmp_path)
+    turns = [*RESCUE_TURNS, {"rescue": "step"}]
+    _write_scenario(suites, _rescue({"family_notice": ["Card wise:card_01 was frozen.", "The student did not take emergency money."]}, turns=turns))
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert [run.failures for run in result.runs] == [[]]
+
+
+def test_a_family_notice_expectation_fails_when_the_notice_lacks_a_sentence_or_is_missing(tmp_path):
+    suites = _suites(tmp_path)
+    turns = [*RESCUE_TURNS, {"rescue": "step"}]
+    _write_scenario(suites, _rescue({"family_notice": ["Everything was fine."]}, turns=turns))
+    missing = _rescue({"family_notice": ["Card wise:card_01 was frozen."]})
+    missing["id"] = "T99"
+    _write_scenario(suites, missing)
+
+    results = _by_id(evaluate(suites, suites / "scenarios"))
+
+    assert any("family notice does not contain 'Everything was fine.'" in f for f in results["T07"].runs[0].failures)
+    assert any("no family notice was written" in f for f in results["T99"].runs[0].failures)
