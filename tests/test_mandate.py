@@ -570,3 +570,21 @@ def test_a_rescue_action_from_pasted_text_is_refused_under_r01(action_type):
     decision = check(action, _mandate())
 
     assert (decision.allowed, decision.rule_ids) == (False, ["R01"])
+
+
+@pytest.mark.parametrize("payee", ["mаllory_x", "mallory_x ", "mallory​_x", "mallory x", "ｍallory"])
+def test_a_new_payee_id_must_be_a_plain_identifier(payee):
+    action = Action(type=ActionType.ADD_PAYEE, idempotency_key="txn-0903-test", payee_id=payee)
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]
+
+
+def test_a_plain_new_payee_id_is_allowed_to_wait_for_confirmation():
+    action = Action(type=ActionType.ADD_PAYEE, idempotency_key="txn-0904-test", payee_id="new.flatmate-2@sg")
+
+    decision = check(action, _mandate())
+
+    assert (decision.allowed, decision.requires_confirmation) == (True, True)

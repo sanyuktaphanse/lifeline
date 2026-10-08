@@ -1,6 +1,7 @@
 import hmac
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -231,6 +232,7 @@ TEXTS = {
         "rescue_not_started": "Lifeline starts a rescue only from your own words, so nothing started.",
         "rescue_in_progress": "A rescue is already in progress, so nothing restarted.",
         "rescue_none": "No rescue is in progress.",
+        "confirm_in_rescue": "This confirmation belongs to a step of your rescue, so nothing changed here. Confirm it in the rescue.",
         "identity_failed": "That answer does not match your plan, so Lifeline did nothing. Try again: {question}",
         "identity_verified": "That answer matches your plan.",
         "choose_card": "Which card is it? Answer with its name as written in your plan: {names}.",
@@ -295,6 +297,7 @@ TEXTS = {
         "rescue_not_started": "O Lifeline só inicia um resgate a partir das suas próprias palavras, então nada foi iniciado.",
         "rescue_in_progress": "Já há um resgate em andamento, então nada foi reiniciado.",
         "rescue_none": "Nenhum resgate está em andamento.",
+        "confirm_in_rescue": "Esta confirmação pertence a uma etapa do seu resgate, então nada mudou aqui. Confirme no resgate.",
         "identity_failed": "Essa resposta não corresponde ao seu plano, então o Lifeline não fez nada. Tente de novo: {question}",
         "identity_verified": "Essa resposta corresponde ao seu plano.",
         "choose_card": "Qual é o cartão? Responda com o nome escrito no seu plano: {names}.",
@@ -359,6 +362,7 @@ TEXTS = {
         "rescue_not_started": "Lifeline 只会根据你本人的话启动救援，因此没有启动任何操作。",
         "rescue_in_progress": "救援已在进行中，因此没有重新开始。",
         "rescue_none": "目前没有进行中的救援。",
+        "confirm_in_rescue": "该确认属于你救援中的一步，因此这里没有任何更改。请在救援中确认。",
         "identity_failed": "该答案与你的计划不符，因此 Lifeline 没有执行任何操作。请重试：{question}",
         "identity_verified": "该答案与你的计划相符。",
         "choose_card": "是哪张卡？请用你计划中写的名称回答：{names}。",
@@ -521,6 +525,10 @@ class _Outcome:
                 setattr(self, name, getattr(reply, name))
 
 
+# The states where a rescue waits for the student; it runs straight through every other one.
+RESTING = (RescueState.S1, RescueState.S2, RescueState.S5)
+
+
 def _from_student(message: Message) -> bool:
     return message.role is Role.USER and message.source is Source.USER_TURN
 
@@ -628,9 +636,17 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
     }
 
 
+def _skeleton(payee: str) -> str:
+    """A payee id as the provenance check compares it: compatibility forms folded, invisible
+    characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
+    folded = unicodedata.normalize("NFKC", payee)
+    visible = "".join(char for char in folded if unicodedata.category(char) != "Cf")
+    return visible.strip().casefold()
+
+
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     untrusted: dict[str, Source] = {}
-    payee = (action.payee_id or "").casefold()
+    payee = _skeleton(action.payee_id or "")
     if payee and payee not in trail.from_user.payee_ids and payee in trail.from_data.payee_ids:
         untrusted["payee_id"] = trail.from_data.payee_ids[payee]
     amount = action.amount
@@ -717,6 +733,16 @@ class AgentLoop:
             raise ValueError("Pasted text must carry a source other than user_turn, such as pasted_text.")
         lang = message.lang if "lang" in message.model_fields_set else detect_lang(message.text)
         mandate = self._mandates[user_id]
+        if confirmation_token is not None and self._rescue_owns(user_id, confirmation_token):
+            trail = self._attempt_trail(user_id, mandate)
+            pending = self._pending[confirmation_token]
+            self._write(
+                trail,
+                "confirmation_rejected",
+                {"reason": "rescue_step", "idempotency_key": pending.action.idempotency_key},
+            )
+            reply = self._reply(trail, lang, _text(lang, "confirm_in_rescue"))
+            return self._remember_confirmation(user_id, lang, message, reply)
         if confirmation_token is not None:
             reply = self._confirm(user_id, mandate, lang, confirmation_token)
             return self._remember_confirmation(user_id, lang, message, reply)
@@ -1619,6 +1645,8 @@ class AgentLoop:
                 {"kind": "rescue_trigger_ignored", "trigger": trigger.value, "source": message.source.value},
             )
             out.say(_text(lang, "rescue_not_started"))
+        elif self._machine.active(user_id) and self._machine.state(user_id) not in RESTING:
+            self._run_on(user_id, plan, self._rescues[user_id], lang, trail, out)
         elif self._machine.active(user_id):
             out.say(_text(lang, "rescue_in_progress"))
         else:
@@ -1649,6 +1677,9 @@ class AgentLoop:
             out.say(_text(lang, "rescue_none"))
         elif not _from_student(message):
             self._step_from_data(user_id, plan, rescue, lang, trail, out, message.source)
+        elif before not in RESTING:
+            # A restart fell between two steps that need nothing from the student; run on from there.
+            self._run_on(user_id, plan, rescue, lang, trail, out)
         elif before is RescueState.S1:
             self._check_identity(user_id, plan, rescue, lang, trail, out, message.text)
         elif before is RescueState.S2 and confirmation_token is not None:
@@ -1830,12 +1861,12 @@ class AgentLoop:
             return
         reply = self._confirm(user_id, self._mandates[user_id], lang, token)
         out.take(reply, own_trail=False)
-        if reply.freeze is not None:
+        if reply.freeze is not None and pending is not None:
             rescue.freeze = reply.freeze
             self._advance(trail, user_id, "freeze_settled")
             self._run_on(user_id, plan, rescue, lang, trail, out)
-        elif reply.decision is None:
-            # Expired or unknown: nothing was frozen, so the freeze is offered again.
+        elif reply.decision is None and not self._rescue_waiting(user_id, plan, rescue):
+            # Expired or never issued, and no freeze is waiting: nothing was frozen, so it is offered again.
             self._offer_freeze(user_id, plan, rescue, lang, trail, out)
 
     def _money_fields(self, user_id: str, plan: Plan) -> dict[str, Any]:
@@ -1852,6 +1883,28 @@ class AgentLoop:
         return action.type is ActionType.TRANSFER and action.standing_mandate_id is None and all(
             getattr(action, name) == value for name, value in fields.items()
         )
+
+    def _rescue_step_action(self, user_id: str, plan: Plan, rescue: _Rescue, action: Action) -> bool:
+        """Whether an action is the one the rescue is waiting for the student to confirm."""
+        state = self._machine.state(user_id)
+        if state is RescueState.S2:
+            return action.type is ActionType.FREEZE_CARD and action.instrument_id == rescue.instrument
+        return state is RescueState.S5 and self._is_money(user_id, plan, action)
+
+    def _rescue_waiting(self, user_id: str, plan: Plan, rescue: _Rescue) -> bool:
+        return any(
+            pending.user_id == user_id and self._rescue_step_action(user_id, plan, rescue, pending.action)
+            for pending in self._pending.values()
+        )
+
+    def _rescue_owns(self, user_id: str, token: str) -> bool:
+        """Whether a token confirms a step of the student's rescue, which only the rescue may confirm."""
+        pending = self._pending.get(token)
+        rescue = self._rescues.get(user_id)
+        plan = self._plans.get(user_id)
+        if pending is None or pending.user_id != user_id or rescue is None or plan is None:
+            return False
+        return self._machine.active(user_id) and self._rescue_step_action(user_id, plan, rescue, pending.action)
 
     def _offer_money(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
         """S5. The allowance is proposed as an ordinary T2 transfer to a payee the mandate must
@@ -1877,6 +1930,12 @@ class AgentLoop:
             return
         reply = self._confirm(user_id, self._mandates[user_id], lang, token)
         out.take(reply, own_trail=False)
+        if pending is None:
+            # A token used before, closed, or never issued: nothing of this step happened, and the
+            # offer that is waiting, if any, still waits. Only with none waiting is it offered again.
+            if not self._rescue_waiting(user_id, plan, rescue):
+                self._offer_money(user_id, plan, rescue, lang, trail, out)
+            return
         if reply.receipt is not None or (reply.decision is not None and not reply.decision.allowed):
             self._advance(trail, user_id, "money_settled")
             self._run_on(user_id, plan, rescue, lang, trail, out)
