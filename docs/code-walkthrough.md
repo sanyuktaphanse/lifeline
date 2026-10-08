@@ -509,7 +509,7 @@ class AgentReply(BaseModel):
 
 
 class StandingEvent(BaseModel):
-    kind: Literal["notice", "run", "skipped", "needs_student", "rail_failed"]
+    kind: Literal["notice", "run", "skipped", "needs_student", "rail_failed", "held"]
     user_id: str
     standing_mandate_id: str
     period: str
@@ -759,6 +759,7 @@ from contracts.schemas import (
 from core.standing import next_occurrence, occurrence_containing
 from core.tiers import TIERS
 
+CONFIRM_SECRET_VAR = "LIFELINE_CONFIRM_SECRET"
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
 TRANSFER_WARNING_KEY = "warn.transfer.irreversible"
 # Source: project decision of 18 September 2026. Every T2 action needs the
@@ -786,8 +787,14 @@ PLAIN_INSTRUMENT_ID = re.compile(INSTRUMENT_ID)
 PLAIN_PAYEE_ID = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 
 
+def uses_development_secret() -> bool:
+    """Whether tokens are signed with the public development secret, which anyone can sign with."""
+    return not os.environ.get(CONFIRM_SECRET_VAR) and os.environ.get("LIFELINE_ENV") != "production"
+
+
 def _confirm_secret() -> bytes:
-    secret = os.environ.get("LIFELINE_CONFIRM_SECRET")
+    # An empty value counts as unset, as it does for the anchor secret. Source: docs/decisions.md, 9 October 2026.
+    secret = os.environ.get(CONFIRM_SECRET_VAR) or None
     if secret is None:
         if os.environ.get("LIFELINE_ENV") == "production":
             raise RuntimeError(
@@ -798,6 +805,8 @@ def _confirm_secret() -> bytes:
 ```
 
 `_confirm_secret` returns the key used to sign confirmation tokens. The leading underscore marks it as private to this module. It reads the secret from the environment each time, so a changed variable takes effect without a restart. In development a clearly named placeholder is used so tests work with no setup. In production a missing secret raises `RuntimeError`, so the placeholder can never be used to sign real payments. `.encode("utf-8")` turns the text into bytes, which `hmac` requires. `TRANSFER_WARNING_KEY` is a key for translated warning text, not the text itself, so the frontend can show it in the student's language. `WARNING_KEYS` gives every T2 action type its own warning: an irreversible payment, a new payee, or a frozen card. A test checks that every T2 type has one, so the lookup below can never miss. `ALLOWED_RULE` maps each tier an action can be allowed at to the rule that governed the yes. T3 has no entry because a T3 action is never allowed. `WARNING_KEYS` includes `warn.standing.new` for creating a standing mandate. `PLAIN_PAYEE_ID` is the form a new payee id must take, plain ASCII letters, digits, and the joiners, and `PLAIN_INSTRUMENT_ID` compiles the shared `INSTRUMENT_ID` from the schemas; `CARD_ACTIONS` names the three actions that carry a card id. All three came from the attacker briefs of 8 October.
+
+Since the Stage 10 review an empty `LIFELINE_CONFIRM_SECRET` counts as unset, as an empty anchor secret already did, so in production it raises instead of signing every token with an empty key that anyone could recompute from the ledger. `uses_development_secret` says whether tokens are signed with the public development value, which the verify endpoint names.
 
 ```python
 def _amount_field(amount: Decimal | None) -> str:
@@ -1359,10 +1368,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from contracts.interfaces import Ledger
 from contracts.schemas import LedgerEntry
 
 GENESIS_PREV_HASH = "0" * 64
+# The kind of the entry that stands in for a line of the file that cannot be read as an entry. It holds no
+# hash, so verify names it as the first broken entry. Source: docs/decisions.md, 9 October 2026.
+UNREADABLE_KIND = "unreadable"
 
 
 def _hash_of(entry: LedgerEntry) -> str:
@@ -1409,8 +1423,9 @@ class HashChainLedger(Ledger):
 
     def verify(self) -> int | None:
         prev_hash = GENESIS_PREV_HASH
-        for entry in self._entries:
-            if entry.prev_hash != prev_hash or entry.hash != _hash_of(entry):
+        for position, entry in enumerate(self._entries, start=1):
+            # An entry out of its place, as after a line was deleted and the rest rechained, is a break too.
+            if entry.seq != position or entry.prev_hash != prev_hash or entry.hash != _hash_of(entry):
                 return entry.seq
             prev_hash = entry.hash
         return None
@@ -1424,6 +1439,8 @@ class HashChainLedger(Ledger):
 
 `__init__` runs when a ledger is created and starts an empty private list. `append` builds the entry with an empty hash, because `hash` is a required field, then computes the real hash and stores it. `prev_hash=self.head()` links the new entry to the last one. `verify` walks the list from the start: each entry must point at the previous hash and must still hash to its stored value, otherwise its `seq` is returned. `entries` returns deep copies, so a caller who edits a returned entry changes only the copy. `head` uses `[-1]`, which in Python means the last element, and falls back to the genesis value when the list is empty.
 
+Since the Stage 10 review `verify` also checks that each entry sits at its own place, sequence number one first and each next one a step on, so a line deleted from the file and the rest rechained without renumbering is named too. It returns the `seq` of the first entry that fails any check, which is the number `GET /ledger` shows.
+
 
 ### The file ledger, `JsonlLedger`
 
@@ -1436,7 +1453,26 @@ class JsonlLedger(HashChainLedger):
         self._path = path
         if path.exists():
             with path.open(encoding="utf-8") as handle:
-                self._entries = [LedgerEntry.model_validate_json(line) for line in handle if line.strip()]
+                for number, line in enumerate(handle, start=1):
+                    if line.strip():
+                        self._entries.append(self._read(line, number))
+
+    def _read(self, line: str, number: int) -> LedgerEntry:
+        """A line of the file as an entry, or, when it is not one, an unreadable entry in its place, so an
+        edited file still loads and verify names the line. Source: docs/decisions.md, 9 October 2026."""
+        try:
+            return LedgerEntry.model_validate_json(line)
+        except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the unreadable entry breaks the chain and verify names it
+            previous = self._entries[-1] if self._entries else None
+            return LedgerEntry(
+                seq=len(self._entries) + 1,
+                ts=previous.ts if previous is not None else datetime.now(timezone.utc),
+                actor="",
+                kind=UNREADABLE_KIND,
+                payload={"line": number},
+                prev_hash="",
+                hash="",
+            )
 
     def append(self, actor: str, kind: str, payload: dict[str, Any]) -> LedgerEntry:
         stored = json.loads(json.dumps(payload, ensure_ascii=False, default=str))
@@ -1444,12 +1480,21 @@ class JsonlLedger(HashChainLedger):
 
     def _store(self, entry: LedgerEntry) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        # A file whose last line has no newline, as an editor may save it, gets one first, so the new entry
+        # never joins the line before it. Source: the Stage 10 review, 9 October 2026.
+        ends_open = False
+        if self._path.exists() and self._path.stat().st_size:
+            with self._path.open("rb") as handle:
+                handle.seek(-1, 2)
+                ends_open = handle.read(1) != b"\n"
         with self._path.open("a", encoding="utf-8") as handle:
-            handle.write(entry.model_dump_json() + "\n")
+            handle.write(("\n" if ends_open else "") + entry.model_dump_json() + "\n")
         super()._store(entry)
 ```
 
 `JsonlLedger` keeps the chain in a file, one JSON entry per line, which is the format called JSON Lines. When it is created it reads every non empty line back into a `LedgerEntry` with `model_validate_json`, which parses and validates in one step. A file that does not exist yet is an empty ledger, and nothing is written until the first entry. `append` first turns the payload into plain JSON exactly as the hash reads it: `json.dumps` with `default=str` writes a time or a decimal as text, and `json.loads` reads it back as plain data. The payload that is hashed, the one kept, and the one written are therefore identical, so the chain verifies after a reload. `_store` creates the folder if needed, opens the file with `"a"`, which adds to the end, and writes the entry as one line before adding it to the list, so a failed write never leaves an entry that the file lacks. `super()` calls the parent class's version of the method.
+
+Since the Stage 10 review a line that cannot be read as an entry, such as a line that is not an object, a line missing a field, a line that starts with a byte order mark, or a sequence number of zero, no longer stops the file from loading. `_read` puts an entry of kind `unreadable` in its place, with the line number in its payload and no hash, so verify names it as the first broken entry, and no user id, so no reader serves it to a student. `_store` checks the last byte of the file before it writes, and when an editor saved the file without a final newline it adds one, so a new entry never joins the line before it and the file still loads after the next start.
 
 ## The local anchor, `core/anchor_local.py`
 
@@ -3808,6 +3853,8 @@ DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
 # a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
 DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+# The note written when the integrity hold stops an execution. Source: docs/decisions.md, 9 October 2026.
+INTEGRITY_HOLD = "ledger_integrity_hold"
 # The word a cancel may name in place of a receipt id: the student's most recent receipt, resolved in code.
 LATEST = "latest"
 # The words for that in the student's own turn, in the three languages. A cancel of "latest" is trusted only
@@ -4107,6 +4154,12 @@ TEXTS = {
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
+        "held_entry": "Lifeline has paused every payment and confirmed action, because its ledger failed verification at entry {seq}. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean.",
+        "held_store": "Lifeline has paused every payment and confirmed action, because its anchor store does not match its ledger. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean.",
+        "backup_frozen": "Your backup card {backup} is frozen too, so Lifeline did not move your payments to it.",
+        "notice_backup_frozen": "Backup card {instrument} is frozen too, so payments were not moved to it.",
+        "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
+        "notice_injection_any": "A request that did not come from the student was blocked.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
@@ -4195,6 +4248,12 @@ TEXTS = {
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
+        "held_entry": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o seu registro falhou na verificação na entrada {seq}. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
+        "held_store": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o armazenamento de âncoras não corresponde ao registro. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
+        "backup_frozen": "Seu cartão reserva {backup} também está bloqueado, então o Lifeline não passou seus pagamentos para ele.",
+        "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
+        "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
+        "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
@@ -4283,6 +4342,12 @@ TEXTS = {
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
+        "held_entry": "Lifeline 已暂停所有付款和已确认的操作，因为账本在第 {seq} 条记录处未通过验证。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
+        "held_store": "Lifeline 已暂停所有付款和已确认的操作，因为锚定存储与账本不一致。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
+        "backup_frozen": "你的备用卡 {backup} 也已被冻结，因此 Lifeline 没有把付款转到这张卡上。",
+        "notice_backup_frozen": "备用卡 {instrument} 也已被冻结，因此付款没有转到这张卡上。",
+        "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
+        "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
@@ -4784,6 +4849,8 @@ class AgentLoop:
         self._standing_skipped: set[tuple[str, str, str]] = set()
         # The months a monthly note was already written for, per student, rebuilt from the ledger.
         self._monthly_noted: set[tuple[str, str]] = set()
+        # The first entry the rebuild could not read, and why, which holds every execution like a broken chain.
+        self._unreadable: tuple[int, str] | None = None
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -5436,6 +5503,11 @@ When the source was changed, the engine refuses the action under R01, exactly as
             self._closed[token] = (user_id, "expired", pending.action.idempotency_key)
             return self._reject(user_id, mandate, lang, "expired", pending.action.idempotency_key)
         trail = _Trail(user_id, pending.turn, pending.provider, pending.model, mandate.id)
+        # The one gate every T2 execution passes: on a ledger that cannot be trusted nothing is executed, and
+        # the confirmation keeps waiting for a clean one.
+        hold = self._held(trail, pending.action.idempotency_key)
+        if hold is not None:
+            return self._reply(trail, lang, _held_text(lang, hold))
         action = pending.action.model_copy(update={"confirmation_token": token})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         if not decision.allowed or decision.requires_confirmation:
@@ -5465,6 +5537,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
 ```
 
 `_confirm` is the second half of a transfer. A token that is not waiting, or that belongs to another student, is refused and nothing is written. A token older than `CONFIRMATION_TTL` is removed and refused. `total_seconds() // 60` turns the limit into whole minutes for the reply, because `//` divides and drops the remainder. Otherwise the trail continues the turn that proposed the transfer, with its provider and model. The action is rebuilt exactly as it was proposed, with only the token added, and the engine checks it again. This second check is what turns the token into permission: R11 confirms the token belongs to this exact action, and the engine now reports it allowed without asking for another confirmation. If the check fails, the waiting confirmation is removed and the refusal is written as a decision. A payee or a freeze then goes to `_carry_out`. For a transfer, `assert` states that the pending confirmation holds its route; an `assert` raises an error if its condition is ever false, so a broken assumption fails loudly instead of paying over no route. The loop writes the confirmation, then calls the rail named by the selected route with that route, the mandate's `id` as `mandate_ref`, the action's idempotency key, and the token. A `RailError` goes to `_offer_next_route`. When the rail returns a receipt, the waiting confirmation is removed and its token recorded as consumed, the action joins the history, the key of the rail that paid is remembered for tracing, and the execution and the receipt are written, in that order. The receipt entry carries that key as `rail` beside the receipt, because the receipt names the rail by its own name, which need not match its key in `rails`. The receipt's `simulated` flag is the rail's truth, because only the rail that executed knows whether money moved. When it differs from the route's flag, which is what the router expected, a `note` whose `kind` is `simulated_mismatch` records both flags, the key, the rail, and the receipt id. Whenever the receipt is simulated, the reply adds the `simulated` text in the student's language. The trail carries the id of the mandate the confirmation is checked against, which is the version that authorises the payment and the one the receipt names. The payment itself goes through `_pay_on_route`, the same step a scheduled run takes, so a failure writes the same note before `_offer_next_route` offers the next route under the same token.
+
+Since the Stage 10 review `_confirm` is also the gate of the integrity hold. Every T2 execution, a transfer, a new payee, a new standing mandate, a cancel, or a freeze, rescue steps included, comes through it, so before the engine is asked `_held` reads `integrity_hold`. When the chain breaks, an entry could not be read on start, or the anchor store disagrees with the ledger, it writes a `ledger_integrity_hold` note naming the break and the idempotency key, answers with `_held_text` in the student's language, and executes nothing. The confirmation is not consumed, so it can go ahead once the ledger is clean. Reads are never held.
 
 When no confirmation waits under the token for this student, and when a waiting one has expired or is refused, the token is recorded as closed with its reason, and `_unknown_token` decides what the attempt leaves in the ledger.
 
@@ -5776,6 +5850,9 @@ When no confirmation waits under the token for this student, and when a waiting 
         self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
+        # A standing run moves money without a confirmation, so it is held as a T2 execution is.
+        if self._held(trail, action.idempotency_key) is not None:
+            return StandingEvent(kind="held", decision=decision, **event)
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if not isinstance(receipt, Receipt):
             # Each rail's reason is in its rail error note, as for a transfer the student confirmed.
@@ -5785,10 +5862,15 @@ When no confirmation waits under the token for this student, and when a waiting 
 
 `run_due_standing_mandates` is what the API's tick and its `/standing/run_due` endpoint call with a time. For every active standing mandate whose window contains `now`, it takes one step. A period already run or already attempted is left alone. A cancelled period is skipped: a `standing_skipped` note is written once, and a `skipped` event returned. The first time a period is seen, a `standing_notice` note records when the notice was given and until when the student may cancel, and a `notice` event is returned for the app. `self._standing_notices[key] = now` stores the notice time and hands it back in one expression. Once `cancel_window_hours` have passed since that notice, `_run_standing` runs the period. It builds the transfer with source `standing_mandate` and the key `<user>:standing:<id>:<period>`, marks the period attempted so the scheduler never repeats it, and writes the proposal marked `standing_run`. It then asks the engine and writes the decision. A decision that is refused or asks for confirmation returns `needs_student` and pays nothing. Otherwise `_pay` pays under the standing mandate's id and the token the student confirmed it with, and a `run` event carries the decision and the receipt, or `rail_failed` when the rail failed. Each event is a `StandingEvent`, built from the fields shared in `event` with `**`.
 
+A standing run moves money without a confirmation, so since the Stage 10 review it is held as a T2 execution is: when `_held` finds the ledger cannot be trusted, the run is not paid and a `held` event is returned, with the decision.
+
 ```python
     def _pay_standing_now(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, decision: Decision
     ) -> AgentReply:
+        hold = self._held(trail, action.idempotency_key)
+        if hold is not None:
+            return self._reply(trail, lang, _held_text(lang, hold), decision=decision)
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if isinstance(receipt, RailError):
@@ -5901,6 +5983,8 @@ When no confirmation waits under the token for this student, and when a waiting 
 ```
 
 `_pay_standing_now` pays a transfer the engine allowed under R12 from a chat turn, and ends the turn with the receipt. `_pay` is the one place a transfer without a waiting confirmation is paid: it quotes the routes and tries the best one that has not failed, then the next, until one pays or none is left, when it returns `None`. `while (route := ...) is not None` assigns and tests in one expression. The student already confirmed the standing mandate, so falling to the next route needs no new confirmation. `_pay_on_route` is the single step every payment takes, a confirmed transfer included: it calls the rail with the mandate reference and the token, and on `RailError` writes the failure note, naming the key, the rail, the error, and whether the key had executed, and returns the error. On success it tags the receipt with the standing mandate id when the action has one, and records the payment. Because every attempt uses the same idempotency key and a rail records a key only when it pays, falling to the next route can never produce a second receipt. `_record_payment` writes what every payment leaves behind: the action joins the history, the receipt's rail is remembered for tracing, and the execution and the receipt are written, with a `simulated_mismatch` note when the rail and the route disagree. `_sent_text` builds the reply that money was sent, adding the simulation sentence when the receipt is simulated. A standing run's execution and receipt entries also carry `standing_mandate_id`, added with `**` only when there is one, so other entries are unchanged. `_pay_on_route` first stamps the action's payee on a copy of the route, `route.model_copy(update={"payee_id": action.payee_id})`, the one place a route learns its payee, because a rail such as Pix must know who it pays; the stamped route is the one the rail receives and the one the execution entry records.
+
+Since the Stage 10 review it first asks `_held`, so a run paid from chat on a ledger that cannot be trusted is held with the same note and sentence as a confirmed transfer.
 
 ```python
     def _new_version(self, user_id: str, update: dict[str, Any], version_id: str | None = None) -> Mandate:
@@ -6049,109 +6133,17 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         # Plan updates the plan given on start cannot hold, and the ones a restart already noted.
         skipped: list[tuple[str, int, list[str]]] = []
         noted: set[int] = set()
-        for entry in self._ledger.entries():
+        entries = self._ledger.entries()
+        for entry in entries:
             self._wrote(entry)
-            if entry.kind == "note" and entry.payload.get("kind") in ("anchor_failed", "anchor_skipped"):
-                self._last_attempt_at = entry.ts
-            if entry.kind == ANCHOR_KIND:
-                try:
-                    self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
-                except (KeyError, TypeError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an edited anchor entry breaks the chain, which verify names
-                    continue
-                self._anchored_seq = entry.seq
-                continue
-            user_id = entry.payload.get("user_id")
-            if not isinstance(user_id, str):
-                continue
-            self._turns[user_id] = max(self._turns.get(user_id, 0), int(entry.payload.get("turn", 0)))
-            if entry.kind == "proposal":
-                proposals[entry.payload["action"]["idempotency_key"]] = entry.payload
-            elif entry.kind == "decision":
-                key = entry.payload["idempotency_key"]
-                refused = waiting.pop(key, None)
-                if refused is not None:
-                    self._close(refused.user_id, refused.action, "refused")
-                elif key in proposals:
-                    self._maybe_waiting(user_id, entry, proposals[key], waiting)
-            elif entry.kind == "council":
-                # The council chose the rail the student was asked to confirm, so a rebuild must
-                # restore that rail and not the one `_choose` would pick on its own.
-                key = entry.payload.get("idempotency_key")
-                chosen = entry.payload.get("council", {}).get("chosen")
-                if key in waiting and isinstance(chosen, str):
-                    waiting[key].chosen_rail = chosen
-            elif entry.kind == "confirmation":
-                key = entry.payload["idempotency_key"]
-                if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
-                    del waiting[key]
-            elif entry.kind == "note" and "rail_error" in entry.payload:
-                key = entry.payload["idempotency_key"]
-                if key in waiting:
-                    waiting[key].failed_rails.add(entry.payload["rail"])
-                    waiting[key].created_at = entry.ts
-            if entry.kind == "execution":
-                waiting.pop(entry.payload["action"]["idempotency_key"], None)
-                executed = Action.model_validate(entry.payload["action"])
-                self._history.setdefault(user_id, []).append(executed)
-                if TIERS[executed.type] is Tier.T2 and user_id in self._mandates:
-                    token = self._engine.confirmation_token_for(executed, self._mandates[user_id])
-                    self._consumed[token] = (user_id, executed)
-            elif entry.kind == "receipt":
-                receipt_id = entry.payload["receipt"]["receipt_id"]
-                self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
-            elif entry.kind == "note" and entry.payload.get("kind") == "payee_added":
-                mandate = self._mandates.get(user_id)
-                payee = entry.payload["payee_id"]
-                if mandate is not None and payee not in mandate.payee_added_at:
-                    added_at = datetime.fromisoformat(entry.payload["added_at"])
-                    update = self._with_payee(user_id, payee, added_at)
-                    self._new_version(user_id, update, entry.payload.get("new_mandate_id"))
-            elif entry.kind == "note" and entry.payload.get("kind") == "standing_created":
-                self._rebuild_standing(user_id, entry.payload)
-            elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
-                key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
-                self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
-            elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
-                self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
-            elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
-                self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
-            if entry.kind == "proposal" and "standing_run" in entry.payload:
-                run = entry.payload["standing_run"]
-                self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
-            if entry.kind == "execution" and "new_mandate_id" in entry.payload.get("result", {}).get("deactivated", {}):
-                deactivated = entry.payload["result"]["deactivated"]
-                mandate = self._mandates.get(user_id)
-                if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
-                    update = self._without_standing(user_id, deactivated["standing_mandate_id"])
-                    self._new_version(user_id, update, deactivated["new_mandate_id"])
-            if (
-                entry.kind == "execution"
-                and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
-                and "plan_updated" in entry.payload.get("result", {})
-                and user_id in self._plans
-            ):
-                plan = self._plans[user_id]
-                # Only the four fields, whatever the entry names, and an update the current plan can no
-                # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
-                changes = {
-                    name: value
-                    for name, value in entry.payload["result"]["plan_updated"].items()
-                    if name in PLAN_UPDATE_FIELDS
-                }
-                try:
-                    self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
-                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
-                    skipped.append((user_id, entry.seq, list(changes)))
-            if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
-                noted.add(int(entry.payload.get("execution_seq", 0)))
-            if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
-                cancelled = entry.payload["result"]["cancelled"]
-                self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
-```
-
-`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id. The same pass records the token of every executed T2 action as consumed, computing it again from the action with the engine. It also rebuilds the confirmations that were still waiting. `proposals` remembers every proposal by its idempotency key, and `waiting` holds the keys whose confirmation is still open. A decision opens one through `_maybe_waiting`, and a second decision for the same key, a refusal at confirmation, closes it and records its token as refused. A confirmation closes a payee or a freeze, which finish in the same step. A transfer stays open until its execution, because a rail can fail between the confirmation and the payment. A rail failure note adds the failed rail and restarts the waiting time. It also rebuilds the standing mandates: a `standing_created` note goes to `_rebuild_standing`, a `standing_notice` note restores when the notice was given, a `standing_skipped` note restores the skip, a proposal marked `standing_run` restores the attempt, and the execution of a `cancel_standing_run` restores the cancellation from its result. The execution of a stop that made a new version is replayed too: the standing mandate is marked inactive in a version with the recorded id, unless that version already exists.
-
-```python
+        for entry in entries:
+            try:
+                self._rebuild_entry(entry, proposals, waiting, skipped, noted)
+            except (KeyError, TypeError, ValueError, AttributeError) as error:  # anti-pattern: SILENT-EXCEPT ok, the rebuild stops and the integrity hold names the entry
+                # An entry the rebuild cannot read stops the rebuild there, and the loop holds every execution
+                # until the ledger is clean again. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+                self._unreadable = (entry.seq, f"{type(error).__name__}: {error}")
+                break
         for waited in waiting.values():
             self._restore_pending(waited)
         for user_id, seq, fields in skipped:
@@ -6161,6 +6153,119 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
             mandate = self._mandates.get(user_id)
             trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
             self._write(trail, "note", {"kind": PLAN_UPDATE_SKIPPED, "execution_seq": seq, "fields": fields})
+
+    def _rebuild_entry(
+        self,
+        entry: LedgerEntry,
+        proposals: dict[str, dict[str, Any]],
+        waiting: dict[str, _Waiting],
+        skipped: list[tuple[str, int, list[str]]],
+        noted: set[int],
+    ) -> None:
+        if entry.kind == "note" and entry.payload.get("kind") in ("anchor_failed", "anchor_skipped"):
+            self._last_attempt_at = entry.ts
+        if entry.kind == ANCHOR_KIND:
+            try:
+                self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
+            except (KeyError, TypeError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an edited anchor entry breaks the chain, which verify names
+                return
+            self._anchored_seq = entry.seq
+            return
+        user_id = entry.payload.get("user_id")
+        if not isinstance(user_id, str):
+            return
+        self._turns[user_id] = max(self._turns.get(user_id, 0), int(entry.payload.get("turn", 0)))
+        if entry.kind == "proposal":
+            proposals[entry.payload["action"]["idempotency_key"]] = entry.payload
+        elif entry.kind == "decision":
+            key = entry.payload["idempotency_key"]
+            refused = waiting.pop(key, None)
+            if refused is not None:
+                self._close(refused.user_id, refused.action, "refused")
+            elif key in proposals:
+                self._maybe_waiting(user_id, entry, proposals[key], waiting)
+        elif entry.kind == "council":
+            # The council chose the rail the student was asked to confirm, so a rebuild must
+            # restore that rail and not the one `_choose` would pick on its own.
+            key = entry.payload.get("idempotency_key")
+            chosen = entry.payload.get("council", {}).get("chosen")
+            if key in waiting and isinstance(chosen, str):
+                waiting[key].chosen_rail = chosen
+        elif entry.kind == "confirmation":
+            key = entry.payload["idempotency_key"]
+            if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
+                del waiting[key]
+        elif entry.kind == "note" and "rail_error" in entry.payload:
+            key = entry.payload["idempotency_key"]
+            if key in waiting:
+                waiting[key].failed_rails.add(entry.payload["rail"])
+                waiting[key].created_at = entry.ts
+        if entry.kind == "execution":
+            waiting.pop(entry.payload["action"]["idempotency_key"], None)
+            executed = Action.model_validate(entry.payload["action"])
+            self._history.setdefault(user_id, []).append(executed)
+            if TIERS[executed.type] is Tier.T2 and user_id in self._mandates:
+                token = self._engine.confirmation_token_for(executed, self._mandates[user_id])
+                self._consumed[token] = (user_id, executed)
+        elif entry.kind == "receipt":
+            receipt_id = entry.payload["receipt"]["receipt_id"]
+            self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
+        elif entry.kind == "note" and entry.payload.get("kind") == "payee_added":
+            mandate = self._mandates.get(user_id)
+            payee = entry.payload["payee_id"]
+            if mandate is not None and payee not in mandate.payee_added_at:
+                added_at = datetime.fromisoformat(entry.payload["added_at"])
+                update = self._with_payee(user_id, payee, added_at)
+                self._new_version(user_id, update, entry.payload.get("new_mandate_id"))
+        elif entry.kind == "note" and entry.payload.get("kind") == "standing_created":
+            self._rebuild_standing(user_id, entry.payload)
+        elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
+            key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
+            self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+        elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
+            self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
+        elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
+            self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
+        if entry.kind == "proposal" and "standing_run" in entry.payload:
+            run = entry.payload["standing_run"]
+            self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
+        if entry.kind == "execution" and "new_mandate_id" in entry.payload.get("result", {}).get("deactivated", {}):
+            deactivated = entry.payload["result"]["deactivated"]
+            mandate = self._mandates.get(user_id)
+            if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
+                update = self._without_standing(user_id, deactivated["standing_mandate_id"])
+                self._new_version(user_id, update, deactivated["new_mandate_id"])
+        if (
+            entry.kind == "execution"
+            and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
+            and "plan_updated" in entry.payload.get("result", {})
+            and user_id in self._plans
+        ):
+            plan = self._plans[user_id]
+            # Only the four fields, whatever the entry names, and an update the current plan can no
+            # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
+            changes = {
+                name: value
+                for name, value in entry.payload["result"]["plan_updated"].items()
+                if name in PLAN_UPDATE_FIELDS
+            }
+            try:
+                self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
+            except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
+                skipped.append((user_id, entry.seq, list(changes)))
+        if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
+            noted.add(int(entry.payload.get("execution_seq", 0)))
+        if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
+            cancelled = entry.payload["result"]["cancelled"]
+            self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
+```
+
+`_rebuild_from_ledger` reads every entry once when the loop is created. An entry without a user is skipped. The turn number becomes the highest turn seen for that user, so the next turn gets a new number and a new set of idempotency keys. Every execution entry becomes an `Action` again through `model_validate`, which rebuilds a model from plain data, and joins that user's history, so the daily limit and the replay rule see payments made before the loop started. Every receipt entry records the key of the rail that issued it, so a trace still finds the right rail. Every `payee_added` note is replayed in ledger order onto the student's mandate: `datetime.fromisoformat` turns the recorded text back into a time, and `_new_version` makes the version the ledger recorded, under the recorded id. A payee whose addition time the mandate already holds is skipped, so a mandate that already includes it is not changed twice. After a restart the current mandate has the same id as before, and every earlier version resolves by id. The same pass records the token of every executed T2 action as consumed, computing it again from the action with the engine. It also rebuilds the confirmations that were still waiting. `proposals` remembers every proposal by its idempotency key, and `waiting` holds the keys whose confirmation is still open. A decision opens one through `_maybe_waiting`, and a second decision for the same key, a refusal at confirmation, closes it and records its token as refused. A confirmation closes a payee or a freeze, which finish in the same step. A transfer stays open until its execution, because a rail can fail between the confirmation and the payment. A rail failure note adds the failed rail and restarts the waiting time. It also rebuilds the standing mandates: a `standing_created` note goes to `_rebuild_standing`, a `standing_notice` note restores when the notice was given, a `standing_skipped` note restores the skip, a proposal marked `standing_run` restores the attempt, and the execution of a `cancel_standing_run` restores the cancellation from its result. The execution of a stop that made a new version is replayed too: the standing mandate is marked inactive in a version with the recorded id, unless that version already exists.
+
+Since the Stage 10 review the work for each entry is `_rebuild_entry`, and `_rebuild_from_ledger` calls it inside `try`. An entry it cannot read, such as a decision missing its idempotency key or an execution missing its action, raises `KeyError`, `TypeError`, `ValueError` or `AttributeError`; the rebuild stops there, records the entry's sequence and the error in `_unreadable`, and the integrity hold holds every execution on it. Before, such an entry crashed the start, so verify could never be reached. Every entry is still passed to `_wrote` first, so the head the anchor tracks is the real head. `hold_unreadable` lets another reader of the ledger, the API's rail restore, hold on an entry it could not read.
+
+```python
+        self._rebuild_rescue(user_id, entry, waiting)
 
     def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
         """Replay a rescue through the same transitions it took, so a restart lands in the same state."""
@@ -6387,6 +6492,37 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
                 return f"The anchor store signed a head for entry {seq} that does not match the ledger."
         return None
 
+    def hold_unreadable(self, seq: int, reason: str) -> None:
+        """Hold the ledger at an entry another reader of it, such as the API's rail restore, could not read."""
+        if self._unreadable is None or seq < self._unreadable[0]:
+            self._unreadable = (seq, reason)
+
+    def integrity_hold(self) -> dict[str, Any] | None:
+        """Why the ledger cannot be trusted now, or None. A broken chain, an entry the rebuild could not read,
+        or an anchor store that disagrees with the ledger each hold every T2 execution and every payment,
+        while reads go on. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+        """
+        broken = self._ledger.verify()
+        if broken is not None:
+            return {"first_broken_seq": broken, "reason": f"The ledger chain breaks at entry {broken}."}
+        if self._unreadable is not None:
+            seq, error = self._unreadable
+            return {"first_broken_seq": seq, "reason": f"Entry {seq} could not be read when the ledger was rebuilt ({error})."}
+        try:
+            mismatch = self._store_mismatch(self._ledger.entries())
+        except (OSError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an anchor store that cannot be read never blocks a payment; the anchor status reports it
+            return None
+        if mismatch is not None:
+            return {"first_broken_seq": None, "reason": mismatch}
+        return None
+
+    def _held(self, trail: _Trail, idempotency_key: str) -> dict[str, Any] | None:
+        """The integrity hold, written as a ledger_integrity_hold note naming the break, or None."""
+        hold = self.integrity_hold()
+        if hold is not None:
+            self._write(trail, "note", {"kind": INTEGRITY_HOLD, "idempotency_key": idempotency_key, **hold})
+        return hold
+
     def anchor_status(self) -> dict[str, Any]:
         """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
         naming the entry just before it with that entry's hash, and every other signed head matching too."""
@@ -6445,6 +6581,8 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
 ```
 
 `_store_mismatch` compares every head the anchor store holds signed with the ledger: each must name an entry the ledger still holds, with that entry's hash, so a ledger edited and rechained, a ledger cut short, and a line copied from another ledger all disagree with the store. `_anchor_if_due` refuses to anchor a chain that breaks or that the store disagrees with, writing a `note` of kind `anchor_skipped` with the reason, so a later anchor can never sign a tampered head. `anchor_status` reads the latest `anchor` entry in the ledger and asks the anchor store whether that head is signed there, with the time the store recorded. `verified` is true only when the head is signed, the entry names the entry just before it with that entry's hash, and the store agrees with the ledger everywhere; `matches_ledger` says whether the ledger side holds. Under the public development secret the status adds `development_secret` true, because anyone can sign with it. With no anchor entry it says `anchored` false and names the kind. A store that cannot be read is reported as not verified, with its error. `_ledger_report` is what the T0 tool `verify_ledger` returns: the student's entries of the current UTC day, the first broken entry of the whole chain, and the anchor status. The API's verify endpoint returns the same anchor status. The rebuild reads every `anchor` entry first, before the check for a user id, so a restart knows when the last anchor was made and which entry it was.
+
+`integrity_hold` is the one place the loop decides whether the ledger can be trusted. A broken chain comes first, then an entry the rebuild could not read, then an anchor store that disagrees with the ledger; each returns the first broken sequence, or none for the store, and a reason. An anchor store that cannot be read at all is not a hold, because an anchor never blocks a payment, and the anchor status already reports its error. `_held` writes the note when there is a hold.
 
 ### The reply guard, `core/agent.py`
 
@@ -6752,26 +6890,26 @@ def _untrusted_plan_update(trail: _Trail, action: Action) -> dict[str, Source]:
 `_update_plan` checks the cash plan first: every item must be the id of a knowledge entry, because the rescue reads it in a crisis. It then builds the new plan through `Plan.model_validate` from the old plan's fields with the changes laid over them, `{**plan.model_dump(), **changes}`. The `Plan` model refuses a backup that is not one of its cards or is the primary, and `except ValidationError` turns that into an error in the execution entry while the plan stays as it was. On success it returns only the changed fields, read back from the validated plan, so `"false"` sent as text is recorded as the flag false. `_skipped_fields` reads every `plan_update_skipped` note of the student, which the rebuild writes, and `_run_tool` turns them into a sentence after `verify_ledger`.
 
 ```python
-            if (
-                entry.kind == "execution"
-                and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
-                and "plan_updated" in entry.payload.get("result", {})
-                and user_id in self._plans
-            ):
-                plan = self._plans[user_id]
-                # Only the four fields, whatever the entry names, and an update the current plan can no
-                # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
-                changes = {
-                    name: value
-                    for name, value in entry.payload["result"]["plan_updated"].items()
-                    if name in PLAN_UPDATE_FIELDS
-                }
-                try:
-                    self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
-                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
-                    skipped.append((user_id, entry.seq, list(changes)))
-            if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
-                noted.add(int(entry.payload.get("execution_seq", 0)))
+        if (
+            entry.kind == "execution"
+            and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
+            and "plan_updated" in entry.payload.get("result", {})
+            and user_id in self._plans
+        ):
+            plan = self._plans[user_id]
+            # Only the four fields, whatever the entry names, and an update the current plan can no
+            # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
+            changes = {
+                name: value
+                for name, value in entry.payload["result"]["plan_updated"].items()
+                if name in PLAN_UPDATE_FIELDS
+            }
+            try:
+                self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
+            except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
+                skipped.append((user_id, entry.seq, list(changes)))
+        if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
+            noted.add(int(entry.payload.get("execution_seq", 0)))
 ```
 
 In `_rebuild_from_ledger` an execution of `update_plan` with a result of `plan_updated` is applied again, filtered to `PLAN_UPDATE_FIELDS`, so an entry naming another field changes nothing. An update the plan given on start can no longer hold, such as a backup card the fixture no longer lists, is skipped and remembered in `skipped`, and an existing note is remembered in `noted` by the sequence of the execution it skips.
@@ -7345,7 +7483,8 @@ MAX_IDENTITY_ATTEMPTS = 3
         if reply.receipt is not None or (reply.decision is not None and not reply.decision.allowed):
             self._advance(trail, user_id, "money_settled")
             self._run_on(user_id, plan, rescue, lang, trail, out)
-        elif reply.confirmation is None:
+        elif reply.confirmation is None and not self._rescue_waiting(user_id, plan, rescue):
+            # An offer still waiting, as under the integrity hold, is not offered a second time.
             self._offer_money(user_id, plan, rescue, lang, trail, out)
 
     def _skip_money(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
@@ -7368,6 +7507,8 @@ MAX_IDENTITY_ATTEMPTS = 3
 ```
 
 `_money_fields` is the allowance as the plan describes it, in the mandate's currency, and `_is_money` checks an action is exactly that transfer and not a standing run. `_rescue_step_action` says whether an action is the one the rescue is waiting for in its current state, `_rescue_waiting` whether such an action is waiting now, and `_rescue_owns` whether a token confirms one, which `handle` asks before it confirms anything, so a rescue step is never confirmed outside the rescue. `_offer_money` proposes the allowance through `propose_transfer`; when the engine asks for confirmation the machine rests at S5, and when it refuses, or no route is left, the machine moves on, because the student has been told why. `_confirm_money` settles the step only on a receipt or on a refusal of the waiting transfer; a retry offer after a rail failure keeps it waiting, and a token that was not waiting changes nothing. `_skip_money` closes every waiting allowance with the reason `skipped`, so it cannot be confirmed later, records the keys it closed in its note so a rebuild closes them too, and moves on.
+
+Since the Stage 10 review `_confirm_money` offers the allowance again only when no offer is waiting, so a confirmation the integrity hold kept waiting is not offered a second time.
 
 ```python
     def _run_on(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
@@ -7403,7 +7544,26 @@ MAX_IDENTITY_ATTEMPTS = 3
             self._rescue_executed(user_id, trail, action, {"wallet_token_present": plan.wallet_token_present})
             out.say(_text(lang, "wallet_present" if plan.wallet_token_present else "wallet_absent"))
         backup = plan.backup_instrument
-        return "has_backup" if backup is not None and backup != rescue.instrument else "no_backup"
+        if backup is None or backup == rescue.instrument:
+            return "no_backup"
+        if self._frozen(user_id, backup):
+            # A backup the student already froze cannot carry payments, so the rescue takes the no backup path.
+            # Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+            self._write(trail, "note", {"kind": "rescue_backup_frozen", "instrument_id": backup})
+            out.say(_text(lang, "backup_frozen", backup=backup))
+            return "no_backup"
+        return "has_backup"
+
+    def _frozen(self, user_id: str, instrument: str) -> bool:
+        """Whether the student's ledger holds a freeze of this card that the issuer carried out."""
+        return any(
+            entry.kind == "execution"
+            and entry.payload.get("user_id") == user_id
+            and entry.payload.get("action", {}).get("type") == ActionType.FREEZE_CARD.value
+            and entry.payload.get("action", {}).get("instrument_id") == instrument
+            and entry.payload.get("result", {}).get("freeze", {}).get("status") == FreezeStatus.DONE.value
+            for entry in self._ledger.entries()
+        )
 
     def _reroute(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
         backup = plan.backup_instrument
@@ -7501,6 +7661,8 @@ MAX_IDENTITY_ATTEMPTS = 3
 
 `_run_on` is the loop that runs every step needing nothing from the student. At S2 and S5 it makes the offer and stops, at `done` it says so and stops, and at any other state it looks up the step in a dictionary of bound methods, runs it, and advances with the event the step returns, which is how S3 chooses between S4 and S6. `_check_wallet` reads the plan at T0. `_reroute` proposes the backup at T1 and, when allowed, records the frozen card, the backup, and the backup route, and remembers the backup as live. `_list_cash` reads the knowledge base with `load_knowledge`, says each entry the plan names with its source, says there is no sourced option when none exists, and gives the message for the trusted contact. `_replacement` gives the issuer's link from the freeze result and the delivery estimate from the entry the plan names for the card's issuer, and says plainly when either is missing. `_stop_standing` stops every active standing mandate through the ordinary tool, because a standing mandate names no card. `_notify_family` is S9, and `_family_notice_step` is shared with the lock: it writes `family_notice_skipped` without opt in, and otherwise proposes `notify_family` and writes the notice before the execution.
 
+Since the Stage 10 review `_check_wallet` also asks `_frozen` whether the student's ledger holds a freeze of the backup card that the issuer carried out. When it does, the backup cannot carry payments, so it writes a `rescue_backup_frozen` note, tells the student, and returns `no_backup`, which takes the rescue to S6 and its cash options instead of rerouting to a frozen card.
+
 ```python
     def _family_notice(self, user_id: str, rescue: _Rescue, lang: str) -> str:
         lines = [_text(lang, "notice_intro")]
@@ -7550,13 +7712,15 @@ MAX_IDENTITY_ATTEMPTS = 3
             elif entry.kind == "confirmation_rejected":
                 lines.append(_text(lang, "notice_not_confirmed"))
             elif entry.kind == "injection_suspected":
-                lines.append(_text(lang, "notice_injection"))
+                lines.append(_injection_notice(lang, payload.get("tool")))
             elif entry.kind == "note" and payload.get("kind") == "rescue_identity_failed":
                 lines.append(_text(lang, "notice_identity_failed"))
             elif entry.kind == "note" and payload.get("kind") == "rescue_identity_locked":
                 lines.append(_text(lang, "notice_identity_locked", count=payload["failures"]))
             elif entry.kind == "note" and payload.get("kind") == "rescue_money_skipped":
                 lines.append(_text(lang, "notice_money_skipped"))
+            elif entry.kind == "note" and payload.get("kind") == "rescue_backup_frozen":
+                lines.append(_text(lang, "notice_backup_frozen", instrument=payload["instrument_id"]))
         if not froze:
             lines.insert(1, _text(lang, "notice_not_frozen"))
         if stopped:
@@ -7565,6 +7729,8 @@ MAX_IDENTITY_ATTEMPTS = 3
 ```
 
 `_family_notice` builds the notice from the ledger alone. It reads only this student's entries from the one where the rescue began, so nothing the student or a paste says can reach it, and nothing from an earlier rescue or another student does either. A freeze is told by its recorded status. A transfer's payee and whether its route was simulated are remembered from its execution, by idempotency key, and the receipt that follows is told by its status: sent only when completed, failed when failed or returned, and started with its status otherwise, followed by the simulation sentence when either flag says so. Every refused decision, rejected confirmation, blocked injection, wrong answer, lock, and skipped allowance adds its sentence. When no freeze was executed, the second sentence says no card was frozen, and the number of standing payments stopped comes last.
+
+Since the Stage 10 review a blocked injection is told by what it asked for. `_injection_notice` keeps the sentence about moving money for `propose_transfer` and `create_standing_mandate`, and for every other tool says what was asked, from `INJECTION_WHAT` in the notice's language, such as a change to the rescue plan; a tool it does not know is told as a blocked request with no claim about money. A `rescue_backup_frozen` note adds the sentence that the backup card is frozen too and payments were not moved to it.
 
 ```python
     def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
@@ -8563,11 +8729,12 @@ from contracts.schemas import (
     TraceResult,
 )
 from core.agent import AgentLoop
-from core.anchor_local import anchor_for
+from core.anchor_local import ANCHOR_SECRET_VAR, LocalSignedAnchor, anchor_for
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
-from core.mandate import DeterministicMandateEngine
+from core.mandate import CONFIRM_SECRET_VAR, DeterministicMandateEngine
+from core.mandate import uses_development_secret as uses_confirm_development_secret
 from core.monthly import is_month
 from core.reminders import reminders_of, split
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
@@ -8662,6 +8829,11 @@ class VerifyResult(BaseModel):
     # AgentLoop.anchor_status: anchored false and the kind when there is no anchor, else the latest
     # anchored head, its sequence, whether the anchor store verifies it, its time, and the kind.
     anchor: dict[str, Any]
+    # AgentLoop.integrity_hold: None when every execution may go ahead, else the first broken entry, or None
+    # for an anchor store that disagrees, and the reason. Source: docs/decisions.md, 9 October 2026.
+    integrity_hold: dict[str, Any] | None
+    # The secrets this process signs with their public development value, by variable name.
+    development_secrets: list[str]
 
 
 class Health(BaseModel):
@@ -8669,6 +8841,8 @@ class Health(BaseModel):
 ```
 
 Each request body is a pydantic model, so FastAPI rejects a missing field, a wrong type, or text that is empty or too long with a `422` before any code runs. `pasted_text` is optional; when present it must hold at least one character. `lang` is optional on `/chat` and `/confirm`. `VerifyResult` wraps the first broken sequence number in an object, so an intact ledger answers `{"first_broken_seq": null}` rather than a bare `null`. `RunDueRequest` takes the time to run the check at; `AwareDatetime` refuses a time without a time zone with a `422`. `RescueStartRequest` takes a trigger from `RescueTrigger`, so any other value is a `422`, and the student's words; `RescueStepRequest` takes text that may be empty, because a step that only confirms or continues has nothing to say, and an optional token.
+
+Since the Stage 10 review `VerifyResult` also carries `integrity_hold`, the loop's reason for holding every execution or `null`, and `development_secrets`, the names of the secrets this process signs with their public development value.
 
 ```python
 def demo_rails(
@@ -8716,19 +8890,36 @@ def _demo_mandate(fixture: dict[str, Any], ledger: Ledger) -> Mandate:
     )
 
 
-def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> None:
+def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> tuple[int, str] | None:
+    """Restore the fake rails' receipts from the ledger. The first entry that cannot be read stops the restore,
+    and its sequence and error are returned, so the loop holds every execution on it. Source: docs/decisions.md,
+    9 October 2026."""
     paid: dict[str, dict[str, Any]] = {}
     for entry in ledger.entries():
-        if entry.kind == "execution" and "route" in entry.payload:
-            paid[entry.payload["idempotency_key"]] = entry.payload
-        elif entry.kind == "receipt" and entry.payload.get("rail") in rails:
-            receipt = Receipt.model_validate(entry.payload["receipt"])
-            execution = paid[receipt.idempotency_key]
-            route = Route.model_validate(execution["route"])
-            rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
+        try:
+            if entry.kind == "execution" and "route" in entry.payload:
+                paid[entry.payload["idempotency_key"]] = entry.payload
+            elif entry.kind == "receipt" and entry.payload.get("rail") in rails:
+                receipt = Receipt.model_validate(entry.payload["receipt"])
+                execution = paid[receipt.idempotency_key]
+                route = Route.model_validate(execution["route"])
+                rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
+            elif (
+                entry.kind == "note"
+                and entry.payload.get("kind") == "cancel_result"
+                and entry.payload.get("status") == "done"
+                and entry.payload.get("rail") in rails
+            ):
+                # A cancel the rail carried out stays carried out after a restart.
+                rails[entry.payload["rail"]].mark_cancelled(entry.payload["receipt_id"])
+        except (KeyError, TypeError, ValueError) as error:  # anti-pattern: SILENT-EXCEPT ok, the error is returned and the loop holds on it
+            return entry.seq, f"{type(error).__name__}: {error}"
+    return None
 ```
 
 `_load_fixture` reads the YAML. `_demo_mandate` builds the demo mandate from it, valid for `valid_days` days from midnight UTC of the day the ledger began, or of today for an empty ledger. `replace` sets the hour and smaller parts to zero. A start that stays the same across restarts keeps a transfer proposed before a restart inside the mandate after it; starting at the exact first entry would not, because an action's `requested_at` is taken a moment before its proposal is written. The fixture's own fields are laid over the dates, and `model_validate` checks them against the `Mandate` schema.
+
+`_restore_rails` reads each entry inside `try`, and since the Stage 10 review the first entry it cannot read, such as a receipt whose execution is missing, stops the restore and is returned with its error, so `create_app` passes it to `hold_unreadable` and the loop holds every execution on it instead of the start crashing.
 
 `_restore_rails` walks the ledger and gives each fake rail back the receipts it issued. An `execution` entry with a `route` records a paid transfer, and the `receipt` entry after it names the rail's key and holds the receipt, so the pair gives `restore` everything it needs.
 
@@ -8765,6 +8956,7 @@ def create_app(
     anchor: Anchor | None = None,
     parent_fixture_path: Path | None = DEMO_PARENT,
 ) -> FastAPI:
+    require_production_secrets()
     fixture = _load_fixture(fixture_path)
     parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
@@ -8784,7 +8976,7 @@ def create_app(
     fixture = {**fixture, "inbound_receipts": {
         key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
     }}
-    _restore_rails(rails, ledger)
+    unreadable = _restore_rails(rails, ledger)
     # The demo student first, then the parent when its fixture exists.
     people = [fixture, *([parent] if parent is not None else [])]
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
@@ -8808,6 +9000,8 @@ def create_app(
         anchor=anchor,
         chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
+    if unreadable is not None:
+        loop.hold_unreadable(*unreadable)
     users = {person["user_id"] for person in people}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
     lock = threading.Lock()
@@ -8932,7 +9126,12 @@ def create_app(
     def verify(user: str) -> VerifyResult:
         known(user)
         with lock:
-            return VerifyResult(first_broken_seq=ledger.verify(), anchor=loop.anchor_status())
+            return VerifyResult(
+                first_broken_seq=ledger.verify(),
+                anchor=loop.anchor_status(),
+                integrity_hold=loop.integrity_hold(),
+                development_secrets=development_secrets(),
+            )
 
     @app.post("/trace")
     def trace(request: TraceRequest) -> TraceResult:
@@ -8979,6 +9178,8 @@ def create_app(
 ```
 
 `council_for` decides whether this process runs with a council: `COUNCIL` naming one of `COUNCIL_ON` builds `FiveVoiceCouncil` over `council_adapter`, which reads the council's own model variables, and anything else, the empty value included, returns `None`, which is the API as it behaved before the council existed. Five model calls for every escalated transfer is a cost a demo opts into rather than one it pays by default. `create_app` builds one app with one agent loop over the file ledger and a conversation store kept in its file. It takes the model adapter, the fixture, the rails, the ledger path, and a council as arguments so the tests can pass a scripted model, chosen rails, a temporary file, and a council of scripted voices that touches no network; `make dev` passes nothing and gets the real `ProviderModelAdapter`, which reads `.env`, and `data/ledger.jsonl`. The rails get their receipts back from the ledger before the loop is built, and the loop then rebuilds the history, payees, mandate versions, and waiting confirmations from the same ledger. The loop and the ledger are kept on `app.state`, which the tests use to reach them. The CORS middleware answers browser preflight requests from local origins only. `tick_seconds` sets the background tick, a minute by default; a test passes a short one, and `None` turns it off. `lock` is a `threading.Lock`: requests run in worker threads and the tick on the event loop, and the agent loop is not safe to use from two threads at once, so every use of the loop and the ledger happens inside `with lock:`. `run_due` takes the lock, runs the check, and removes tokens. `tick` sleeps, then runs `run_due` in a worker thread through `asyncio.to_thread` so the event loop is never blocked, and logs each event with its kind, student, standing mandate, period, and receipt. An error in one tick is logged with its traceback by `logger.exception` and the next tick still runs. `lifespan` is how FastAPI runs code when the server starts and stops: `asynccontextmanager` turns it into a context, the part before `yield` starts the tick as a task, and the part after cancels it. The loop is given the plan from the fixture. The app's `422` handler gives FastAPI's usual body everywhere except the rescue endpoints, where it drops each error's `input`, so a malformed step never echoes the identity answer. `/rescue/start` and `/rescue/step` build the student's message as `/chat` does, take the lock, call the loop, and clear the tokens.
+
+`create_app` first calls `require_production_secrets`. When `LIFELINE_ENV` is `production` and `LIFELINE_CONFIRM_SECRET` or `LIFELINE_ANCHOR_SECRET` is missing or empty, it raises `RuntimeError` naming the variable, so the API does not start. Before the Stage 10 review an empty confirmation secret signed every token with an empty key, and an empty anchor secret only failed at the first anchor, which never blocks a payment. `development_secrets` names the secrets that fall back to their public development value, for the verify endpoint.
 
 A `ModelAdapterError` on any endpoint, such as a missing API key or a status error from either provider, becomes a `503` with the reason, through `exception_handler`; the reason names the provider and, when there was one, the status, and never the key. `known` answers `404` for any user other than the demo student. `direct` runs a read only tool through `AgentLoop.act`, turns a refusal into a `403` with the rules through `refused`, and answers `404` when the result holds an error instead of the expected key, such as a receipt this student never received.
 
@@ -10242,7 +10443,7 @@ def test_a_cancelled_standing_run_is_not_paid_from_chat_without_confirmation():
     assert reply.decision.rule_ids == ["R13", "R11"]
 ```
 
-Each test in this file is a break that the Stage 10 attackers found and three skeptics failed to refute. The first group covers X17 and break C-B1. Here the student has created and confirmed a monthly rent standing mandate and cancelled this month's run. On a later turn about something else, the model proposes the run from chat. Before the fix the engine found it within the pattern and the loop paid it at once under R12. Now the engine reads the cancel from its history, the run escalates under R13, and the student is asked to confirm. The file's other tests check the same at engine level, over HTTP and after a rebuild from the ledger, that a confirmed escalation still pays, that a cancel made after a period ran applies to the next period, and that cancelling one standing mandate leaves another within its pattern. The second group covers break C-B2: one model answer that stops the standing mandate and proposes its run is refused under R12, and the entries written after the stop name the new version. The third group covers breaks A-B2, A-B3, A-B4, A-B5, A-B7 and H-B2, each with a control that the student's own words are still trusted: a stop or a skip only a paste asks for, a reminder only a paste wrote, a card or standing terms only a paste gives, an amount a paste writes in words, in Chinese numerals or with an exponent, and a payee a paste glues to more text are all refused under R01 with an `injection_suspected` entry naming the field and the paste.
+Each test in this file is a break that the Stage 10 attackers found and three skeptics failed to refute. The first group covers X17 and break C-B1. Here the student has created and confirmed a monthly rent standing mandate and cancelled this month's run. On a later turn about something else, the model proposes the run from chat. Before the fix the engine found it within the pattern and the loop paid it at once under R12. Now the engine reads the cancel from its history, the run escalates under R13, and the student is asked to confirm. The file's other tests check the same at engine level, over HTTP and after a rebuild from the ledger, that a confirmed escalation still pays, that a cancel made after a period ran applies to the next period, and that cancelling one standing mandate leaves another within its pattern. The second group covers break C-B2: one model answer that stops the standing mandate and proposes its run is refused under R12, and the entries written after the stop name the new version. The third group covers breaks A-B2, A-B3, A-B4, A-B5, A-B7 and H-B2, each with a control that the student's own words are still trusted: a stop or a skip only a paste asks for, a reminder only a paste wrote, a card or standing terms only a paste gives, an amount a paste writes in words, in Chinese numerals or with an exponent, and a payee a paste glues to more text are all refused under R01 with an `injection_suspected` entry naming the field and the paste. The fourth group covers breaks G2-B2 and G2-B3, the integrity hold, E-B4, the E-B5 follow up and the empty secrets: ledger files edited in ordinary ways load and verify names the line, a payment, a rescue freeze and a standing run are held on a ledger that cannot be trusted and a payment goes ahead again on the clean file, a blocked plan change is told to the family as a plan change, a backup card frozen earlier is not rerouted to, and in production an empty secret stops the API at start.
 
 ## The suites and their scenarios
 

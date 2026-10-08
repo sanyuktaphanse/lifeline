@@ -52,7 +52,7 @@ def _pay_rent(client: TestClient) -> list[str]:
 def test_verify_says_when_no_anchor_exists():
     body = _client().get(f"/ledger/{USER}/verify").json()
 
-    assert body == {"first_broken_seq": None, "anchor": {"anchored": False, "kind": "local"}}
+    assert (body["first_broken_seq"], body["anchor"], body["integrity_hold"]) == (None, {"anchored": False, "kind": "local"}, None)
 
 
 def test_verify_shows_the_latest_anchor_and_that_it_verifies(ledger_file):

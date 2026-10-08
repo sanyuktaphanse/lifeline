@@ -365,7 +365,7 @@ class AgentReply(BaseModel):
 
 
 class StandingEvent(BaseModel):
-    kind: Literal["notice", "run", "skipped", "needs_student", "rail_failed"]
+    kind: Literal["notice", "run", "skipped", "needs_student", "rail_failed", "held"]
     user_id: str
     standing_mandate_id: str
     period: str

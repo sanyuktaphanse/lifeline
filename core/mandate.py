@@ -22,6 +22,7 @@ from contracts.schemas import (
 from core.standing import next_occurrence, occurrence_containing
 from core.tiers import TIERS
 
+CONFIRM_SECRET_VAR = "LIFELINE_CONFIRM_SECRET"
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
 TRANSFER_WARNING_KEY = "warn.transfer.irreversible"
 # Source: project decision of 18 September 2026. Every T2 action needs the
@@ -49,8 +50,14 @@ PLAIN_INSTRUMENT_ID = re.compile(INSTRUMENT_ID)
 PLAIN_PAYEE_ID = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 
 
+def uses_development_secret() -> bool:
+    """Whether tokens are signed with the public development secret, which anyone can sign with."""
+    return not os.environ.get(CONFIRM_SECRET_VAR) and os.environ.get("LIFELINE_ENV") != "production"
+
+
 def _confirm_secret() -> bytes:
-    secret = os.environ.get("LIFELINE_CONFIRM_SECRET")
+    # An empty value counts as unset, as it does for the anchor secret. Source: docs/decisions.md, 9 October 2026.
+    secret = os.environ.get(CONFIRM_SECRET_VAR) or None
     if secret is None:
         if os.environ.get("LIFELINE_ENV") == "production":
             raise RuntimeError(

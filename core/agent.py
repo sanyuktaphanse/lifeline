@@ -138,6 +138,8 @@ DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
 # a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
 DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+# The note written when the integrity hold stops an execution. Source: docs/decisions.md, 9 October 2026.
+INTEGRITY_HOLD = "ledger_integrity_hold"
 # The word a cancel may name in place of a receipt id: the student's most recent receipt, resolved in code.
 LATEST = "latest"
 # The words for that in the student's own turn, in the three languages. A cancel of "latest" is trusted only
@@ -442,6 +444,12 @@ TEXTS = {
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
+        "held_entry": "Lifeline has paused every payment and confirmed action, because its ledger failed verification at entry {seq}. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean.",
+        "held_store": "Lifeline has paused every payment and confirmed action, because its anchor store does not match its ledger. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean.",
+        "backup_frozen": "Your backup card {backup} is frozen too, so Lifeline did not move your payments to it.",
+        "notice_backup_frozen": "Backup card {instrument} is frozen too, so payments were not moved to it.",
+        "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
+        "notice_injection_any": "A request that did not come from the student was blocked.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
@@ -530,6 +538,12 @@ TEXTS = {
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
+        "held_entry": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o seu registro falhou na verificação na entrada {seq}. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
+        "held_store": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o armazenamento de âncoras não corresponde ao registro. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
+        "backup_frozen": "Seu cartão reserva {backup} também está bloqueado, então o Lifeline não passou seus pagamentos para ele.",
+        "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
+        "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
+        "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
@@ -618,6 +632,12 @@ TEXTS = {
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
+        "held_entry": "Lifeline 已暂停所有付款和已确认的操作，因为账本在第 {seq} 条记录处未通过验证。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
+        "held_store": "Lifeline 已暂停所有付款和已确认的操作，因为锚定存储与账本不一致。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
+        "backup_frozen": "你的备用卡 {backup} 也已被冻结，因此 Lifeline 没有把付款转到这张卡上。",
+        "notice_backup_frozen": "备用卡 {instrument} 也已被冻结，因此付款没有转到这张卡上。",
+        "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
+        "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
@@ -687,6 +707,56 @@ TEXTS = {
         "notice_standing": "{count} 项定期付款已被停止。",
     },
 }
+
+
+# The tools whose blocked request the family notice tells as a request to move money; any other is told by
+# what it asked for. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+MONEY_TOOLS = frozenset({"propose_transfer", "create_standing_mandate"})
+INJECTION_WHAT: dict[str, dict[str, str]] = {
+    "en": {
+        "add_payee": "add a payee",
+        "freeze_card": "freeze a card",
+        "update_plan": "change the rescue plan",
+        "deactivate_standing_mandate": "stop a standing payment",
+        "cancel_standing_run": "skip a standing payment",
+        "set_reminder": "set a reminder",
+        "cancel_transfer": "cancel a transfer",
+        "record_cash_withdrawal": "record a cash withdrawal",
+    },
+    "pt": {
+        "add_payee": "adicionar um destinatário",
+        "freeze_card": "bloquear um cartão",
+        "update_plan": "alterar o plano de resgate",
+        "deactivate_standing_mandate": "interromper uma ordem permanente",
+        "cancel_standing_run": "pular um envio de uma ordem permanente",
+        "set_reminder": "criar um lembrete",
+        "cancel_transfer": "cancelar uma transferência",
+        "record_cash_withdrawal": "registrar um saque em dinheiro",
+    },
+    "zh": {
+        "add_payee": "添加收款人",
+        "freeze_card": "冻结一张卡",
+        "update_plan": "修改救援计划",
+        "deactivate_standing_mandate": "停止一项定期付款",
+        "cancel_standing_run": "跳过一次定期付款",
+        "set_reminder": "设置提醒",
+        "cancel_transfer": "取消一笔转账",
+        "record_cash_withdrawal": "记录一笔现金取款",
+    },
+}
+
+
+def _held_text(lang: str, hold: dict[str, Any]) -> str:
+    seq = hold.get("first_broken_seq")
+    return _text(lang, "held_entry", seq=seq) if seq is not None else _text(lang, "held_store")
+
+
+def _injection_notice(lang: str, tool: Any) -> str:
+    """What the family is told a blocked injection asked for: money only when it asked to move money."""
+    if tool in MONEY_TOOLS:
+        return _text(lang, "notice_injection")
+    what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(tool))
+    return _text(lang, "notice_injection_any") if what is None else _text(lang, "notice_injection_other", what=what)
 
 
 def _spoken(advice: dict[str, Any], position: str) -> str:
@@ -1338,6 +1408,8 @@ class AgentLoop:
         self._standing_skipped: set[tuple[str, str, str]] = set()
         # The months a monthly note was already written for, per student, rebuilt from the ledger.
         self._monthly_noted: set[tuple[str, str]] = set()
+        # The first entry the rebuild could not read, and why, which holds every execution like a broken chain.
+        self._unreadable: tuple[int, str] | None = None
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -2073,6 +2145,11 @@ class AgentLoop:
             self._closed[token] = (user_id, "expired", pending.action.idempotency_key)
             return self._reject(user_id, mandate, lang, "expired", pending.action.idempotency_key)
         trail = _Trail(user_id, pending.turn, pending.provider, pending.model, mandate.id)
+        # The one gate every T2 execution passes: on a ledger that cannot be trusted nothing is executed, and
+        # the confirmation keeps waiting for a clean one.
+        hold = self._held(trail, pending.action.idempotency_key)
+        if hold is not None:
+            return self._reply(trail, lang, _held_text(lang, hold))
         action = pending.action.model_copy(update={"confirmation_token": token})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
         if not decision.allowed or decision.requires_confirmation:
@@ -2391,6 +2468,9 @@ class AgentLoop:
         self._write(trail, "decision", {"idempotency_key": action.idempotency_key, "decision": _decision_json(decision)})
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
+        # A standing run moves money without a confirmation, so it is held as a T2 execution is.
+        if self._held(trail, action.idempotency_key) is not None:
+            return StandingEvent(kind="held", decision=decision, **event)
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if not isinstance(receipt, Receipt):
             # Each rail's reason is in its rail error note, as for a transfer the student confirmed.
@@ -2400,6 +2480,9 @@ class AgentLoop:
     def _pay_standing_now(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, decision: Decision
     ) -> AgentReply:
+        hold = self._held(trail, action.idempotency_key)
+        if hold is not None:
+            return self._reply(trail, lang, _held_text(lang, hold), decision=decision)
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if isinstance(receipt, RailError):
@@ -2785,6 +2868,37 @@ class AgentLoop:
             if hashes.get(seq) != head:
                 return f"The anchor store signed a head for entry {seq} that does not match the ledger."
         return None
+
+    def hold_unreadable(self, seq: int, reason: str) -> None:
+        """Hold the ledger at an entry another reader of it, such as the API's rail restore, could not read."""
+        if self._unreadable is None or seq < self._unreadable[0]:
+            self._unreadable = (seq, reason)
+
+    def integrity_hold(self) -> dict[str, Any] | None:
+        """Why the ledger cannot be trusted now, or None. A broken chain, an entry the rebuild could not read,
+        or an anchor store that disagrees with the ledger each hold every T2 execution and every payment,
+        while reads go on. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+        """
+        broken = self._ledger.verify()
+        if broken is not None:
+            return {"first_broken_seq": broken, "reason": f"The ledger chain breaks at entry {broken}."}
+        if self._unreadable is not None:
+            seq, error = self._unreadable
+            return {"first_broken_seq": seq, "reason": f"Entry {seq} could not be read when the ledger was rebuilt ({error})."}
+        try:
+            mismatch = self._store_mismatch(self._ledger.entries())
+        except (OSError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an anchor store that cannot be read never blocks a payment; the anchor status reports it
+            return None
+        if mismatch is not None:
+            return {"first_broken_seq": None, "reason": mismatch}
+        return None
+
+    def _held(self, trail: _Trail, idempotency_key: str) -> dict[str, Any] | None:
+        """The integrity hold, written as a ledger_integrity_hold note naming the break, or None."""
+        hold = self.integrity_hold()
+        if hold is not None:
+            self._write(trail, "note", {"kind": INTEGRITY_HOLD, "idempotency_key": idempotency_key, **hold})
+        return hold
 
     def anchor_status(self) -> dict[str, Any]:
         """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
@@ -3179,7 +3293,8 @@ class AgentLoop:
         if reply.receipt is not None or (reply.decision is not None and not reply.decision.allowed):
             self._advance(trail, user_id, "money_settled")
             self._run_on(user_id, plan, rescue, lang, trail, out)
-        elif reply.confirmation is None:
+        elif reply.confirmation is None and not self._rescue_waiting(user_id, plan, rescue):
+            # An offer still waiting, as under the integrity hold, is not offered a second time.
             self._offer_money(user_id, plan, rescue, lang, trail, out)
 
     def _skip_money(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
@@ -3233,7 +3348,26 @@ class AgentLoop:
             self._rescue_executed(user_id, trail, action, {"wallet_token_present": plan.wallet_token_present})
             out.say(_text(lang, "wallet_present" if plan.wallet_token_present else "wallet_absent"))
         backup = plan.backup_instrument
-        return "has_backup" if backup is not None and backup != rescue.instrument else "no_backup"
+        if backup is None or backup == rescue.instrument:
+            return "no_backup"
+        if self._frozen(user_id, backup):
+            # A backup the student already froze cannot carry payments, so the rescue takes the no backup path.
+            # Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+            self._write(trail, "note", {"kind": "rescue_backup_frozen", "instrument_id": backup})
+            out.say(_text(lang, "backup_frozen", backup=backup))
+            return "no_backup"
+        return "has_backup"
+
+    def _frozen(self, user_id: str, instrument: str) -> bool:
+        """Whether the student's ledger holds a freeze of this card that the issuer carried out."""
+        return any(
+            entry.kind == "execution"
+            and entry.payload.get("user_id") == user_id
+            and entry.payload.get("action", {}).get("type") == ActionType.FREEZE_CARD.value
+            and entry.payload.get("action", {}).get("instrument_id") == instrument
+            and entry.payload.get("result", {}).get("freeze", {}).get("status") == FreezeStatus.DONE.value
+            for entry in self._ledger.entries()
+        )
 
     def _reroute(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
         backup = plan.backup_instrument
@@ -3376,13 +3510,15 @@ class AgentLoop:
             elif entry.kind == "confirmation_rejected":
                 lines.append(_text(lang, "notice_not_confirmed"))
             elif entry.kind == "injection_suspected":
-                lines.append(_text(lang, "notice_injection"))
+                lines.append(_injection_notice(lang, payload.get("tool")))
             elif entry.kind == "note" and payload.get("kind") == "rescue_identity_failed":
                 lines.append(_text(lang, "notice_identity_failed"))
             elif entry.kind == "note" and payload.get("kind") == "rescue_identity_locked":
                 lines.append(_text(lang, "notice_identity_locked", count=payload["failures"]))
             elif entry.kind == "note" and payload.get("kind") == "rescue_money_skipped":
                 lines.append(_text(lang, "notice_money_skipped"))
+            elif entry.kind == "note" and payload.get("kind") == "rescue_backup_frozen":
+                lines.append(_text(lang, "notice_backup_frozen", instrument=payload["instrument_id"]))
         if not froze:
             lines.insert(1, _text(lang, "notice_not_frozen"))
         if stopped:
@@ -3395,105 +3531,17 @@ class AgentLoop:
         # Plan updates the plan given on start cannot hold, and the ones a restart already noted.
         skipped: list[tuple[str, int, list[str]]] = []
         noted: set[int] = set()
-        for entry in self._ledger.entries():
+        entries = self._ledger.entries()
+        for entry in entries:
             self._wrote(entry)
-            if entry.kind == "note" and entry.payload.get("kind") in ("anchor_failed", "anchor_skipped"):
-                self._last_attempt_at = entry.ts
-            if entry.kind == ANCHOR_KIND:
-                try:
-                    self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
-                except (KeyError, TypeError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an edited anchor entry breaks the chain, which verify names
-                    continue
-                self._anchored_seq = entry.seq
-                continue
-            user_id = entry.payload.get("user_id")
-            if not isinstance(user_id, str):
-                continue
-            self._turns[user_id] = max(self._turns.get(user_id, 0), int(entry.payload.get("turn", 0)))
-            if entry.kind == "proposal":
-                proposals[entry.payload["action"]["idempotency_key"]] = entry.payload
-            elif entry.kind == "decision":
-                key = entry.payload["idempotency_key"]
-                refused = waiting.pop(key, None)
-                if refused is not None:
-                    self._close(refused.user_id, refused.action, "refused")
-                elif key in proposals:
-                    self._maybe_waiting(user_id, entry, proposals[key], waiting)
-            elif entry.kind == "council":
-                # The council chose the rail the student was asked to confirm, so a rebuild must
-                # restore that rail and not the one `_choose` would pick on its own.
-                key = entry.payload.get("idempotency_key")
-                chosen = entry.payload.get("council", {}).get("chosen")
-                if key in waiting and isinstance(chosen, str):
-                    waiting[key].chosen_rail = chosen
-            elif entry.kind == "confirmation":
-                key = entry.payload["idempotency_key"]
-                if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
-                    del waiting[key]
-            elif entry.kind == "note" and "rail_error" in entry.payload:
-                key = entry.payload["idempotency_key"]
-                if key in waiting:
-                    waiting[key].failed_rails.add(entry.payload["rail"])
-                    waiting[key].created_at = entry.ts
-            if entry.kind == "execution":
-                waiting.pop(entry.payload["action"]["idempotency_key"], None)
-                executed = Action.model_validate(entry.payload["action"])
-                self._history.setdefault(user_id, []).append(executed)
-                if TIERS[executed.type] is Tier.T2 and user_id in self._mandates:
-                    token = self._engine.confirmation_token_for(executed, self._mandates[user_id])
-                    self._consumed[token] = (user_id, executed)
-            elif entry.kind == "receipt":
-                receipt_id = entry.payload["receipt"]["receipt_id"]
-                self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
-            elif entry.kind == "note" and entry.payload.get("kind") == "payee_added":
-                mandate = self._mandates.get(user_id)
-                payee = entry.payload["payee_id"]
-                if mandate is not None and payee not in mandate.payee_added_at:
-                    added_at = datetime.fromisoformat(entry.payload["added_at"])
-                    update = self._with_payee(user_id, payee, added_at)
-                    self._new_version(user_id, update, entry.payload.get("new_mandate_id"))
-            elif entry.kind == "note" and entry.payload.get("kind") == "standing_created":
-                self._rebuild_standing(user_id, entry.payload)
-            elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
-                key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
-                self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
-            elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
-                self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
-            elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
-                self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
-            if entry.kind == "proposal" and "standing_run" in entry.payload:
-                run = entry.payload["standing_run"]
-                self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
-            if entry.kind == "execution" and "new_mandate_id" in entry.payload.get("result", {}).get("deactivated", {}):
-                deactivated = entry.payload["result"]["deactivated"]
-                mandate = self._mandates.get(user_id)
-                if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
-                    update = self._without_standing(user_id, deactivated["standing_mandate_id"])
-                    self._new_version(user_id, update, deactivated["new_mandate_id"])
-            if (
-                entry.kind == "execution"
-                and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
-                and "plan_updated" in entry.payload.get("result", {})
-                and user_id in self._plans
-            ):
-                plan = self._plans[user_id]
-                # Only the four fields, whatever the entry names, and an update the current plan can no
-                # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
-                changes = {
-                    name: value
-                    for name, value in entry.payload["result"]["plan_updated"].items()
-                    if name in PLAN_UPDATE_FIELDS
-                }
-                try:
-                    self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
-                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
-                    skipped.append((user_id, entry.seq, list(changes)))
-            if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
-                noted.add(int(entry.payload.get("execution_seq", 0)))
-            if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
-                cancelled = entry.payload["result"]["cancelled"]
-                self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
-            self._rebuild_rescue(user_id, entry, waiting)
+        for entry in entries:
+            try:
+                self._rebuild_entry(entry, proposals, waiting, skipped, noted)
+            except (KeyError, TypeError, ValueError, AttributeError) as error:  # anti-pattern: SILENT-EXCEPT ok, the rebuild stops and the integrity hold names the entry
+                # An entry the rebuild cannot read stops the rebuild there, and the loop holds every execution
+                # until the ledger is clean again. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+                self._unreadable = (entry.seq, f"{type(error).__name__}: {error}")
+                break
         for waited in waiting.values():
             self._restore_pending(waited)
         for user_id, seq, fields in skipped:
@@ -3503,6 +3551,112 @@ class AgentLoop:
             mandate = self._mandates.get(user_id)
             trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
             self._write(trail, "note", {"kind": PLAN_UPDATE_SKIPPED, "execution_seq": seq, "fields": fields})
+
+    def _rebuild_entry(
+        self,
+        entry: LedgerEntry,
+        proposals: dict[str, dict[str, Any]],
+        waiting: dict[str, _Waiting],
+        skipped: list[tuple[str, int, list[str]]],
+        noted: set[int],
+    ) -> None:
+        if entry.kind == "note" and entry.payload.get("kind") in ("anchor_failed", "anchor_skipped"):
+            self._last_attempt_at = entry.ts
+        if entry.kind == ANCHOR_KIND:
+            try:
+                self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
+            except (KeyError, TypeError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an edited anchor entry breaks the chain, which verify names
+                return
+            self._anchored_seq = entry.seq
+            return
+        user_id = entry.payload.get("user_id")
+        if not isinstance(user_id, str):
+            return
+        self._turns[user_id] = max(self._turns.get(user_id, 0), int(entry.payload.get("turn", 0)))
+        if entry.kind == "proposal":
+            proposals[entry.payload["action"]["idempotency_key"]] = entry.payload
+        elif entry.kind == "decision":
+            key = entry.payload["idempotency_key"]
+            refused = waiting.pop(key, None)
+            if refused is not None:
+                self._close(refused.user_id, refused.action, "refused")
+            elif key in proposals:
+                self._maybe_waiting(user_id, entry, proposals[key], waiting)
+        elif entry.kind == "council":
+            # The council chose the rail the student was asked to confirm, so a rebuild must
+            # restore that rail and not the one `_choose` would pick on its own.
+            key = entry.payload.get("idempotency_key")
+            chosen = entry.payload.get("council", {}).get("chosen")
+            if key in waiting and isinstance(chosen, str):
+                waiting[key].chosen_rail = chosen
+        elif entry.kind == "confirmation":
+            key = entry.payload["idempotency_key"]
+            if key in waiting and waiting[key].action.type is not ActionType.TRANSFER:
+                del waiting[key]
+        elif entry.kind == "note" and "rail_error" in entry.payload:
+            key = entry.payload["idempotency_key"]
+            if key in waiting:
+                waiting[key].failed_rails.add(entry.payload["rail"])
+                waiting[key].created_at = entry.ts
+        if entry.kind == "execution":
+            waiting.pop(entry.payload["action"]["idempotency_key"], None)
+            executed = Action.model_validate(entry.payload["action"])
+            self._history.setdefault(user_id, []).append(executed)
+            if TIERS[executed.type] is Tier.T2 and user_id in self._mandates:
+                token = self._engine.confirmation_token_for(executed, self._mandates[user_id])
+                self._consumed[token] = (user_id, executed)
+        elif entry.kind == "receipt":
+            receipt_id = entry.payload["receipt"]["receipt_id"]
+            self._receipt_rails.setdefault(user_id, {})[receipt_id] = entry.payload["rail"]
+        elif entry.kind == "note" and entry.payload.get("kind") == "payee_added":
+            mandate = self._mandates.get(user_id)
+            payee = entry.payload["payee_id"]
+            if mandate is not None and payee not in mandate.payee_added_at:
+                added_at = datetime.fromisoformat(entry.payload["added_at"])
+                update = self._with_payee(user_id, payee, added_at)
+                self._new_version(user_id, update, entry.payload.get("new_mandate_id"))
+        elif entry.kind == "note" and entry.payload.get("kind") == "standing_created":
+            self._rebuild_standing(user_id, entry.payload)
+        elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
+            key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
+            self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+        elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
+            self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
+        elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
+            self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
+        if entry.kind == "proposal" and "standing_run" in entry.payload:
+            run = entry.payload["standing_run"]
+            self._standing_attempted.add((user_id, run["standing_mandate_id"], run["period"]))
+        if entry.kind == "execution" and "new_mandate_id" in entry.payload.get("result", {}).get("deactivated", {}):
+            deactivated = entry.payload["result"]["deactivated"]
+            mandate = self._mandates.get(user_id)
+            if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
+                update = self._without_standing(user_id, deactivated["standing_mandate_id"])
+                self._new_version(user_id, update, deactivated["new_mandate_id"])
+        if (
+            entry.kind == "execution"
+            and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
+            and "plan_updated" in entry.payload.get("result", {})
+            and user_id in self._plans
+        ):
+            plan = self._plans[user_id]
+            # Only the four fields, whatever the entry names, and an update the current plan can no
+            # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
+            changes = {
+                name: value
+                for name, value in entry.payload["result"]["plan_updated"].items()
+                if name in PLAN_UPDATE_FIELDS
+            }
+            try:
+                self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
+            except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
+                skipped.append((user_id, entry.seq, list(changes)))
+        if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
+            noted.add(int(entry.payload.get("execution_seq", 0)))
+        if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
+            cancelled = entry.payload["result"]["cancelled"]
+            self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
+        self._rebuild_rescue(user_id, entry, waiting)
 
     def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
         """Replay a rescue through the same transitions it took, so a restart lands in the same state."""
