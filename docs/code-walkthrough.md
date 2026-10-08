@@ -16,33 +16,36 @@ Every Python excerpt below is copied exactly from the file it names, and `tests/
 8. The ledger, `core/ledger.py`
 9. The conversation store, `core/conversation_store.py`
 10. The fake model adapter, `core/fake_adapter.py`
-11. The model adapter, `core/model_adapter.py`
-12. The fake router, `rails/fake_router.py`
-13. The fake rail, `rails/fake_rail.py`
-14. The knowledge loader, `rails/knowledge/loader.py`
-15. The rail rules, `rails/sim/rules.py`
-16. The simulated rail base, `rails/sim/base.py`
-17. Simulated UPI to PayNow, `rails/sim/upi_paynow.py`
-18. Simulated Pix, `rails/sim/pix.py`
-19. Simulated China bank remittance, `rails/sim/cn_bank_remit.py`
-20. Inbound transfers, `rails/inbound.py`
-21. The council, `core/council.py`
-22. The rescue machine, `core/rescue.py`
-23. The agent loop, `core/agent.py`, with the rescue
-24. The monthly note, `core/monthly.py`
-25. The evaluation harness, `core/harness.py`
-26. The API, `api/main.py`
-27. The tests
-28. The Stage 8a tests
-29. The Stage 8b tests
-30. The suites and their scenarios
-31. The Stage 8a scenarios
-32. The Stage 8b scenarios
-33. The knowledge base, `rails/knowledge/`
-34. The provider entries, `rails/knowledge/providers.yaml`
-35. The demo parent, `fixtures/demo_parent.yaml`
-36. Configuration files
-37. Commands used to build and check the repo
+11. The FISCO BCOS anchor, `core/anchor_fisco.py`
+12. Building a FISCO BCOS transaction, `core/fisco_tx.py`, and signing it, `core/evm_tx.py`
+13. The evidence contract, `chain/LifelineEvidence.sol`
+14. The model adapter, `core/model_adapter.py`
+15. The fake router, `rails/fake_router.py`
+16. The fake rail, `rails/fake_rail.py`
+17. The knowledge loader, `rails/knowledge/loader.py`
+18. The rail rules, `rails/sim/rules.py`
+19. The simulated rail base, `rails/sim/base.py`
+20. Simulated UPI to PayNow, `rails/sim/upi_paynow.py`
+21. Simulated Pix, `rails/sim/pix.py`
+22. Simulated China bank remittance, `rails/sim/cn_bank_remit.py`
+23. Inbound transfers, `rails/inbound.py`
+24. The council, `core/council.py`
+25. The rescue machine, `core/rescue.py`
+26. The agent loop, `core/agent.py`, with the rescue
+27. The monthly note, `core/monthly.py`
+28. The evaluation harness, `core/harness.py`
+29. The API, `api/main.py`
+30. The tests
+31. The Stage 8a tests
+32. The Stage 8b tests
+33. The suites and their scenarios
+34. The Stage 8a scenarios
+35. The Stage 8b scenarios
+36. The knowledge base, `rails/knowledge/`
+37. The provider entries, `rails/knowledge/providers.yaml`
+38. The demo parent, `fixtures/demo_parent.yaml`
+39. Configuration files
+40. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -1424,6 +1427,12 @@ def _anchor_secret() -> bytes:
     return secret.encode("utf-8")
 
 
+def user_hash_of(user_id: str) -> str:
+    """The user id as an anchor holds it: HMAC SHA 256 under the anchor secret, so no one reading an anchor
+    line or the chain can recover the id by hashing a guess. Source: the FISCO anchor attacker brief."""
+    return hmac.new(_anchor_secret(), user_id.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def _signed(head_hash: str, seq: int, user_hash: str, anchored_at: str) -> bytes:
     return json.dumps([head_hash, seq, user_hash, anchored_at], separators=(",", ":")).encode("utf-8")
 
@@ -1523,17 +1532,17 @@ class LocalSignedAnchor(Anchor):
 
 ```python
 def anchor_for(env: Mapping[str, str] | None, path: Path) -> Anchor:
-    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty.
-
-    FISCO BCOS arrives in a later change, so until then it is refused rather than quietly replaced.
+    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty, the FISCO BCOS anchor
+    for fisco. The FISCO anchor reads its settings on every call, so a missing or unreachable chain is an
+    error at anchoring time, which the loop writes as an anchor_failed note and never lets block a payment.
     """
     kind = environment(env).get("ANCHOR", "").strip().casefold() or LOCAL
     if kind == LOCAL:
         return LocalSignedAnchor(path)
     if kind == FISCO:
-        raise AnchorNotConfigured(
-            "ANCHOR is fisco, and the FISCO BCOS anchor is not configured in this version. Set ANCHOR to local."
-        )
+        from core.anchor_fisco import FiscoBcosAnchor
+
+        return FiscoBcosAnchor()
     raise ValueError(f"ANCHOR must be one of {', '.join(ANCHOR_KINDS)}, not {kind!r}.")
 ```
 
@@ -1628,6 +1637,193 @@ class FakeModelAdapter(ModelAdapter):
 ```
 
 The fake takes a script of replies. `list(responses)` copies the script so the caller's list is never changed. Each call records a copy of the conversation and tools it received, which lets a test check exactly what was sent at each step. `pop(0)` removes and returns the first remaining reply. A plain string becomes an assistant message, and a full `Message` is returned as it is, which is how a test scripts a tool call. Running out of replies raises an error, so a test with a runaway loop fails instead of hanging.
+
+## The FISCO BCOS anchor, `core/anchor_fisco.py`
+
+The FISCO BCOS anchor implements the same `Anchor` interface as the local one and is used only when `ANCHOR` is `fisco`. It reaches the chain through transports, small adapters a test can replace, and turns every failure of the chain into its own error, which the loop writes as an `anchor_failed` note.
+
+```python
+def _config() -> FiscoConfig:
+    """The three settings, read on every call; a missing one is named, its value never."""
+    env = environment(None)
+    values = {name: env.get(name, "").strip() for name in CONFIG_VARS}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise AnchorNotConfigured(f"ANCHOR is fisco and {', '.join(missing)} is not set, so nothing was anchored on the chain.")
+    if not CONTRACT_ADDRESS.fullmatch(values["FISCO_CONTRACT_ADDRESS"]):
+        # A malformed address is refused before anything is sent: one sent to FISCO BCOS v3.16.4 stopped the
+        # local chain making blocks. Source: the FISCO anchor attacker brief of 8 October.
+        raise AnchorNotConfigured("FISCO_CONTRACT_ADDRESS must be 0x followed by 40 hexadecimal characters.")
+    return FiscoConfig(*(values[name] for name in CONFIG_VARS))
+```
+
+`_config` reads the three settings on every call, never at import, so a key path changed while the API runs is used on the next anchor. A missing setting is named, never its value.
+
+```python
+class FiscoBcosAnchor(Anchor):
+    kind = FISCO
+
+    def __init__(self, transports: Sequence[ChainTransport] | None = None) -> None:
+        self._transports = list(transports) if transports is not None else default_transports()
+
+    def _through(self, use: Callable[[ChainTransport, FiscoConfig], Any]) -> Any:
+        config = _config()
+        tried: list[str] = []
+        for transport in self._transports:
+            try:
+                return use(transport, config)
+            except TransportUnavailable as unavailable:
+                tried.append(str(unavailable))
+            except AnchorNotConfigured:
+                raise
+            except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, every chain failure becomes this anchor's own error, which the loop notes
+                # The type and the node's words only; the key is read by the transport and never put here.
+                raise FiscoAnchorError(_reported(error)) from None
+        raise AnchorNotConfigured("No route to FISCO BCOS works here. Tried: " + " ".join(tried))
+
+    def anchor(self, head_hash: str, seq: int, user_hash: str) -> str:
+        if not isinstance(head_hash, str) or not DIGEST.fullmatch(head_hash):
+            raise ValueError("An anchor takes a ledger head hash, 64 lowercase hexadecimal characters.")
+        if not _is_seq(seq):
+            raise ValueError("An anchor takes the head's sequence number, a whole number from zero.")
+        if not isinstance(user_hash, str) or not DIGEST.fullmatch(user_hash):
+            raise ValueError("An anchor takes a SHA 256 hash of the user id, never the id itself.")
+        transaction = self._through(lambda transport, config: transport.send_anchor(config, head_hash, seq, user_hash))
+        return f"{FISCO}:{transaction}"
+
+    def record_of(self, head_hash: str) -> ChainRecord | None:
+        """The contract's record of the head, in one read, only when Lifeline's own account wrote it.
+
+        A record another account wrote is no evidence, so it reads as none. Source: the FISCO anchor
+        attacker brief of 8 October.
+        """
+        record = self._through(lambda transport, config: transport.read_record(config, head_hash))
+        if record is None or record.head_hash != head_hash:
+            return None
+        ours = address_of(_private_key(_config().key_path))
+        return record if record.sender.casefold() == ours.casefold() else None
+
+    def verify(self, head_hash: str) -> bool:
+        return self.record_of(head_hash) is not None
+
+    def anchored_at(self, head_hash: str) -> datetime | None:
+        """The block time the contract recorded for the head, or None when it holds none."""
+        record = self.record_of(head_hash)
+        return None if record is None else record.timestamp.astimezone(timezone.utc)
+
+    def block_number(self, head_hash: str) -> int | None:
+        """The block the head was anchored in, for the verify endpoint, or None when it holds none."""
+        record = self.record_of(head_hash)
+        return None if record is None else record.block_number
+```
+
+`_through` tries each transport in order. A transport that reports itself unavailable, such as the Python SDK when it is not installed, is passed over and remembered; any other error becomes a `FiscoAnchorError` carrying only the error's type and the node's words, `from None`, so no traceback of the key file is attached. When no route works, the error says what was tried. `record_of` reads the contract's record once and counts it only when Lifeline's own account wrote it, which `verify`, `anchored_at`, `block_number` and the loop's status all use. `anchor` refuses anything but two SHA 256 digests and a whole sequence number before a transport is called, exactly as the local anchor does, so no amount, payee or user id can reach the chain.
+
+```python
+    def send_raw(self, config: FiscoConfig, private_key: bytes, to: str, data: bytes) -> dict[str, Any]:
+        """Sign and send one transaction; the receipt once it is in a block, or an error when it failed."""
+        block = int(self._rpc(config, "getBlockNumber", [GROUP_ID, ""]))
+        raw = build_transaction(private_key, CHAIN_ID, GROUP_ID, block + BLOCK_LIMIT_AHEAD, to, data)
+        receipt = self._rpc(config, "sendTransaction", [GROUP_ID, "", raw, False])
+        if not isinstance(receipt, dict) or str(receipt.get("status", "")) != "0":
+            status = str(receipt.get("status"))[:20] if isinstance(receipt, dict) else "missing"
+            raise RuntimeError(f"The transaction was not executed: status {status}.")
+        return receipt
+```
+
+```python
+    def read_record(self, config: FiscoConfig, head_hash: str) -> ChainRecord | None:
+        data = "0x" + (VERIFY_SELECTOR + bytes.fromhex(head_hash)).hex()
+        answer = self._rpc(config, "call", [GROUP_ID, "", config.contract_address, data])
+        if not isinstance(answer, dict) or str(answer.get("status", "")) != "0":
+            status = str(answer.get("status"))[:20] if isinstance(answer, dict) else "missing"
+            raise RuntimeError(f"The call to verify was not executed: status {status}.")
+        result = bytes.fromhex(str(answer.get("output", "")).removeprefix("0x"))
+        if len(result) < 192:
+            raise ValueError(f"verify returned {len(result)} bytes, not the six words of a record.")
+        words = [result[index : index + 32] for index in range(0, 192, 32)]
+        if not any(words[0]):
+            return None
+        stamp = int.from_bytes(words[3], "big")
+        seconds = stamp / 1000 if stamp >= MILLISECONDS_FROM else stamp
+        return ChainRecord(
+            head_hash=words[0].hex(),
+            seq=int.from_bytes(words[1], "big"),
+            user_hash=words[2].hex(),
+            timestamp=datetime.fromtimestamp(seconds, timezone.utc),
+            sender="0x" + words[4][-20:].hex(),
+            block_number=int.from_bytes(words[5], "big"),
+        )
+```
+
+`send_raw` asks the node for its block number, builds the signed transaction valid for the next 500 blocks, and sends it; the node answers with the receipt once the transaction is in a block, and a status other than zero is an error. `read_record` calls the contract's `verify`, splits the answer into six 32 byte words, and reads a head of zeros as no record. FISCO BCOS records block time in milliseconds, so a value that large is divided by a thousand.
+
+## Building a FISCO BCOS transaction, `core/fisco_tx.py`
+
+```python
+def transaction_data_hash(chain_id: str, group_id: str, block_limit: int, nonce: str, to: str, data: bytes, abi: str = "") -> bytes:
+    """Keccak 256 over the fields of version 0 transaction data, in the order the node hashes them."""
+    return keccak256(
+        (0).to_bytes(4, "big")
+        + chain_id.encode()
+        + group_id.encode()
+        + block_limit.to_bytes(8, "big", signed=True)
+        + nonce.encode()
+        + to.encode()
+        + data
+        + abi.encode()
+    )
+```
+
+```python
+def build_transaction(
+    private_key: bytes, chain_id: str, group_id: str, block_limit: int, to: str, data: bytes, nonce: str | None = None
+) -> str:
+    """The hex of a signed, TARS encoded transaction for the node's sendTransaction. `to` is empty to deploy."""
+    nonce = nonce or str(secrets.randbits(128))
+    digest = transaction_data_hash(chain_id, group_id, block_limit, nonce, to, data)
+    r, s, parity = _sign(private_key, digest)
+    signature = r.to_bytes(32, "big") + s.to_bytes(32, "big") + bytes([parity])
+    fields = TarsWriter()
+    fields.int(1, 0)
+    fields.string(2, chain_id)
+    fields.string(3, group_id)
+    fields.int(4, block_limit)
+    fields.string(5, nonce)
+    fields.string(6, to)
+    fields.bytes_field(7, data)
+    transaction = TarsWriter()
+    transaction.struct(1, fields)
+    transaction.bytes_field(2, digest)
+    transaction.bytes_field(3, signature)
+    transaction.int(4, 0)
+    transaction.int(5, EVM_ABI_CODEC)
+    return transaction.bytes().hex()
+```
+
+`transaction_data_hash` concatenates the fields of version 0 transaction data in the order the node hashes them, the version and the block limit as big endian integers, and hashes them with Keccak 256. `build_transaction` signs that hash, then TARS encodes the data, the hash, the signature as r, s and the recovery byte, and the attribute that says the input is Solidity ABI encoded, and returns the hex the node's `sendTransaction` takes.
+
+### Signing in pure Python, `core/evm_tx.py`
+
+```python
+def _sign(private_key: bytes, digest: bytes) -> tuple[int, int, int]:
+    """r, s and the recovery parity of an ECDSA signature, with s in the lower half as Ethereum requires."""
+    secret = int.from_bytes(private_key, "big")
+    k = _nonce(secret, digest)
+    x, y = _multiply(k)
+    r = x % _N
+    s = pow(k, -1, _N) * (int.from_bytes(digest, "big") + r * secret) % _N
+    parity = y & 1
+    if s > _N // 2:
+        s, parity = _N - s, parity ^ 1
+    return r, s, parity
+```
+
+`_sign` is ECDSA on secp256k1 with the nonce of RFC 6979, so the same key and hash always give the same signature, which is what lets `tests/test_evm_tx.py` check it against the signed transaction published in EIP-155. `s` is kept in the lower half of the group order, and the recovery parity follows it.
+
+## The evidence contract, `chain/LifelineEvidence.sol`
+
+The contract stores, for each head, a record of the head, its sequence number, the user hash, `block.timestamp`, `msg.sender` and `block.number`, in a `mapping` keyed by the head, and emits `Anchored`. `verify` returns the record, or zeros for a head never anchored. Only the account that deployed it may anchor, `require(msg.sender == owner)`, and a head already recorded is refused, `require(records[head].head == bytes32(0))`. It has no `payable` function and no balance. `chain/setup.sh` starts the network, compiles it and deploys it, and `chain/README.md` records what worked on this machine.
 
 ## The model adapter, `core/model_adapter.py`
 
@@ -3460,7 +3656,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
-from core.anchor_local import LocalSignedAnchor
+from core.anchor_local import LocalSignedAnchor, user_hash_of
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
@@ -4345,6 +4541,8 @@ class AgentLoop:
         self._clock = clock
         self._anchor_due = False
         self._last_anchor_at: datetime | None = None
+        # When the last anchor attempt that did not anchor was made, rebuilt from its note on restart.
+        self._last_attempt_at: datetime | None = None
         self._first_entry_at: datetime | None = None
         self._head_seq = 0
         self._anchored_seq = 0
@@ -5548,6 +5746,8 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         noted: set[int] = set()
         for entry in self._ledger.entries():
             self._wrote(entry)
+            if entry.kind == "note" and entry.payload.get("kind") in ("anchor_failed", "anchor_skipped"):
+                self._last_attempt_at = entry.ts
             if entry.kind == ANCHOR_KIND:
                 try:
                     self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
@@ -5825,7 +6025,9 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         if self._anchor is None:
             return
         now = self._clock()
-        since = self._last_anchor_at or self._first_entry_at
+        # A failed or skipped attempt counts as an attempt, so a store that stays down is tried at most once
+        # an hour, not on every call. Source: the FISCO anchor attacker brief of 8 October.
+        since = max((moment for moment in (self._last_anchor_at or self._first_entry_at, self._last_attempt_at) if moment), default=None)
         hourly = since is not None and now - since > ANCHOR_INTERVAL and self._head_seq > self._anchored_seq
         if not (self._anchor_due or hourly):
             return
@@ -5835,9 +6037,10 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         mandate = self._mandates.get(user_id)
         trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
         head, seq = self._ledger.head(), self._head_seq
-        # Only a hash of the student's id leaves the ledger, never the id.
-        user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
         try:
+            # Only a keyed hash of the student's id leaves the ledger, never the id, and never a plain hash
+            # anyone could recompute from a guessed id. Source: the FISCO anchor attacker brief of 8 October.
+            user_hash = user_hash_of(user_id)
             broken = self._ledger.verify()
             if broken is not None:
                 reason: str | None = f"The ledger chain breaks at entry {broken}, so its head is not anchored."
@@ -5845,10 +6048,12 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
                 reason = self._store_mismatch(self._ledger.entries())
             if reason is not None:
                 self._write(trail, "note", {"kind": "anchor_skipped", "reason": reason})
+                self._last_attempt_at = now
                 return
             anchor_id = self._anchor.anchor(head, seq, user_hash)
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
             self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
+            self._last_attempt_at = now
             return
         # The entry carries the student like every entry, so it is listed in their ledger; the line in
         # the anchor store holds only the hash of their id. Source: docs/decisions.md, 8 October 2026.
@@ -5881,7 +6086,12 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
         naming the entry just before it with that entry's hash, and every other signed head matching too."""
         local = isinstance(self._anchor, LocalSignedAnchor)
-        kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
+        # The local and the FISCO BCOS anchors name their kind and give the time a head was anchored; the
+        # chain also gives its block.
+        kind = getattr(self._anchor, "kind", None)
+        anchored_at = getattr(self._anchor, "anchored_at", None)
+        # The chain gives its whole record in one read, so the status asks it once, not three times.
+        record_of = getattr(self._anchor, "record_of", None)
         entries = self._ledger.entries()
         latest = next((entry for entry in reversed(entries) if entry.kind == ANCHOR_KIND), None)
         status: dict[str, Any] = {"anchored": False}
@@ -5890,8 +6100,15 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
             status = {"anchored": True, "head_hash": head, "head_seq": head_seq}
             hashes = {entry.seq: entry.hash for entry in entries}
             try:
-                signed = self._anchor.verify(head)
-                at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+                if callable(record_of):
+                    record = record_of(head)
+                    # The record must name the sequence the ledger's anchor entry names, not one of its own.
+                    signed = record is not None and record.seq == head_seq
+                    at = record.timestamp if record is not None else None
+                    status["block_number"] = record.block_number if record is not None else None
+                else:
+                    signed = self._anchor.verify(head)
+                    at = anchored_at(head) if callable(anchored_at) else None
                 matches = head_seq == latest.seq - 1 and hashes.get(head_seq) == head and self._store_mismatch(entries) is None
             except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
                 signed, matches, at = False, False, None
@@ -8919,14 +9136,12 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_anchor_local.py` | `test_an_empty_secret_counts_as_no_secret` | An empty secret counts as no secret |
 | `test_anchor_local.py` | `test_an_anchor_takes_only_a_hash_a_sequence_and_a_user_hash` | An anchor takes only a hash a sequence and a user hash |
 | `test_anchor_local.py` | `test_the_factory_gives_the_local_anchor_by_default_and_for_local` | The factory gives the local anchor by default and for local |
-| `test_anchor_local.py` | `test_the_factory_says_fisco_is_not_configured_yet` | The factory says fisco is not configured yet |
 | `test_anchor_local.py` | `test_the_factory_names_the_values_it_takes_for_an_unknown_anchor` | The factory names the values it takes for an unknown anchor |
 | `test_api_anchor.py` | `test_verify_says_when_no_anchor_exists` | Verify says when no anchor exists |
 | `test_api_anchor.py` | `test_verify_shows_the_latest_anchor_and_that_it_verifies` | Verify shows the latest anchor and that it verifies |
 | `test_api_anchor.py` | `test_a_tampered_anchor_line_verifies_false` | A tampered anchor line verifies false |
 | `test_api_anchor.py` | `test_the_secret_never_appears_in_a_response_an_entry_or_an_anchor_line` | The secret never appears in a response an entry or an anchor line |
 | `test_api_anchor.py` | `test_an_anchor_store_that_fails_names_its_error_without_the_secret_and_the_payment_goes_through` | An anchor store that fails names its error without the secret and the payment goes through |
-| `test_api_anchor.py` | `test_anchor_fisco_is_not_configured_yet` | Anchor fisco is not configured yet |
 | `test_harness_anchor.py` | `test_the_harness_gives_the_loop_a_local_anchor_outside_data_and_keeps_anchor_entries_out_of_the_trail` | The harness gives the loop a local anchor outside data and keeps anchor entries out of the trail |
 | `test_anchor_attacks.py` | `test_an_edited_and_rechained_ledger_does_not_verify_against_its_anchor` | An edited and rechained ledger does not verify against its anchor |
 | `test_anchor_attacks.py` | `test_an_anchor_entry_pointed_at_an_older_signed_head_does_not_verify` | An anchor entry pointed at an older signed head does not verify |
@@ -9123,8 +9338,45 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_cancel.py` | `test_latest_from_a_tool_result_is_data_and_refused_under_r01` | Latest from a tool result is data and refused under r01 |
 | `test_cancel.py` | `test_latest_with_no_receipt_gets_the_honest_reply` | Latest with no receipt gets the honest reply |
 | `test_cancel.py` | `test_latest_never_reaches_another_students_receipt` | Latest never reaches another students receipt |
+| `test_anchor_fisco.py` | `test_the_fisco_anchor_implements_the_anchor_interface` | The fisco anchor implements the anchor interface |
+| `test_anchor_fisco.py` | `test_a_successful_anchor_returns_the_transaction_hash` | A successful anchor returns the transaction hash |
+| `test_anchor_fisco.py` | `test_verify_reads_back_the_record_with_its_time_and_block` | Verify reads back the record with its time and block |
+| `test_anchor_fisco.py` | `test_a_transport_error_becomes_the_anchors_own_error` | A transport error becomes the anchors own error |
+| `test_anchor_fisco.py` | `test_a_missing_configuration_raises_not_configured_naming_the_variable` | A missing configuration raises not configured naming the variable |
+| `test_anchor_fisco.py` | `test_the_configuration_is_read_at_call_time` | The configuration is read at call time |
+| `test_anchor_fisco.py` | `test_the_python_route_is_tried_first_and_json_rpc_second` | The python route is tried first and json rpc second |
+| `test_anchor_fisco.py` | `test_with_no_route_available_the_anchor_is_not_configured_and_says_what_was_tried` | With no route available the anchor is not configured and says what was tried |
+| `test_anchor_fisco.py` | `test_only_hashes_and_a_sequence_reach_the_chain` | Only hashes and a sequence reach the chain |
+| `test_anchor_fisco.py` | `test_the_key_never_appears_in_an_error` | The key never appears in an error |
+| `test_anchor_fisco.py` | `test_the_json_rpc_transport_posts_with_a_short_timeout_through_its_adapter` | The json rpc transport posts with a short timeout through its adapter |
+| `test_anchor_fisco.py` | `test_the_env_example_names_the_three_variables_with_no_values` | The env example names the three variables with no values |
+| `test_anchor_fisco.py` | `test_the_contract_holds_only_hashes_a_sequence_a_time_and_a_sender` | The contract holds only hashes a sequence a time and a sender |
+| `test_anchor_fisco.py` | `test_a_real_node_anchors_a_head_and_verifies_it_with_a_block_number` | A real node anchors a head and verifies it with a block number |
+| `test_anchor_fisco.py` | `test_the_verify_endpoint_shows_the_block_number_and_the_kind_fisco` | The verify endpoint shows the block number and the kind fisco |
+| `test_anchor_fisco.py` | `test_a_chain_that_cannot_be_read_is_reported_as_not_verified_with_its_error` | A chain that cannot be read is reported as not verified with its error |
+| `test_anchor_local.py` | `test_the_factory_gives_the_fisco_anchor_for_fisco` | The factory gives the fisco anchor for fisco |
+| `test_api_anchor.py` | `test_anchor_fisco_unconfigured_or_unreachable_never_blocks_a_payment` | Anchor fisco unconfigured or unreachable never blocks a payment |
+| `test_evm_tx.py` | `test_keccak256_matches_the_published_vectors` | Keccak256 matches the published vectors |
+| `test_evm_tx.py` | `test_rlp_encodes_the_published_examples` | Rlp encodes the published examples |
+| `test_evm_tx.py` | `test_the_address_of_private_key_one` | The address of private key one |
+| `test_evm_tx.py` | `test_the_eip155_example_transaction_is_signed_exactly` | The eip155 example transaction is signed exactly |
+| `test_fisco_tx.py` | `test_tars_writes_integers_by_size_and_zero_as_its_own_type` | Tars writes integers by size and zero as its own type |
+| `test_fisco_tx.py` | `test_tars_writes_strings_byte_lists_and_a_tag_above_fourteen` | Tars writes strings byte lists and a tag above fourteen |
+| `test_fisco_tx.py` | `test_the_transaction_data_hash_is_keccak_of_the_fields_in_order` | The transaction data hash is keccak of the fields in order |
+| `test_fisco_tx.py` | `test_a_built_transaction_is_hex_and_carries_its_hash_and_a_65_byte_signature` | A built transaction is hex and carries its hash and a 65 byte signature |
+| `test_walkthrough.py` | `test_the_walkthrough_covers_stage_5b` | The walkthrough covers stage 5b |
+| `test_anchor_fisco.py` | `test_a_real_node_never_lets_a_head_be_anchored_twice` | A real node never lets a head be anchored twice |
+| `test_anchor_fisco.py` | `test_a_real_node_lets_no_other_account_anchor` | A real node lets no other account anchor |
+| `test_attack_five.py` | `test_a_node_that_trickles_its_answer_cannot_hold_an_anchor_past_a_few_seconds` | A node that trickles its answer cannot hold an anchor past a few seconds |
+| `test_attack_five.py` | `test_a_chain_that_stays_down_is_tried_at_most_once_an_hour` | A chain that stays down is tried at most once an hour |
+| `test_attack_five.py` | `test_anchor_status_reads_the_chain_once` | Anchor status reads the chain once |
+| `test_attack_five.py` | `test_a_binary_key_file_leaks_no_key_byte_into_the_error` | A binary key file leaks no key byte into the error |
+| `test_attack_five.py` | `test_the_user_hash_on_the_chain_cannot_be_reversed_by_hashing_a_guessed_id` | The user hash on the chain cannot be reversed by hashing a guessed id |
+| `test_attack_five.py` | `test_a_contract_address_that_is_not_an_address_is_refused_before_anything_is_sent` | A contract address that is not an address is refused before anything is sent |
+| `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
+| `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 96 parametrized tests add 258 extra runs, which is how 816 test functions become 1074 tests.
+In all, 100 parametrized tests add 267 extra runs, which is how 851 test functions become 1118 tests.
 
 ## The Stage 8a tests
 
@@ -9582,6 +9834,7 @@ mandate:
   allowed_corridors: [IN>SG]
   # Exactly as in_upi_paynow_purpose_001 states them.
   allowed_purposes: [maintenance_of_relatives_abroad, gift]
+  # Fixture: the parent's cooling period for a new payee, the same 24 hours the demo student's mandate uses.
   cooling_hours: 24
   # Fixture: the student was added long before any demo, so they are never inside the cooling period.
   payee_added_at:

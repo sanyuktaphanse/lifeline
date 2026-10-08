@@ -1,0 +1,12 @@
+# A four node local FISCO BCOS network for the optional chain anchor, started by setup.sh.
+# Nothing in Lifeline needs it: ANCHOR=local is the default and CI never starts it.
+services:
+  fisco:
+    image: ubuntu:24.04
+    working_dir: /chain
+    volumes:
+      - ./:/chain
+    ports:
+      # node0's native JSON RPC, without SSL, the route the Python client uses.
+      - "127.0.0.1:20200:20200"
+    command: ["bash", "/chain/nodes_in_container.sh"]

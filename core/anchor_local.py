@@ -36,6 +36,12 @@ def _anchor_secret() -> bytes:
     return secret.encode("utf-8")
 
 
+def user_hash_of(user_id: str) -> str:
+    """The user id as an anchor holds it: HMAC SHA 256 under the anchor secret, so no one reading an anchor
+    line or the chain can recover the id by hashing a guess. Source: the FISCO anchor attacker brief."""
+    return hmac.new(_anchor_secret(), user_id.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def _signed(head_hash: str, seq: int, user_hash: str, anchored_at: str) -> bytes:
     return json.dumps([head_hash, seq, user_hash, anchored_at], separators=(",", ":")).encode("utf-8")
 
@@ -129,15 +135,15 @@ class LocalSignedAnchor(Anchor):
 
 
 def anchor_for(env: Mapping[str, str] | None, path: Path) -> Anchor:
-    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty.
-
-    FISCO BCOS arrives in a later change, so until then it is refused rather than quietly replaced.
+    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty, the FISCO BCOS anchor
+    for fisco. The FISCO anchor reads its settings on every call, so a missing or unreachable chain is an
+    error at anchoring time, which the loop writes as an anchor_failed note and never lets block a payment.
     """
     kind = environment(env).get("ANCHOR", "").strip().casefold() or LOCAL
     if kind == LOCAL:
         return LocalSignedAnchor(path)
     if kind == FISCO:
-        raise AnchorNotConfigured(
-            "ANCHOR is fisco, and the FISCO BCOS anchor is not configured in this version. Set ANCHOR to local."
-        )
+        from core.anchor_fisco import FiscoBcosAnchor
+
+        return FiscoBcosAnchor()
     raise ValueError(f"ANCHOR must be one of {', '.join(ANCHOR_KINDS)}, not {kind!r}.")

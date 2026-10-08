@@ -48,7 +48,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
-from core.anchor_local import LocalSignedAnchor
+from core.anchor_local import LocalSignedAnchor, user_hash_of
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
@@ -1074,6 +1074,8 @@ class AgentLoop:
         self._clock = clock
         self._anchor_due = False
         self._last_anchor_at: datetime | None = None
+        # When the last anchor attempt that did not anchor was made, rebuilt from its note on restart.
+        self._last_attempt_at: datetime | None = None
         self._first_entry_at: datetime | None = None
         self._head_seq = 0
         self._anchored_seq = 0
@@ -2402,7 +2404,9 @@ class AgentLoop:
         if self._anchor is None:
             return
         now = self._clock()
-        since = self._last_anchor_at or self._first_entry_at
+        # A failed or skipped attempt counts as an attempt, so a store that stays down is tried at most once
+        # an hour, not on every call. Source: the FISCO anchor attacker brief of 8 October.
+        since = max((moment for moment in (self._last_anchor_at or self._first_entry_at, self._last_attempt_at) if moment), default=None)
         hourly = since is not None and now - since > ANCHOR_INTERVAL and self._head_seq > self._anchored_seq
         if not (self._anchor_due or hourly):
             return
@@ -2412,9 +2416,10 @@ class AgentLoop:
         mandate = self._mandates.get(user_id)
         trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
         head, seq = self._ledger.head(), self._head_seq
-        # Only a hash of the student's id leaves the ledger, never the id.
-        user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
         try:
+            # Only a keyed hash of the student's id leaves the ledger, never the id, and never a plain hash
+            # anyone could recompute from a guessed id. Source: the FISCO anchor attacker brief of 8 October.
+            user_hash = user_hash_of(user_id)
             broken = self._ledger.verify()
             if broken is not None:
                 reason: str | None = f"The ledger chain breaks at entry {broken}, so its head is not anchored."
@@ -2422,10 +2427,12 @@ class AgentLoop:
                 reason = self._store_mismatch(self._ledger.entries())
             if reason is not None:
                 self._write(trail, "note", {"kind": "anchor_skipped", "reason": reason})
+                self._last_attempt_at = now
                 return
             anchor_id = self._anchor.anchor(head, seq, user_hash)
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
             self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
+            self._last_attempt_at = now
             return
         # The entry carries the student like every entry, so it is listed in their ledger; the line in
         # the anchor store holds only the hash of their id. Source: docs/decisions.md, 8 October 2026.
@@ -2454,7 +2461,12 @@ class AgentLoop:
         """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
         naming the entry just before it with that entry's hash, and every other signed head matching too."""
         local = isinstance(self._anchor, LocalSignedAnchor)
-        kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
+        # The local and the FISCO BCOS anchors name their kind and give the time a head was anchored; the
+        # chain also gives its block.
+        kind = getattr(self._anchor, "kind", None)
+        anchored_at = getattr(self._anchor, "anchored_at", None)
+        # The chain gives its whole record in one read, so the status asks it once, not three times.
+        record_of = getattr(self._anchor, "record_of", None)
         entries = self._ledger.entries()
         latest = next((entry for entry in reversed(entries) if entry.kind == ANCHOR_KIND), None)
         status: dict[str, Any] = {"anchored": False}
@@ -2463,8 +2475,15 @@ class AgentLoop:
             status = {"anchored": True, "head_hash": head, "head_seq": head_seq}
             hashes = {entry.seq: entry.hash for entry in entries}
             try:
-                signed = self._anchor.verify(head)
-                at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+                if callable(record_of):
+                    record = record_of(head)
+                    # The record must name the sequence the ledger's anchor entry names, not one of its own.
+                    signed = record is not None and record.seq == head_seq
+                    at = record.timestamp if record is not None else None
+                    status["block_number"] = record.block_number if record is not None else None
+                else:
+                    signed = self._anchor.verify(head)
+                    at = anchored_at(head) if callable(anchored_at) else None
                 matches = head_seq == latest.seq - 1 and hashes.get(head_seq) == head and self._store_mismatch(entries) is None
             except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
                 signed, matches, at = False, False, None
@@ -3049,6 +3068,8 @@ class AgentLoop:
         noted: set[int] = set()
         for entry in self._ledger.entries():
             self._wrote(entry)
+            if entry.kind == "note" and entry.payload.get("kind") in ("anchor_failed", "anchor_skipped"):
+                self._last_attempt_at = entry.ts
             if entry.kind == ANCHOR_KIND:
                 try:
                     self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])

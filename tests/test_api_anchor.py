@@ -118,11 +118,26 @@ def test_an_anchor_store_that_fails_names_its_error_without_the_secret_and_the_p
         assert SECRET not in text
 
 
-def test_anchor_fisco_is_not_configured_yet(monkeypatch):
-    monkeypatch.setenv("ANCHOR", "fisco")
+@pytest.mark.parametrize("rpc_url", ["", "http://127.0.0.1:9"])
+def test_anchor_fisco_unconfigured_or_unreachable_never_blocks_a_payment(monkeypatch, ledger_file, rpc_url):
+    import time
 
-    with pytest.raises(AnchorNotConfigured, match="fisco"):
-        _client()
+    monkeypatch.setenv("ANCHOR", "fisco")
+    monkeypatch.setenv("FISCO_RPC_URL", rpc_url)
+    monkeypatch.setenv("FISCO_CONTRACT_ADDRESS", "0x" + "12" * 20)
+    monkeypatch.setenv("FISCO_KEY_PATH", str(ledger_file.parent / "absent.key"))
+    client = _client([_call("propose_transfer", RENT)])
+
+    started = time.monotonic()
+    _, paid = _pay_rent(client)
+
+    assert time.monotonic() - started < 10
+    assert json.loads(paid)["receipt"]["status"] == "completed"
+    entries = [json.loads(line) for line in ledger_file.read_text(encoding="utf-8").splitlines()]
+    notes = [entry["payload"] for entry in entries if entry["payload"].get("kind") == "anchor_failed"]
+    assert len(notes) == 1
+    assert "anchor" not in [entry["kind"] for entry in entries]
+    assert client.get(f"/ledger/{USER}/verify").json()["anchor"] == {"anchored": False, "kind": "fisco"}
 
 
 def test_the_students_ledger_lists_the_anchor_entry_after_a_t2_execution_and_the_anchors_file_holds_no_user_id(ledger_file):

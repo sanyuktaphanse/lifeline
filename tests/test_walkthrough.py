@@ -161,3 +161,12 @@ def test_the_walkthrough_covers_stage_8b():
     } <= {path for path, _, _ in yaml_excerpts()}
     for name in ("def _own_transfer", "def _cancel"):
         assert any(name in excerpt for excerpt in agent), name
+
+
+def test_the_walkthrough_covers_stage_5b():
+    files = {path for path, _, _ in excerpts()}
+    text = WALKTHROUGH.read_text(encoding="utf-8")
+
+    assert {"core/anchor_fisco.py", "core/fisco_tx.py", "core/evm_tx.py"} <= files
+    assert "## The evidence contract, `chain/LifelineEvidence.sol`" in text
+    assert "test_the_factory_says_fisco_is_not_configured_yet" not in text
