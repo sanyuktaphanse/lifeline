@@ -1,0 +1,41 @@
+# Demo fixture for the API and the harness: a parent in India who sends the student money over UPI to
+# PayNow. Not a real person, account, card or answer, and not a published limit. Source: this file.
+user_id: parent_001
+mandate:
+  id: mandate-parent_001-v1
+  currency: INR
+  # Fixture: under the daily cap of 60,000 rupees in in_upi_paynow_cap_002.
+  per_txn_limit: "50000"
+  # Fixture: above that cap on purpose, so the cap entry, enforced by the rail at execution, is what
+  # refuses a second transfer the same day, not this mandate. Decision 81 of 8 October records why.
+  daily_limit: "100000"
+  # The student is the only payee.
+  allowed_payees: [student_001]
+  allowed_corridors: [IN>SG]
+  # Exactly as in_upi_paynow_purpose_001 states them.
+  allowed_purposes: [maintenance_of_relatives_abroad, gift]
+  cooling_hours: 24
+  # Fixture: the student was added long before any demo, so they are never inside the cooling period.
+  payee_added_at:
+    student_001: "2026-01-01T00:00:00Z"
+valid_days: 365
+balances:
+  INR: "200000"
+# The parent's resilience plan. Every value is a fixture.
+plan:
+  cards:
+    - name: HDFC debit card
+      instrument_id: "hdfc:card_01"
+  primary_instrument: "hdfc:card_01"
+  wallet_token_present: false
+  trusted_contact:
+    name: Ravi
+    channel: whatsapp
+  emergency_allowance: "5000"
+  emergency_payee: student_001
+  emergency_corridor: "IN>SG"
+  emergency_purpose: gift
+  family_notice_opt_in: false
+  identity_check:
+    question: What city were you born in?
+    expected_answer: "Pune"

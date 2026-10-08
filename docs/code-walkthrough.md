@@ -3780,6 +3780,7 @@ TEXTS = {
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
+        "no_route_refused": "No route is available for this transfer right now, so nothing was sent. The rail said: {reason}",
         "too_many_steps": "I stopped before finishing. Please ask again.",
         "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
         "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
@@ -3862,6 +3863,7 @@ TEXTS = {
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
+        "no_route_refused": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado. A via disse: {reason}",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
         "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
         "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
@@ -3944,6 +3946,7 @@ TEXTS = {
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
+        "no_route_refused": "目前没有可用于这笔转账的路线，因此没有发送任何资金。支付通道的说明：{reason}",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
         "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
         "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
@@ -4938,7 +4941,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
         )
         receipt = self._pay_on_route(user_id, trail, action, route, mandate.id, token)
         if isinstance(receipt, RailError):
-            return self._offer_next_route(lang, trail, token, pending)
+            return self._offer_next_route(lang, trail, token, pending, receipt)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -5385,7 +5388,7 @@ When no confirmation waits under the token for this student, and when a waiting 
 
 ```python
     def _offer_next_route(
-        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation
+        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
     ) -> AgentReply:
         action = pending.action
         failed = pending.selected_route
@@ -5396,7 +5399,9 @@ When no confirmation waits under the token for this student, and when a waiting 
         if selected is None:
             del self._pending[token]
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
-            return self._reply(trail, lang, _text(lang, "no_route"))
+            # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
+            # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(error)))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -7014,7 +7019,63 @@ def _plan(fixtures: dict[str, Any]) -> Plan:
     return Plan.model_validate({**demo, **fixtures.get("plan", {})})
 
 
-def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
+# A fixtures.user block may name a fixture file in fixtures/ by its plain name, such as demo_parent.
+FIXTURE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+
+
+@dataclass
+class _Who:
+    """Who a run is: the user id, their mandate, balances, plan, and Chinese cards."""
+
+    user_id: str
+    mandate: Mandate
+    balances: dict[str, Decimal]
+    plan: Plan
+    chinese_cards: list[dict[str, Any]]
+
+
+def _who(fixtures: dict[str, Any]) -> _Who:
+    """The demo student, or the user a scenario's fixtures.user names, written inline or by fixture file.
+
+    A user block holds a user id, a mandate with its own currency, limits, payees, corridors and purposes,
+    balances and a plan. A scenario's mandate and plan still replace the block's key by key.
+    """
+    block = fixtures.get("user")
+    if block is None:
+        balances = fixtures.get("balances", FIXTURE_BALANCES)
+        cards = fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")
+        return _Who(
+            USER,
+            _mandate(fixtures.get("mandate", {})),
+            {currency: Decimal(amount) for currency, amount in balances.items()},
+            _plan(fixtures),
+            cards or [],
+        )
+    if "fixture" in block:
+        name = str(block["fixture"])
+        if not FIXTURE_NAME.fullmatch(name):
+            raise ValueError(f"fixtures.user names fixture {name!r}, which is not a plain fixture name")
+        block = {**load_suite(ROOT / "fixtures" / f"{name}.yaml"), **{k: v for k, v in block.items() if k != "fixture"}}
+    now = datetime.now(timezone.utc)
+    mandate = Mandate.model_validate(
+        {
+            "user_id": block["user_id"],
+            "valid_from": now - FIXTURE_VALIDITY,
+            "valid_until": now + FIXTURE_VALIDITY,
+            **block["mandate"],
+            **fixtures.get("mandate", {}),
+        }
+    )
+    return _Who(
+        block["user_id"],
+        mandate,
+        {currency: Decimal(str(amount)) for currency, amount in fixtures.get("balances", block["balances"]).items()},
+        Plan.model_validate({**block["plan"], **fixtures.get("plan", {})}),
+        fixtures.get("chinese_cards", block.get("chinese_cards")) or [],
+    )
+
+
+def _fail_once_keys(entries: list[dict[str, Any]], user_id: str = USER) -> dict[str, set[str]]:
     """Build, per rail, the idempotency keys the loop will use for the proposals that must fail once.
 
     The loop's key is the student, the letter t and the turn number, the tool, and the call number
@@ -7023,18 +7084,18 @@ def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
     """
     keys: dict[str, set[str]] = {}
     for entry in entries:
-        key = entry.get("key") or f"{USER}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
+        key = entry.get("key") or f"{user_id}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
         keys.setdefault(entry["rail"], set()).add(key)
     return keys
 
 
-def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
+def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
     names = fixtures.get("rails", list(FIXTURE_RAILS))
     unknown = [name for name in names if name not in FIXTURE_RAILS]
     if unknown:
         raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
     traces = scripted_traces(fixtures.get("traces"))
-    failing = _fail_once_keys(fixtures.get("fail_once", []))
+    failing = _fail_once_keys(fixtures.get("fail_once", []), user_id)
     scripts = fixtures.get("rail_scripts", {})
     # Fixture: the status each fake rail issues receipts at, completed unless the scenario chooses one.
     statuses = {name: ReceiptStatus(status) for name, status in (fixtures.get("receipt_status") or {}).items()}
@@ -7262,9 +7323,10 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
         # A run's own fixtures replace the scenario's key by key, so two runs of one entry can
         # differ in what they are given, such as a council that splits its vote differently.
         fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
-        balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
-        mandates = {USER: _mandate(fixtures.get("mandate", {}))}
-        rails = _rails(fixtures)
+        who = _who(fixtures)
+        user = who.user_id
+        mandates = {user: who.mandate}
+        rails = _rails(fixtures, user)
         inbound = seed_inbound(rails, inbound_from_fixture(fixtures.get("inbound_receipts"), rails))
         loop = AgentLoop(
             adapter=adapter,
@@ -7273,21 +7335,19 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             router=FakeRouter(),
             rails=rails,
             mandates=mandates,
-            balances={USER: balances},
+            balances={user: who.balances},
             pending={},
             council=_council(fixtures),
-            plans={USER: _plan(fixtures)},
-            inbound_receipts={USER: inbound},
+            plans={user: who.plan},
+            inbound_receipts={user: inbound},
             anchor=LocalSignedAnchor(anchors_path),
             # A scenario's own Chinese cards replace the demo fixture's, which are a fixture too.
-            chinese_cards={
-                USER: (fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")) or []
-            },
+            chinese_cards={user: who.chinese_cards},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
             if "run_due" in turn:
-                events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
+                events = loop.run_due_standing_mandates(_run_due_time(mandates[user], turn["run_due"]))
                 result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
                 continue
             if "tamper" in turn:
@@ -7300,9 +7360,9 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
                 if turn["rescue"] not in RESCUE_TURNS:
                     raise ValueError(f"rescue must be start or step, not {turn['rescue']!r}")
                 if turn["rescue"] == "start":
-                    reply = loop.rescue_start(USER, turn["trigger"], message)
+                    reply = loop.rescue_start(user, turn["trigger"], message)
                 else:
-                    reply = loop.rescue_step(USER, message, confirmation_token=token)
+                    reply = loop.rescue_step(user, message, confirmation_token=token)
                 replies.append(reply)
                 result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
                 continue
@@ -7313,7 +7373,7 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             )
             token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
             before = len(adapter.calls)
-            reply = loop.handle(USER, message, confirmation_token=token, pasted=pasted)
+            reply = loop.handle(user, message, confirmation_token=token, pasted=pasted)
             replies.append(reply)
             result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
             result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))
@@ -7549,6 +7609,8 @@ from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
+# A parent in India, loaded beside the demo student when the file exists, so the app can show both sides.
+DEMO_PARENT = ROOT / "fixtures" / "demo_parent.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
 CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
 # The anchors are kept beside the ledger they anchor, so data/anchors.jsonl for data/ledger.jsonl.
@@ -7730,8 +7792,10 @@ def create_app(
     council: Council | None = None,
     sim_rails: bool | None = None,
     anchor: Anchor | None = None,
+    parent_fixture_path: Path | None = DEMO_PARENT,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
+    parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
     ledger_path = ledger_path or LEDGER_PATH
     ledger = JsonlLedger(ledger_path)
@@ -7750,6 +7814,8 @@ def create_app(
         key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
     }}
     _restore_rails(rails, ledger)
+    # The demo student first, then the parent when its fixture exists.
+    people = [fixture, *([parent] if parent is not None else [])]
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))
     loop = AgentLoop(
@@ -7758,17 +7824,20 @@ def create_app(
         ledger=ledger,
         router=FakeRouter(),
         rails=rails,
-        mandates={user_id: _demo_mandate(fixture, ledger)},
-        balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
+        mandates={person["user_id"]: _demo_mandate(person, ledger) for person in people},
+        balances={
+            person["user_id"]: {currency: Decimal(amount) for currency, amount in person["balances"].items()}
+            for person in people
+        },
         pending={},
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
         council=council if council is not None else council_for(),
-        plans={user_id: Plan.model_validate(fixture["plan"])},
+        plans={person["user_id"]: Plan.model_validate(person["plan"]) for person in people},
         inbound_receipts={user_id: inbound},
         anchor=anchor,
         chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
-    users = {user_id}
+    users = {person["user_id"] for person in people}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
     lock = threading.Lock()
 

@@ -377,6 +377,7 @@ TEXTS = {
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
+        "no_route_refused": "No route is available for this transfer right now, so nothing was sent. The rail said: {reason}",
         "too_many_steps": "I stopped before finishing. Please ask again.",
         "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
         "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
@@ -459,6 +460,7 @@ TEXTS = {
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
+        "no_route_refused": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado. A via disse: {reason}",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
         "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
         "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
@@ -541,6 +543,7 @@ TEXTS = {
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
+        "no_route_refused": "目前没有可用于这笔转账的路线，因此没有发送任何资金。支付通道的说明：{reason}",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
         "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
         "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
@@ -1743,7 +1746,7 @@ class AgentLoop:
         )
         receipt = self._pay_on_route(user_id, trail, action, route, mandate.id, token)
         if isinstance(receipt, RailError):
-            return self._offer_next_route(lang, trail, token, pending)
+            return self._offer_next_route(lang, trail, token, pending, receipt)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -2195,7 +2198,7 @@ class AgentLoop:
         return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
 
     def _offer_next_route(
-        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation
+        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
     ) -> AgentReply:
         action = pending.action
         failed = pending.selected_route
@@ -2206,7 +2209,9 @@ class AgentLoop:
         if selected is None:
             del self._pending[token]
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
-            return self._reply(trail, lang, _text(lang, "no_route"))
+            # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
+            # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(error)))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,

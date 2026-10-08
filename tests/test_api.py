@@ -887,3 +887,23 @@ def test_the_scheduler_writes_the_monthly_note_once_on_the_first_run_in_a_new_mo
     assert len(notes) == 1
     assert notes[0]["month"] == month
     assert "1 sent on SG>BR, total 1200 SGD" in notes[0]["text"]
+
+
+def test_the_api_loads_the_demo_parent_beside_the_demo_student():
+    client = _client([
+        _call("propose_transfer", {"amount": "40000", "currency": "INR", "corridor": "IN>SG", "payee_id": "student_001", "purpose": "gift"})
+    ])
+
+    reply = client.post("/chat", json={"user_id": "parent_001", "text": "Send 40000 rupees to student_001 as a gift"}).json()
+
+    assert reply["confirmation"]["selected_route"]["rail"] == "upi_paynow_sim"
+    assert reply["confirmation"]["selected_route"]["rule_id"] == "in_upi_paynow_purpose_001"
+    parent_entries = client.get("/ledger/parent_001").json()
+    assert parent_entries and all(e["payload"]["user_id"] == "parent_001" for e in parent_entries)
+    assert all(e["payload"]["user_id"] == USER for e in client.get(f"/ledger/{USER}").json())
+
+
+def test_the_api_runs_without_a_parent_fixture(tmp_path):
+    client = TestClient(create_app(adapter=FakeModelAdapter([]), parent_fixture_path=tmp_path / "absent.yaml"))
+
+    assert client.post("/precheck", json={"user_id": "parent_001", "action_kind": "enable_pix", "provider": "sim_pix"}).status_code == 404
