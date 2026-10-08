@@ -54,6 +54,7 @@ class ActionType(str, Enum):
     CHECK_WALLET_TOKEN = "check_wallet_token"
     REROUTE_TO_BACKUP = "reroute_to_backup"
     NOTIFY_FAMILY = "notify_family"
+    VERIFY_LEDGER = "verify_ledger"
 
 
 class RouteStatus(str, Enum):

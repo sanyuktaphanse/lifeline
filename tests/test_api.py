@@ -147,7 +147,7 @@ def test_ledger_lists_only_that_users_entries_and_verify_finds_no_break():
     assert [entry["kind"] for entry in entries] == ["proposal", "decision", "turn"]
     assert all(entry["payload"]["user_id"] == USER for entry in entries)
     assert verify.status_code == 200
-    assert verify.json() == {"first_broken_seq": None}
+    assert verify.json()["first_broken_seq"] is None
 
 
 def test_verify_reports_the_first_broken_seq():
@@ -156,7 +156,7 @@ def test_verify_reports_the_first_broken_seq():
     _propose(client)
     app.state.ledger._entries[0].payload["user_id"] = "someone_else"
 
-    assert client.get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": 1}
+    assert client.get(f"/ledger/{USER}/verify").json()["first_broken_seq"] == 1
 
 
 def test_trace_returns_the_trace_of_a_receipt_this_student_holds():
@@ -353,7 +353,7 @@ def test_a_restarted_app_keeps_a_waiting_confirmation_and_pays_it_once():
     assert _trail_kinds(_client()) == [
         "proposal", "decision", "confirmation", "execution", "receipt", "proposal", "decision"
     ]
-    assert _client().get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": None}
+    assert _client().get(f"/ledger/{USER}/verify").json()["first_broken_seq"] is None
 
 
 def test_a_restarted_app_rebuilds_history_payees_and_mandate_versions():
@@ -403,7 +403,7 @@ def test_a_tampered_ledger_file_still_starts_and_verify_names_the_break(ledger_f
     _propose(_client([_call("propose_transfer", RENT)]))
     ledger_file.write_text(ledger_file.read_text(encoding="utf-8").replace('"1200"', '"9999"', 1), encoding="utf-8")
 
-    assert _client().get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": 1}
+    assert _client().get(f"/ledger/{USER}/verify").json()["first_broken_seq"] == 1
 
 
 
@@ -641,7 +641,7 @@ def test_a_rescue_runs_to_the_end_over_the_api():
     assert done["receipt"]["amount"] == "300"
     assert done["rescue"]["state_after"] == "done"
     assert DEMO_ANSWER not in json.dumps(client.get(f"/ledger/{USER}").json())
-    assert client.get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": None}
+    assert client.get(f"/ledger/{USER}/verify").json()["first_broken_seq"] is None
 
 
 @pytest.mark.parametrize(

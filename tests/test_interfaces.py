@@ -122,6 +122,7 @@ FROZEN_ACTION_TIERS = {
     "check_wallet_token": "T0",
     "reroute_to_backup": "T1",
     "notify_family": "T1",
+    "verify_ledger": "T0",
 }
 
 

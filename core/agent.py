@@ -1,16 +1,19 @@
+import functools
+import hashlib
 import hmac
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Concatenate
 
 from pydantic import ValidationError
 
 from contracts.errors import RailError
-from contracts.interfaces import Council, Ledger, MandateEngine, ModelAdapter, Rail, Router
+from contracts.interfaces import Anchor, Council, Ledger, MandateEngine, ModelAdapter, Rail, Router
 from contracts.schemas import (
     Action,
     ActionType,
@@ -41,6 +44,7 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
+from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
@@ -77,6 +81,10 @@ MAX_MODEL_CALLS_PER_TURN = 8
 MAX_IDENTITY_ATTEMPTS = 3
 # Source: docs/decisions.md, 18 September 2026. The model sees at most this many earlier messages.
 MAX_HISTORY_MESSAGES = 20
+# Source: docs/decisions.md, 8 October 2026. A product choice, not a sourced figure: the ledger head is
+# anchored after every T2 execution, and at least once in each hour of activity after the last anchor.
+ANCHOR_INTERVAL = timedelta(hours=1)
+ANCHOR_KIND = "anchor"
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -183,6 +191,12 @@ TOOLS = [
         {"limit": TEXT, "amount": TEXT},
         [],
     ),
+    _tool(
+        "verify_ledger",
+        "Show today's ledger entries for the student, check the ledger's hash chain, and report its latest anchor.",
+        {},
+        [],
+    ),
 ]
 
 TOOL_ACTIONS = {
@@ -198,6 +212,7 @@ TOOL_ACTIONS = {
     "create_standing_mandate": ActionType.CREATE_STANDING_MANDATE,
     "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
     "deactivate_standing_mandate": ActionType.DEACTIVATE_STANDING_MANDATE,
+    "verify_ledger": ActionType.VERIFY_LEDGER,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -691,6 +706,34 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 
 
+def _anchored[**P, R](
+    method: Callable[Concatenate["AgentLoop", str, P], R],
+) -> Callable[Concatenate["AgentLoop", str, P], R]:
+    """A public call of the loop, after which the ledger head is anchored when an anchor is due."""
+
+    @functools.wraps(method)
+    def call(self: "AgentLoop", user_id: str, *args: P.args, **kwargs: P.kwargs) -> R:
+        result = method(self, user_id, *args, **kwargs)
+        self._anchor_if_due(user_id)
+        return result
+
+    return call
+
+
+def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
+    """What the student is shown of one ledger entry: where it sits, when, what kind, and what it was about."""
+    view: dict[str, Any] = {"seq": entry.seq, "ts": entry.ts.isoformat(), "kind": entry.kind}
+    payload = entry.payload
+    if isinstance(payload.get("action"), dict):
+        view["action"] = payload["action"].get("type")
+    if entry.kind == "note" and payload.get("kind"):
+        view["note"] = payload["kind"]
+    if entry.kind == "receipt":
+        receipt = payload.get("receipt", {})
+        view["receipt"] = {name: receipt.get(name) for name in ("receipt_id", "rail", "amount", "currency", "status")}
+    return view
+
+
 class AgentLoop:
     def __init__(
         self,
@@ -706,8 +749,18 @@ class AgentLoop:
         council: Council | None = None,
         plans: dict[str, Plan] | None = None,
         inbound_receipts: dict[str, dict[str, str]] | None = None,
+        anchor: Anchor | None = None,
+        clock: Callable[[], datetime] = _now,
     ) -> None:
         self._adapter = adapter
+        # Where the ledger head is anchored, or nothing, and the clock that times the hourly anchor.
+        self._anchor = anchor
+        self._clock = clock
+        self._anchor_due = False
+        self._last_anchor_at: datetime | None = None
+        self._first_entry_at: datetime | None = None
+        self._head_seq = 0
+        self._anchored_seq = 0
         self._plans = dict(plans or {})
         self._machine = RescueMachine()
         self._rescues: dict[str, _Rescue] = {}
@@ -748,6 +801,7 @@ class AgentLoop:
         version = self._versions.get(mandate_id)
         return None if version is None else version.model_copy(deep=True)
 
+    @_anchored
     def act(
         self, user_id: str, tool: str, arguments: dict[str, Any]
     ) -> tuple[Decision | None, dict[str, Any]]:
@@ -763,6 +817,7 @@ class AgentLoop:
             raise RuntimeError(f"{tool} ended the turn, which a read only tool never does.")
         return outcome
 
+    @_anchored
     def handle(
         self,
         user_id: str,
@@ -968,6 +1023,8 @@ class AgentLoop:
                 {"user_id": user_id},
             )
             return {"precheck": result.model_dump(mode="json")}
+        if action.type is ActionType.VERIFY_LEDGER:
+            return self._ledger_report(user_id, action.requested_at)
         return {"error": f"No runner for {action.type.value}."}
 
     def _propose(
@@ -1424,6 +1481,7 @@ class AgentLoop:
                     events.append(StandingEvent(kind="notice", cancel_until=cancel_until, **event))
                 if now >= noticed + timedelta(hours=standing.cancel_window_hours):
                     events.append(self._run_standing(user_id, standing, period, now, event))
+            self._anchor_if_due(user_id)
         return events
 
     def _run_standing(
@@ -1655,7 +1713,16 @@ class AgentLoop:
             body["model"] = trail.model
         if trail.mandate_id is not None:
             body["mandate_id"] = trail.mandate_id
-        trail.seqs.append(self._ledger.append(ACTOR, kind, body).seq)
+        entry = self._ledger.append(ACTOR, kind, body)
+        self._wrote(entry)
+        trail.seqs.append(entry.seq)
+        if kind == "execution" and TIERS[ActionType(payload["action"]["type"])] is Tier.T2:
+            self._anchor_due = True
+
+    def _wrote(self, entry: LedgerEntry) -> None:
+        self._head_seq = entry.seq
+        if self._first_entry_at is None:
+            self._first_entry_at = entry.ts
 
     def _reply(
         self,
@@ -1680,6 +1747,75 @@ class AgentLoop:
             model=trail.model,
         )
 
+    def _anchor_if_due(self, user_id: str) -> None:
+        """Anchor the ledger head after a T2 execution, or when an hour has passed since the last anchor
+        and something has been written since. Without an anchor yet, the hour runs from the first entry.
+
+        The anchor entry extends the chain, so the head it records is the head before it. A failing
+        anchor store leaves a note naming the error and nothing else: an anchor never blocks a payment.
+        """
+        if self._anchor is None:
+            return
+        now = self._clock()
+        since = self._last_anchor_at or self._first_entry_at
+        hourly = since is not None and now - since > ANCHOR_INTERVAL and self._head_seq > self._anchored_seq
+        if not (self._anchor_due or hourly):
+            return
+        self._anchor_due = False
+        head, seq = self._ledger.head(), self._head_seq
+        # Only a hash of the student's id leaves the ledger, never the id.
+        user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+        try:
+            anchor_id = self._anchor.anchor(head, seq, user_hash)
+        except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
+            mandate = self._mandates.get(user_id)
+            trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
+            self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
+            return
+        # No user id, turn, or mandate: an anchor entry holds what was anchored and nothing about anyone.
+        entry = self._ledger.append(
+            ACTOR,
+            ANCHOR_KIND,
+            {"head_hash": head, "head_seq": seq, "anchor_id": anchor_id, "anchored_at": now.isoformat()},
+        )
+        self._wrote(entry)
+        self._last_anchor_at, self._anchored_seq = now, entry.seq
+
+    def anchor_status(self) -> dict[str, Any]:
+        """The latest anchor entry in the ledger, and whether the anchor store still holds it signed."""
+        kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
+        latest = next((entry for entry in reversed(self._ledger.entries()) if entry.kind == ANCHOR_KIND), None)
+        if self._anchor is None or latest is None:
+            return {"anchored": False, "kind": kind}
+        head = str(latest.payload.get("head_hash", ""))
+        status: dict[str, Any] = {"anchored": True, "head_hash": head, "head_seq": latest.payload.get("head_seq")}
+        try:
+            status["verified"] = self._anchor.verify(head)
+            at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+        except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
+            status["verified"], at = False, None
+            status["error"] = f"{type(error).__name__}: {error}"
+        status["anchored_at"] = at.isoformat() if at is not None else None
+        status["kind"] = kind
+        return status
+
+    def _ledger_report(self, user_id: str, at: datetime) -> dict[str, Any]:
+        """Today's entries for the student, in UTC days, the first broken entry of the chain, and the anchor."""
+        day = at.astimezone(timezone.utc).date()
+        entries = [
+            _entry_view(entry)
+            for entry in self._ledger.entries()
+            if entry.payload.get("user_id") == user_id and entry.ts.astimezone(timezone.utc).date() == day
+        ]
+        return {
+            "ledger": {
+                "date": day.isoformat(),
+                "entries": entries,
+                "first_broken_seq": self._ledger.verify(),
+                "anchor": self.anchor_status(),
+            }
+        }
+
     # The rescue. Source: docs/decisions.md, 8 October 2026. Every effect below is an action
     # through the mandate engine or a ledger note; the state machine in core/rescue.py only says
     # which step comes next. No step calls the model.
@@ -1691,6 +1827,7 @@ class AgentLoop:
         """The backup card a rescue moved the student onto, or nothing if no rescue has."""
         return self._live.get(user_id)
 
+    @_anchored
     def rescue_start(self, user_id: str, trigger: str, message: Message) -> RescueReply:
         plan = self._plan(user_id)
         trigger = RescueTrigger(trigger)
@@ -1723,6 +1860,7 @@ class AgentLoop:
             out.say(_text(lang, "rescue_started", question=plan.identity_check.question))
         return self._rescue_reply(trail, user_id, lang, before, out)
 
+    @_anchored
     def rescue_step(
         self, user_id: str, message: Message, confirmation_token: str | None = None
     ) -> RescueReply:
@@ -2227,6 +2365,14 @@ class AgentLoop:
         proposals: dict[str, dict[str, Any]] = {}
         waiting: dict[str, _Waiting] = {}
         for entry in self._ledger.entries():
+            self._wrote(entry)
+            if entry.kind == ANCHOR_KIND:
+                try:
+                    self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
+                except (KeyError, TypeError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an edited anchor entry breaks the chain, which verify names
+                    continue
+                self._anchored_seq = entry.seq
+                continue
             user_id = entry.payload.get("user_id")
             if not isinstance(user_id, str):
                 continue

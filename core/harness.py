@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -11,7 +12,8 @@ from typing import Any
 import yaml
 
 from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
-from core.agent import AgentLoop
+from core.agent import ANCHOR_KIND, AgentLoop
+from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
@@ -28,12 +30,16 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "suites"
 SCENARIOS_DIR = SUITES_DIR / "scenarios"
 REPORT_PATH = ROOT / "evidence" / "report.md"
+# Each run anchors into a directory of its own under this one, removed when the run ends, so no
+# scenario writes into data/. Git ignores it, and it stays inside the repository, as CLAUDE.md rule 9 asks.
+RUNS_TMP = ROOT / ".harness_tmp"
 SUITES = (("tasks", "tasks.yaml"), ("attacks", "attacks.yaml"))
 PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
 TEXT_CHECKS = ("must_contain", "must_not_contain")
-# The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
+# The ledger expectation lists the action trail; turn entries only count a turn's messages and anchor
+# entries only record the head, so neither is part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
 RUN_CHECKS = ("ledger", "notes", "family_notice", "must_not_contain", "verify")
@@ -319,6 +325,12 @@ def _message(turn: dict[str, Any], run: dict[str, Any]) -> Message:
 
 
 def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult:
+    RUNS_TMP.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=RUNS_TMP) as anchors_dir:
+        return _run_scenario_run(scenario, run, Path(anchors_dir) / "anchors.jsonl")
+
+
+def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_path: Path) -> RunResult:
     result = RunResult(langs=list(dict.fromkeys(_turn_lang(turn, run) for turn in run["turns"])))
     shared, own = scenario.get("expected", {}), run.get("expected", {})
     expected = {**shared, **own}
@@ -352,6 +364,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             council=_council(fixtures),
             plans={USER: _plan(fixtures)},
             inbound_receipts={USER: inbound},
+            anchor=LocalSignedAnchor(anchors_path),
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
@@ -393,7 +406,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
-    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TURN_KIND]
+    kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
     notes = [entry.payload.get("kind") for entry in ledger.entries() if entry.kind == "note"]

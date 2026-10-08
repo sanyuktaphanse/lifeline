@@ -33,7 +33,7 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 7. the last twenty messages of each student's conversation, read from `data/conversations.jsonl`, so the model keeps its context.
 8. every rescue in progress, at the step it had reached, with the card it chose, the result of its freeze, and the backup card payments moved to, so a rescue can be finished after a restart.
 
-The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete both files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
+The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on start the loop reads the time of the last anchor from the ledger, so the hourly anchor keeps its pace. The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete the three files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
 
 ## Conventions
 
@@ -667,13 +667,49 @@ A line of `data/conversations.jsonl`, which the API never returns:
 
 ## GET /ledger/{user_id}/verify
 
-Checks the whole hash chain. `first_broken_seq` is `null` when every entry is intact, or the sequence number of the first entry that was changed. Response `200`:
+Checks the whole hash chain and the latest anchor of its head. `first_broken_seq` is `null` when every entry is intact, or the sequence number of the first entry that was changed. `anchor` says whether the ledger head has been anchored and whether that anchor still checks.
+
+The loop anchors the head after every payment, new payee, card freeze or new standing mandate, and at least once an hour while the app is in use. An anchor is a signed line in `data/anchors.jsonl`, outside the ledger, holding only the head hash, its sequence number, a hash of the student's id, and the time. Anyone holding a copy of the ledger can recompute the hash of entry `head_seq` and compare it with `head_hash`.
+
+Response `200` before anything has been anchored:
 
 ```json
 {
-  "first_broken_seq": null
+  "first_broken_seq": null,
+  "anchor": {
+    "anchored": false,
+    "kind": "local"
+  }
 }
 ```
+
+Response `200` after a confirmed payment:
+
+```json
+{
+  "first_broken_seq": null,
+  "anchor": {
+    "anchored": true,
+    "head_hash": "9007632c329e17bf20352c8dcae33048dd1e4c2e73657c051a8540ab9328b432",
+    "head_seq": 7,
+    "verified": true,
+    "anchored_at": "2026-10-08T11:44:57.806133+00:00",
+    "kind": "local"
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `anchored` | Whether the ledger holds an anchor entry. When false, only `kind` follows |
+| `head_hash` | The ledger head the latest anchor recorded: the hash of entry `head_seq` |
+| `head_seq` | The sequence number of that entry. The anchor entry itself comes right after it |
+| `verified` | Whether `data/anchors.jsonl` holds that head in a line whose signature checks. A line that was edited in any field is false |
+| `anchored_at` | The time the anchor store recorded for that head, or `null` when no signed line holds it |
+| `kind` | Where the head is anchored: `local` today |
+| `error` | Present only when the anchor store could not be read; `verified` is then false |
+
+An anchor entry carries no user id, so `GET /ledger/{user_id}` does not list it. A student can ask for the same check in chat, which runs the T0 tool `verify_ledger` and shows today's entries beside it.
 
 ## POST /trace
 
