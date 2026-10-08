@@ -1277,6 +1277,10 @@ class AgentLoop:
             messages.append(answer)
             for index, call in enumerate(answer.tool_calls):
                 calls += 1
+                # A tool earlier in the turn may have made a new mandate version, such as a stopped standing
+                # mandate, so every call is checked against the current one. Source: docs/decisions.md, 9 October 2026.
+                mandate = self._mandates[user_id]
+                trail.mandate_id = mandate.id
                 outcome = self._run_tool(user_id, mandate, lang, trail, call, calls)
                 if isinstance(outcome, AgentReply):
                     if trail.notices:

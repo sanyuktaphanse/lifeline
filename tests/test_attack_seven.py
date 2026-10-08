@@ -10,7 +10,7 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from contracts.schemas import Action, ActionType, Source, Tier
+from contracts.schemas import Action, ActionType, Message, Role, Source, Tier, ToolCall
 from core.fake_adapter import FakeModelAdapter
 from core.mandate import check
 from core.standing import next_occurrence
@@ -136,3 +136,52 @@ def test_a_cancelled_standing_run_is_not_paid_from_chat_over_http(monkeypatch, t
 
     assert reply["receipt"] is None, reply["text"]
     assert reply["decision"]["rule_ids"] == ["R13", "R11"]
+
+
+# X17, C-B2: a run proposed in the same turn as its standing mandate's deactivation was checked against the
+# version from the start of the turn and paid.
+
+
+def _stop_and_run(s):
+    s.adapter._responses[:0] = [
+        Message(
+            role=Role.ASSISTANT,
+            text="",
+            provider="fake",
+            model="fake-model",
+            tool_calls=[
+                ToolCall(id="a", name="deactivate_standing_mandate", arguments={"standing_mandate_id": STANDING_ID}),
+                ToolCall(id="b", name="propose_transfer", arguments={**RENT, "standing_mandate_id": STANDING_ID}),
+            ],
+        ),
+        _say("Stopped."),
+    ]
+    return s.loop.handle(USER, _user("Stop my monthly rent for good"))
+
+
+def test_a_run_in_the_same_turn_as_its_deactivation_is_refused_under_r12():
+    s = _setup([])
+    _create_standing(s, notice_hours=300, cancel_window_hours=24)
+
+    reply = _stop_and_run(s)
+
+    assert s.mandates[USER].standing_mandates[0].active is False
+    assert reply.receipt is None, reply.text
+    assert "receipt" not in _kinds(s.ledger)
+    decisions = [e.payload["decision"] for e in s.ledger.entries() if e.kind == "decision"]
+    assert decisions[-1]["allowed"] is False
+    assert decisions[-1]["rule_ids"] == ["R12"]
+
+
+def test_entries_after_a_new_version_in_the_same_turn_name_that_version():
+    s = _setup([])
+    _create_standing(s, notice_hours=300, cancel_window_hours=24)
+
+    _stop_and_run(s)
+
+    stopped = next(
+        e for e in s.ledger.entries() if e.kind == "execution" and "deactivated" in e.payload.get("result", {})
+    )
+    later = [e for e in s.ledger.entries() if e.seq > stopped.seq and e.kind in ("proposal", "decision")]
+    assert later
+    assert {e.payload["mandate_id"] for e in later} == {stopped.payload["result"]["deactivated"]["new_mandate_id"]}
