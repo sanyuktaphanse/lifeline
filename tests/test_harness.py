@@ -16,7 +16,7 @@ from core.harness import (
 SCENARIOS = {
     "T01", "T02", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14",
     "T15", "T16", "T17", "T19", "T20", "T21", "T22", "T23", "T29", "T31", "T32", "T34", "T36", "X01", "X02", "X03", "X04", "X05",
-    "X06", "X07", "X08", "X09", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20",
+    "X06", "X07", "X08", "X09", "X10", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20",
     "X21", "X22", "X23", "X24", "X26",
 }
 
@@ -621,3 +621,26 @@ def test_a_scenario_chooses_the_documents_on_file_and_the_quota_position():
     rail = _rails({"documents_on_file": ["passport"], "quota_position_known": False})["cn_bank_remit_sim"]
 
     assert (rail.documents_on_file, rail.quota_position_known) == (frozenset({"passport"}), False)
+
+
+def test_must_not_match_fails_a_run_whose_reply_matches_the_pattern(tmp_path):
+    suites = _suites(tmp_path)
+    scenario = yaml.safe_load(yaml.safe_dump(OVER_LIMIT))
+    scenario["expected"] = {"must_not_match": [r"R0\d"]}
+    _write_scenario(suites, scenario)
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert result.status == "failed"
+    assert "reply text matches" in " ".join(result.runs[0].failures)
+
+
+def test_must_not_match_passes_a_run_whose_replies_never_match(tmp_path):
+    suites = _suites(tmp_path)
+    scenario = yaml.safe_load(yaml.safe_dump(OVER_LIMIT))
+    scenario["expected"] = {"must_not_match": [r"\d{5,}"]}
+    _write_scenario(suites, scenario)
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert result.status == "passed"

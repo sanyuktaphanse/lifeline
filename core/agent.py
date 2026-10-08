@@ -2,6 +2,7 @@ import functools
 import hashlib
 import hmac
 import json
+import os
 import re
 import unicodedata
 from collections.abc import Callable
@@ -46,7 +47,9 @@ from contracts.schemas import (
 )
 from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
+from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
@@ -86,6 +89,21 @@ MAX_HISTORY_MESSAGES = 20
 # anchored after every T2 execution, and at least once in each hour of activity after the last anchor.
 ANCHOR_INTERVAL = timedelta(hours=1)
 ANCHOR_KIND = "anchor"
+
+# Source: docs/decisions.md, 8 October 2026. What the reply guard puts in place of a credential.
+REDACTION_MARKER = "[redacted]"
+# Source: .env.example. The secrets the engine, the anchor and the model adapter read from the
+# environment; their values, and the development fallbacks used when they are unset, never reach a reply.
+SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY")
+DEVELOPMENT_SECRETS = (DEVELOPMENT_CONFIRM_SECRET, DEVELOPMENT_ANCHOR_SECRET)
+# Source: this module. A secret shorter than this is not looked for, so an empty or one letter value
+# cannot blank out ordinary words.
+MIN_SECRET_CHARS = 8
+# A card number: thirteen or more digits, any of them fullwidth, with an optional space, no break
+# space, hyphen or invisible character between two digits, and no ASCII letter, digit or underscore
+# touching either end, so ids such as wise:card_01 and hashes are left alone.
+CARD_SEPARATOR = r"[ \u00a0\u202f\-\u2010\u2011\u2012\u2013\u200b\u200c\u200d\u2060\ufeff]?"
+CARD_NUMBER = re.compile(rf"(?<![\dA-Za-z_])\d(?:{CARD_SEPARATOR}\d){{12,}}(?![\dA-Za-z_])")
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -193,6 +211,12 @@ TOOLS = [
         [],
     ),
     _tool(
+        "export_credentials",
+        "Reveals stored credentials, such as card numbers, card tokens, or recovery codes.",
+        {"what": TEXT},
+        [],
+    ),
+    _tool(
         "verify_ledger",
         "Show today's ledger entries for the student, check the ledger's hash chain, and report its latest anchor.",
         {},
@@ -214,6 +238,7 @@ TOOL_ACTIONS = {
     "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
     "deactivate_standing_mandate": ActionType.DEACTIVATE_STANDING_MANDATE,
     "verify_ledger": ActionType.VERIFY_LEDGER,
+    "export_credentials": ActionType.EXPORT_CREDENTIALS,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -236,6 +261,7 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
@@ -307,6 +333,7 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
@@ -378,6 +405,7 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
@@ -878,9 +906,11 @@ class AgentLoop:
         for _ in range(MAX_MODEL_CALLS_PER_TURN):
             answer = self._adapter.complete(messages, TOOLS)
             trail.provider, trail.model = answer.provider, answer.model
-            turn_messages.append(_remembered(answer))
             if not answer.tool_calls:
-                return self._finish(trail, turn_messages, self._reply(trail, lang, answer.text, decision=decision))
+                reply = self._reply(trail, lang, answer.text, decision=decision)
+                turn_messages.append(_remembered(answer.model_copy(update={"text": reply.text})))
+                return self._finish(trail, turn_messages, reply)
+            turn_messages.append(_remembered(answer))
             messages.append(answer)
             for index, call in enumerate(answer.tool_calls):
                 calls += 1
@@ -963,7 +993,9 @@ class AgentLoop:
                 },
             )
         if decision.tier is Tier.T3:
-            return self._reply(trail, lang, _text(lang, "settings"), decision=decision)
+            name = "credentials" if action.type is ActionType.EXPORT_CREDENTIALS else "settings"
+            text = _text(lang, name, reasons=" ".join(decision.reasons))
+            return self._reply(trail, lang, text, decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
         if action.type is ActionType.TRANSFER:
@@ -1736,6 +1768,7 @@ class AgentLoop:
         receipt: Receipt | None = None,
         freeze: FreezeResult | None = None,
     ) -> AgentReply:
+        text = self._guarded(trail, text)
         return AgentReply(
             text=text,
             lang=lang,
@@ -1747,6 +1780,35 @@ class AgentLoop:
             provider=trail.provider,
             model=trail.model,
         )
+
+    def _issued_tokens(self) -> set[str]:
+        """Every confirmation token the loop has issued: waiting, used, or closed."""
+        return {*self._pending, *self._consumed, *self._closed}
+
+    @staticmethod
+    def _secret_values() -> set[str]:
+        values = {os.environ.get(name, "").strip() for name in SECRET_VARIABLES} | set(DEVELOPMENT_SECRETS)
+        return {value for value in values if len(value) >= MIN_SECRET_CHARS}
+
+    def _guarded(self, trail: _Trail, text: str) -> str:
+        """Text with every card number, issued token and secret value replaced by the marker.
+
+        A note of kind redaction records which classes were found, never a value. Source:
+        docs/decisions.md, 8 October 2026. Every reply passes here before it leaves the loop.
+        """
+        classes: list[str] = []
+        for name, values in (("confirmation_token", self._issued_tokens()), ("secret", self._secret_values())):
+            # Longest first, so a value that contains another is replaced whole.
+            for value in sorted(values, key=len, reverse=True):
+                text, count = re.subn(re.escape(value), REDACTION_MARKER, text, flags=re.IGNORECASE)
+                if count and name not in classes:
+                    classes.append(name)
+        text, count = CARD_NUMBER.subn(REDACTION_MARKER, text)
+        if count:
+            classes.append("card_number")
+        if classes:
+            self._write(trail, "note", {"kind": "redaction", "classes": classes})
+        return text
 
     def _anchor_if_due(self, user_id: str) -> None:
         """Anchor the ledger head after a T2 execution, or when an hour has passed since the last anchor
@@ -1949,6 +2011,7 @@ class AgentLoop:
     ) -> RescueReply:
         # Rescue messages never join the conversation memory, so the identity answer never reaches a
         # model; the turn entry still records that the call happened.
+        text = self._guarded(trail, " ".join(out.texts))
         self._write(trail, "turn", {"messages": 0})
         after = self._machine.state(user_id)
         rescue = self._rescues.get(user_id)
@@ -1956,7 +2019,7 @@ class AgentLoop:
         plan = self._plans[user_id]
         freeze = rescue.freeze if rescue is not None else None
         return RescueReply(
-            text=" ".join(out.texts),
+            text=text,
             lang=lang,
             confirmation=out.confirmation,
             decision=out.decision,

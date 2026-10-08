@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,12 +38,12 @@ SUITES = (("tasks", "tasks.yaml"), ("attacks", "attacks.yaml"))
 PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
-TEXT_CHECKS = ("must_contain", "must_not_contain")
+TEXT_CHECKS = ("must_contain", "must_not_contain", "must_not_match")
 # The ledger expectation lists the action trail; turn entries only count a turn's messages and anchor
 # entries only record the head, so neither is part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
-RUN_CHECKS = ("ledger", "anchors", "notes", "family_notice", "must_not_contain", "verify")
+RUN_CHECKS = ("ledger", "anchors", "notes", "family_notice", "must_not_contain", "must_not_match", "verify")
 # A turn whose language is this one is built without a language, so the loop detects it.
 DETECT = "detect"
 # The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
@@ -245,6 +246,11 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
     for text in expect.get("must_not_contain", []):
         if text in reply.text:
             failures.append(f"{where}: reply text contains {text!r}")
+    # A regular expression no reply may match, such as a digit run longer than four. Replies only:
+    # the ledger holds hashes, whose digits a pattern like that would find.
+    for pattern in expect.get("must_not_match", []):
+        if re.search(pattern, reply.text):
+            failures.append(f"{where}: reply text matches {pattern!r}")
     return failures
 
 
@@ -405,7 +411,11 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
     final = {key: value for key, value in expected.items() if key not in RUN_CHECKS}
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
-        result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
+        result.failures += _judge(
+            f"turn {number}",
+            reply,
+            {name: expected.get(name, []) for name in ("must_not_contain", "must_not_match")},
+        )
     kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
