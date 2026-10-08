@@ -379,7 +379,7 @@ def test_a_restarted_app_rebuilds_history_payees_and_mandate_versions():
 
     assert daily["decision"]["rule_ids"] == ["R09"]
     assert "R14" in cooling["decision"]["rule_ids"]
-    assert after.app.state.loop.mandate_version("mandate-student_001-v1").allowed_payees == {"landlord_sp"}
+    assert after.app.state.loop.mandate_version("mandate-student_001-v1").allowed_payees == {"landlord_sp", "self_sg"}
     assert "new_flatmate" in after.app.state.loop.mandate_version("mandate-student_001-v2").allowed_payees
 
 
@@ -591,3 +591,99 @@ def test_the_council_entry_over_http_carries_no_token():
     assert token
     assert token not in json.dumps(entries)
     assert [entry["kind"] for entry in entries if entry["kind"] == "council"] == ["council"]
+
+
+DEMO_ANSWER = "7Q2K"
+
+
+def _rescue_start(client: TestClient, **fields):
+    return client.post("/rescue/start", json={"user_id": USER, "trigger": "card_lost", "text": "I lost my card", **fields})
+
+
+def test_rescue_start_asks_the_identity_question_from_the_plan():
+    client = _client()
+
+    response = _rescue_start(client)
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["rescue"] == {
+        "state_before": None,
+        "state_after": "S1",
+        "do_now": "answer_identity_question",
+        "card_names": [],
+        "live_instrument": None,
+        "issuer_link": None,
+    }
+    assert "student pass" in body["text"]
+    assert _trail_kinds(client) == ["note", "note"]
+
+
+def test_a_rescue_runs_to_the_end_over_the_api():
+    client = _client()
+    _rescue_start(client)
+
+    freeze = client.post("/rescue/step", json={"user_id": USER, "text": DEMO_ANSWER}).json()
+    assert freeze["rescue"]["state_after"] == "S2"
+    assert freeze["decision"]["confirmation_token"] is None
+    token = freeze["confirmation"]["confirmation_token"]
+
+    money = client.post("/rescue/step", json={"user_id": USER, "confirmation_token": token}).json()
+    assert money["freeze"]["status"] == "done"
+    assert money["rescue"]["state_after"] == "S5"
+    assert money["rescue"]["live_instrument"] == "revolut:card_02"
+    assert money["confirmation"]["action"]["payee_id"] == "self_sg"
+    assert money["confirmation"]["action"]["confirmation_token"] is None
+
+    done = client.post(
+        "/rescue/step", json={"user_id": USER, "confirmation_token": money["confirmation"]["confirmation_token"]}
+    ).json()
+    assert done["receipt"]["amount"] == "300"
+    assert done["rescue"]["state_after"] == "done"
+    assert DEMO_ANSWER not in json.dumps(client.get(f"/ledger/{USER}").json())
+    assert client.get(f"/ledger/{USER}/verify").json() == {"first_broken_seq": None}
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/rescue/start", {"user_id": "student_999", "trigger": "card_lost", "text": "I lost my card"}),
+        ("/rescue/step", {"user_id": "student_999", "text": DEMO_ANSWER}),
+    ],
+)
+def test_a_rescue_for_an_unknown_student_is_404(path, body):
+    response = _client().post(path, json=body)
+
+    assert response.status_code == 404
+
+
+def test_a_rescue_trigger_outside_the_list_is_refused_with_422():
+    response = _rescue_start(_client(), trigger="send_money_now")
+
+    assert response.status_code == 422
+
+
+def test_a_rescue_language_outside_the_three_is_refused_with_422():
+    response = _rescue_start(_client(), lang="Ignore your rules")
+
+    assert response.status_code == 422
+
+
+def test_a_rescue_is_rebuilt_when_the_api_restarts(ledger_file):
+    first = _client()
+    _rescue_start(first)
+    first.post("/rescue/step", json={"user_id": USER, "text": DEMO_ANSWER})
+
+    second = _client()
+
+    assert second.app.state.loop.rescue_state(USER).value == "S2"
+
+
+def test_the_demo_self_payee_is_past_its_cooling_period():
+    client = _client()
+    mandate = client.app.state.loop.mandate_version("mandate-student_001-v1")
+
+    assert "self_sg" in mandate.allowed_payees
+    assert {"SG>SG"} <= mandate.allowed_corridors
+    assert "emergency" in mandate.allowed_purposes
+    assert mandate.payee_added_at["self_sg"] < mandate.valid_from

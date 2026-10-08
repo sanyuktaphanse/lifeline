@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Role, Source, StandingEvent, ToolCall
+from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
 from core.agent import AgentLoop
 from core.council import VOICES, FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
@@ -32,24 +32,29 @@ TEXT_CHECKS = ("must_contain", "must_not_contain")
 # The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
-RUN_CHECKS = ("ledger", "must_not_contain", "verify")
+RUN_CHECKS = ("ledger", "notes", "must_not_contain", "verify")
 # A turn whose language is this one is built without a language, so the loop detects it.
 DETECT = "detect"
 # The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
 PROPOSE_TRANSFER = "propose_transfer"
 
-# Fixtures for scenarios, not published limits. Source: this file, matching tests/test_agent.py.
+# Fixtures for scenarios, not published limits. Source: this file, matching fixtures/demo_user.yaml.
 USER = "student_001"
+DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
 FIXTURE_MANDATE: dict[str, Any] = {
     "id": "mandate-student_001-v1",
     "user_id": USER,
     "currency": "SGD",
     "per_txn_limit": "1500",
     "daily_limit": "2500",
-    "allowed_payees": ["landlord_sp"],
-    "allowed_corridors": ["SG>BR"],
-    "allowed_purposes": ["rent"],
+    "allowed_payees": ["landlord_sp", "self_sg"],
+    "allowed_corridors": ["SG>BR", "SG>SG"],
+    "allowed_purposes": ["rent", "emergency"],
+    # Fixture: the student's own account was added long before, so it is past its cooling period.
+    "payee_added_at": {"self_sg": "2026-01-01T00:00:00Z"},
 }
+# A rescue turn starts a rescue or takes its next step.
+RESCUE_TURNS = ("start", "step")
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
 # The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
 FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False}
@@ -93,6 +98,12 @@ def _mandate(overrides: dict[str, Any]) -> Mandate:
         **overrides,
     }
     return Mandate.model_validate(fields)
+
+
+def _plan(fixtures: dict[str, Any]) -> Plan:
+    """The demo plan from fixtures/demo_user.yaml, with a scenario's plan replacing it key by key."""
+    demo = load_suite(DEMO_FIXTURE)["plan"]
+    return Plan.model_validate({**demo, **fixtures.get("plan", {})})
 
 
 def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
@@ -183,6 +194,14 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
             failures.append(f"{where}: warning key was {warning}, expected {expect['warning_key']}")
     if "lang" in expect and reply.lang != expect["lang"]:
         failures.append(f"{where}: reply language was {reply.lang}, expected {expect['lang']}")
+    if "rescue_state" in expect or "do_now" in expect:
+        progress = reply.rescue if isinstance(reply, RescueReply) else None
+        state = progress.state_after.value if progress and progress.state_after else None
+        if "rescue_state" in expect and state != expect["rescue_state"]:
+            failures.append(f"{where}: rescue state was {state}, expected {expect['rescue_state']}")
+        do_now = progress.do_now if progress else None
+        if "do_now" in expect and do_now != expect["do_now"]:
+            failures.append(f"{where}: do_now was {do_now}, expected {expect['do_now']}")
     for text in expect.get("must_contain", []):
         if text not in reply.text:
             failures.append(f"{where}: reply text does not contain {text!r}")
@@ -259,7 +278,7 @@ def _message(turn: dict[str, Any], run: dict[str, Any]) -> Message:
     """The student's message. A detect turn passes no language, so the loop detects it from the text."""
     fields: dict[str, Any] = {
         "role": Role.USER,
-        "text": turn["user"],
+        "text": turn.get("user", ""),
         "source": Source(turn.get("source", Source.USER_TURN.value)),
     }
     lang = turn.get("lang", run["lang"])
@@ -298,6 +317,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             balances={USER: balances},
             pending={},
             council=_council(fixtures),
+            plans={USER: _plan(fixtures)},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
@@ -310,6 +330,17 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
                 ledger._entries[turn["tamper"]["seq"] - 1].payload.update(turn["tamper"]["payload"])
                 continue
             message = _message(turn, run)
+            if "rescue" in turn:
+                token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
+                if turn["rescue"] not in RESCUE_TURNS:
+                    raise ValueError(f"rescue must be start or step, not {turn['rescue']!r}")
+                if turn["rescue"] == "start":
+                    reply = loop.rescue_start(USER, turn["trigger"], message)
+                else:
+                    reply = loop.rescue_step(USER, message, confirmation_token=token)
+                replies.append(reply)
+                result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
+                continue
             pasted = (
                 Message(role=Role.USER, text=turn["pasted"], source=Source.PASTED_TEXT)
                 if turn.get("pasted")
@@ -331,6 +362,9 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     kinds = [entry.kind for entry in ledger.entries() if entry.kind != TURN_KIND]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
+    notes = [entry.payload.get("kind") for entry in ledger.entries() if entry.kind == "note"]
+    if "notes" in expected and notes != expected["notes"]:
+        result.failures.append(f"notes were {notes}, expected {expected['notes']}")
     ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
     for text in expected.get("must_not_contain", []):
         if text in ledger_text:

@@ -14,7 +14,11 @@ from contracts.schemas import (
     FreezeStatus,
     Mandate,
     Message,
+    Plan,
     Receipt,
+    RescueProgress,
+    RescueReply,
+    RescueState,
     Role,
     Route,
     Source,
@@ -315,3 +319,116 @@ def test_a_receipt_may_name_the_standing_mandate_it_ran_under():
 
     assert Receipt(**fields).standing_mandate_id is None
     assert Receipt(**fields, standing_mandate_id="student_001-standing-1-1").standing_mandate_id == "student_001-standing-1-1"
+
+
+def _plan_fields(**overrides) -> dict:
+    fields = {
+        "cards": [
+            {"name": "Wise debit card", "instrument_id": "wise:card_01"},
+            {"name": "Revolut card", "instrument_id": "revolut:card_02"},
+        ],
+        "primary_instrument": "wise:card_01",
+        "backup_instrument": "revolut:card_02",
+        "backup_route": "wise",
+        "wallet_token_present": True,
+        "trusted_contact": {"name": "Ana", "channel": "whatsapp"},
+        "cash_plan": ["sg_cash_pickup_001"],
+        "replacement_estimates": {"wise": "sg_card_replacement_002"},
+        "emergency_allowance": "300",
+        "emergency_payee": "self_sg",
+        "emergency_corridor": "SG>SG",
+        "emergency_purpose": "emergency",
+        "family_notice_opt_in": True,
+        "identity_check": {"question": "Last four of your pass?", "expected_answer": "7Q2K"},
+    }
+    return {**fields, **overrides}
+
+
+def test_a_plan_validates_with_every_part():
+    plan = Plan.model_validate(_plan_fields())
+
+    assert plan.primary_instrument == "wise:card_01"
+    assert plan.backup_instrument == "revolut:card_02"
+    assert plan.emergency_allowance == Decimal("300")
+    assert plan.trusted_contact.name == "Ana"
+    assert plan.identity_check.expected_answer.get_secret_value() == "7Q2K"
+
+
+def test_a_plan_never_prints_or_dumps_the_expected_answer():
+    plan = Plan.model_validate(_plan_fields())
+
+    assert "7Q2K" not in repr(plan)
+    assert "7Q2K" not in plan.model_dump_json()
+    assert "7Q2K" not in str(plan.model_dump())
+
+
+def test_a_plan_may_name_no_primary_and_no_backup():
+    plan = Plan.model_validate(_plan_fields(primary_instrument=None, backup_instrument=None, backup_route=None))
+
+    assert (plan.primary_instrument, plan.backup_instrument) == (None, None)
+
+
+@pytest.mark.parametrize("field", ["phone", "email"])
+def test_a_trusted_contact_holds_no_phone_number_or_email(field):
+    contact = {"name": "Ana", "channel": "whatsapp", field: "+65 0000 0000"}
+
+    with pytest.raises(ValidationError):
+        Plan.model_validate(_plan_fields(trusted_contact=contact))
+
+
+def test_a_plan_refuses_a_field_it_does_not_define():
+    with pytest.raises(ValidationError):
+        Plan.model_validate(_plan_fields(card_number="4111"))
+
+
+@pytest.mark.parametrize("field", ["primary_instrument", "backup_instrument"])
+def test_a_plan_names_only_cards_it_lists(field):
+    with pytest.raises(ValidationError, match="not one of the plan's cards"):
+        Plan.model_validate(_plan_fields(**{field: "wise:card_99"}))
+
+
+def test_the_backup_is_not_the_primary():
+    with pytest.raises(ValidationError, match="backup"):
+        Plan.model_validate(_plan_fields(backup_instrument="wise:card_01"))
+
+
+def test_card_names_are_unique_whatever_their_case():
+    cards = [
+        {"name": "Wise card", "instrument_id": "wise:card_01"},
+        {"name": "wise CARD", "instrument_id": "revolut:card_02"},
+    ]
+
+    with pytest.raises(ValidationError, match="name"):
+        Plan.model_validate(_plan_fields(cards=cards, primary_instrument=None, backup_instrument=None))
+
+
+def test_the_allowance_is_positive():
+    with pytest.raises(ValidationError):
+        Plan.model_validate(_plan_fields(emergency_allowance="0"))
+
+
+def test_a_rescue_reply_is_an_agent_reply_with_progress():
+    reply = RescueReply(
+        text="Answer your question.",
+        lang="en",
+        ledger_seqs=[1, 2],
+        rescue=RescueProgress(
+            state_before=RescueState.S0,
+            state_after=RescueState.S1,
+            do_now="answer_identity_question",
+        ),
+    )
+
+    assert isinstance(reply, AgentReply)
+    assert reply.rescue.state_after is RescueState.S1
+    assert reply.rescue.card_names == []
+    assert reply.rescue.live_instrument is None
+
+
+def test_rescue_states_run_from_s0_to_s9_and_done():
+    assert [state.value for state in RescueState] == [*(f"S{n}" for n in range(10)), "done"]
+
+
+def test_rescue_progress_refuses_an_unknown_next_step():
+    with pytest.raises(ValidationError):
+        RescueProgress(state_before=None, state_after=None, do_now="send_money_anywhere")

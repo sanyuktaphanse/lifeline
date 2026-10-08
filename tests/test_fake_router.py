@@ -136,3 +136,15 @@ def test_precheck_for_an_unscripted_kind_returns_an_empty_result():
         ready=None,
         rule_ids=[],
     )
+
+
+def test_sg_to_sg_returns_one_real_wise_route_in_singapore_dollars():
+    routes = _quote("SG>SG", amount="300", purpose="emergency")
+
+    assert [route.rail for route in routes] == ["wise"]
+    route = routes[0]
+    assert (route.currency_from, route.currency_to) == ("SGD", "SGD")
+    assert route.amount == Decimal("300")
+    assert route.simulated is False
+    assert route.blocked_reason is None
+    assert route.rate_source == "fixture"

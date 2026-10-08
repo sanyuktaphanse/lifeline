@@ -1,3 +1,4 @@
+import hmac
 import json
 import re
 from dataclasses import dataclass, field
@@ -22,7 +23,12 @@ from contracts.schemas import (
     FreezeStatus,
     Mandate,
     Message,
+    Plan,
     Receipt,
+    RescueProgress,
+    RescueReply,
+    RescueState,
+    RescueTrigger,
     Role,
     Route,
     RouteStatus,
@@ -35,8 +41,10 @@ from contracts.schemas import (
 )
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
+from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
+from rails.knowledge.loader import load_knowledge
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -219,6 +227,46 @@ TEXTS = {
         "council": "The council chose {rail}. {reason}",
         "council_runner_up": "The council was divided. The next choice was {rail}. {reason}",
         "council_wait": "The council advised waiting. {reason}",
+        "rescue_started": "Lifeline started a rescue. First answer the question you set before you left: {question}",
+        "rescue_not_started": "Lifeline starts a rescue only from your own words, so nothing started.",
+        "rescue_in_progress": "A rescue is already in progress, so nothing restarted.",
+        "rescue_none": "No rescue is in progress.",
+        "identity_failed": "That answer does not match your plan, so Lifeline did nothing. Try again: {question}",
+        "identity_verified": "That answer matches your plan.",
+        "choose_card": "Which card is it? Answer with its name as written in your plan: {names}.",
+        "card_unmatched": "No card in your plan has that name, so nothing changed. Answer with one of: {names}.",
+        "not_this_step": "That confirmation does not belong to this step of the rescue, so nothing changed.",
+        "wallet_present": "Your plan says a phone wallet holds this card. Remove the card from the wallet on your phone, because Lifeline cannot do that for you.",
+        "wallet_absent": "Your plan says no phone wallet holds this card.",
+        "rerouted": "From now on use your backup card {backup}.",
+        "money_offer": "If you need money now, confirm this transfer; if not, continue without it.",
+        "money_skipped": "Lifeline sent no emergency money.",
+        "cash_intro": "Ways to get cash:",
+        "cash_none": "Lifeline has no sourced cash pickup option on file.",
+        "cash_missing": "Lifeline has no sourced option on file for {ids}.",
+        "contact": "Message for {person} on {channel}: I lost my card and need help getting cash. Please call me as soon as you can.",
+        "replacement_link": "Order a replacement card in the issuer's app: {link}",
+        "replacement_no_link": "Lifeline has no sourced link to the issuer's app. Order a replacement card in the issuer's app.",
+        "estimate_none": "Lifeline has no sourced estimate of when a new card arrives.",
+        "standing_stopped": "Lifeline stopped all {count} of your standing payments, because it cannot tell which card each one uses. Set them up again once your new card works.",
+        "standing_none": "You have no standing payments to stop.",
+        "notice_written": "Lifeline wrote a notice for {person}, and the app delivers it.",
+        "notice_skipped": "You chose not to notify your family, so no notice was written.",
+        "rescue_done": "The rescue is complete.",
+        "notice_intro": "Automatic notice from Lifeline about a card rescue.",
+        "notice_frozen": "Card {instrument} was frozen.",
+        "notice_not_supported": "Lifeline could not freeze card {instrument} because the issuer does not allow it, and the student was sent to the issuer's app to freeze it.",
+        "notice_freeze_failed": "Lifeline could not freeze card {instrument}.",
+        "notice_not_frozen": "No card was frozen through Lifeline.",
+        "notice_rerouted": "Payments now use the backup card {instrument}.",
+        "notice_sent": "{amount} {currency} was sent to {payee}.",
+        "notice_simulated": "That transfer was a simulation and no real money moved.",
+        "notice_refused": "Lifeline refused an action under rules {rules}.",
+        "notice_not_confirmed": "A confirmation was not completed, so that action did not happen.",
+        "notice_injection": "A request to move money that did not come from the student was blocked.",
+        "notice_identity_failed": "A wrong answer was given to the safety question.",
+        "notice_money_skipped": "The student did not take emergency money.",
+        "notice_standing": "{count} standing payments were stopped.",
     },
     "pt": {
         "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
@@ -243,6 +291,46 @@ TEXTS = {
         "council": "O conselho escolheu {rail}. {reason}",
         "council_runner_up": "O conselho ficou dividido. A segunda opção foi {rail}. {reason}",
         "council_wait": "O conselho aconselhou esperar. {reason}",
+        "rescue_started": "O Lifeline iniciou um resgate. Primeiro responda à pergunta que você definiu antes de viajar: {question}",
+        "rescue_not_started": "O Lifeline só inicia um resgate a partir das suas próprias palavras, então nada foi iniciado.",
+        "rescue_in_progress": "Já há um resgate em andamento, então nada foi reiniciado.",
+        "rescue_none": "Nenhum resgate está em andamento.",
+        "identity_failed": "Essa resposta não corresponde ao seu plano, então o Lifeline não fez nada. Tente de novo: {question}",
+        "identity_verified": "Essa resposta corresponde ao seu plano.",
+        "choose_card": "Qual é o cartão? Responda com o nome escrito no seu plano: {names}.",
+        "card_unmatched": "Nenhum cartão do seu plano tem esse nome, então nada mudou. Responda com um destes: {names}.",
+        "not_this_step": "Essa confirmação não pertence a esta etapa do resgate, então nada mudou.",
+        "wallet_present": "Seu plano diz que uma carteira do celular guarda este cartão. Remova o cartão da carteira do celular, porque o Lifeline não pode fazer isso por você.",
+        "wallet_absent": "Seu plano diz que nenhuma carteira do celular guarda este cartão.",
+        "rerouted": "De agora em diante use o seu cartão reserva {backup}.",
+        "money_offer": "Se você precisa de dinheiro agora, confirme esta transferência; se não, continue sem ela.",
+        "money_skipped": "O Lifeline não enviou dinheiro de emergência.",
+        "cash_intro": "Formas de conseguir dinheiro em espécie:",
+        "cash_none": "O Lifeline não tem nenhuma opção de saque com fonte registrada.",
+        "cash_missing": "O Lifeline não tem nenhuma opção com fonte registrada para {ids}.",
+        "contact": "Mensagem para {person} pelo {channel}: perdi meu cartão e preciso de ajuda para conseguir dinheiro. Por favor me ligue assim que puder.",
+        "replacement_link": "Peça um cartão novo no app do emissor: {link}",
+        "replacement_no_link": "O Lifeline não tem um link com fonte para o app do emissor. Peça um cartão novo no app do emissor.",
+        "estimate_none": "O Lifeline não tem uma estimativa com fonte de quando um cartão novo chega.",
+        "standing_stopped": "O Lifeline interrompeu todas as suas {count} ordens permanentes, porque não consegue saber qual cartão cada uma usa. Configure-as de novo quando o cartão novo funcionar.",
+        "standing_none": "Você não tem ordens permanentes para interromper.",
+        "notice_written": "O Lifeline escreveu um aviso para {person}, e o app o entrega.",
+        "notice_skipped": "Você escolheu não avisar a sua família, então nenhum aviso foi escrito.",
+        "rescue_done": "O resgate terminou.",
+        "notice_intro": "Aviso automático do Lifeline sobre o resgate de um cartão.",
+        "notice_frozen": "O cartão {instrument} foi bloqueado.",
+        "notice_not_supported": "O Lifeline não conseguiu bloquear o cartão {instrument} porque o emissor não permite, e o estudante foi enviado ao app do emissor para bloqueá-lo.",
+        "notice_freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}.",
+        "notice_not_frozen": "Nenhum cartão foi bloqueado pelo Lifeline.",
+        "notice_rerouted": "Os pagamentos agora usam o cartão reserva {instrument}.",
+        "notice_sent": "{amount} {currency} foram enviados para {payee}.",
+        "notice_simulated": "Essa transferência foi uma simulação e nenhum dinheiro real foi movimentado.",
+        "notice_refused": "O Lifeline recusou uma ação pelas regras {rules}.",
+        "notice_not_confirmed": "Uma confirmação não foi concluída, então essa ação não aconteceu.",
+        "notice_injection": "Um pedido para movimentar dinheiro que não veio do estudante foi bloqueado.",
+        "notice_identity_failed": "Uma resposta errada foi dada à pergunta de segurança.",
+        "notice_money_skipped": "O estudante não recebeu dinheiro de emergência.",
+        "notice_standing": "{count} ordens permanentes foram interrompidas.",
     },
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
@@ -267,6 +355,46 @@ TEXTS = {
         "council": "顾问团选择了 {rail}。{reason}",
         "council_runner_up": "顾问团意见不一致。第二选择是 {rail}。{reason}",
         "council_wait": "顾问团建议先等一等。{reason}",
+        "rescue_started": "Lifeline 已启动救援。请先回答你出发前设置的问题：{question}",
+        "rescue_not_started": "Lifeline 只会根据你本人的话启动救援，因此没有启动任何操作。",
+        "rescue_in_progress": "救援已在进行中，因此没有重新开始。",
+        "rescue_none": "目前没有进行中的救援。",
+        "identity_failed": "该答案与你的计划不符，因此 Lifeline 没有执行任何操作。请重试：{question}",
+        "identity_verified": "该答案与你的计划相符。",
+        "choose_card": "是哪张卡？请用你计划中写的名称回答：{names}。",
+        "card_unmatched": "你的计划中没有这个名称的卡，因此没有任何更改。请从以下名称中选择：{names}。",
+        "not_this_step": "该确认不属于救援的这一步，因此没有任何更改。",
+        "wallet_present": "你的计划显示手机钱包中存有这张卡。请从手机钱包中移除这张卡，因为 Lifeline 无法代你操作。",
+        "wallet_absent": "你的计划显示手机钱包中没有这张卡。",
+        "rerouted": "从现在起请使用你的备用卡 {backup}。",
+        "money_offer": "如果你现在需要用钱，请确认这笔转账；如果不需要，请在不转账的情况下继续。",
+        "money_skipped": "Lifeline 没有发送紧急资金。",
+        "cash_intro": "获取现金的方式：",
+        "cash_none": "Lifeline 没有记录任何有来源的现金提取方式。",
+        "cash_missing": "Lifeline 没有记录 {ids} 的有来源方式。",
+        "contact": "发给 {person}（{channel}）的消息：我的卡丢了，需要帮助获取现金。请尽快给我打电话。",
+        "replacement_link": "请在发卡机构的应用中申请补办新卡：{link}",
+        "replacement_no_link": "Lifeline 没有发卡机构应用的有来源链接。请在发卡机构的应用中申请补办新卡。",
+        "estimate_none": "Lifeline 没有关于新卡何时送达的有来源估计。",
+        "standing_stopped": "Lifeline 已停止你全部 {count} 项定期付款，因为它无法判断每项付款使用哪张卡。新卡可用后请重新设置。",
+        "standing_none": "你没有需要停止的定期付款。",
+        "notice_written": "Lifeline 已为 {person} 写好通知，由应用发送。",
+        "notice_skipped": "你选择不通知家人，因此没有写通知。",
+        "rescue_done": "救援已完成。",
+        "notice_intro": "Lifeline 关于卡片救援的自动通知。",
+        "notice_frozen": "卡片 {instrument} 已被冻结。",
+        "notice_not_supported": "Lifeline 无法冻结卡片 {instrument}，因为发卡机构不允许，学生已被引导到发卡机构的应用中冻结。",
+        "notice_freeze_failed": "Lifeline 无法冻结卡片 {instrument}。",
+        "notice_not_frozen": "没有卡片通过 Lifeline 被冻结。",
+        "notice_rerouted": "付款现在使用备用卡 {instrument}。",
+        "notice_sent": "{amount} {currency} 已发送给 {payee}。",
+        "notice_simulated": "该转账是一次模拟，没有真实资金转出。",
+        "notice_refused": "Lifeline 根据规则 {rules} 拒绝了一项操作。",
+        "notice_not_confirmed": "有一项确认未完成，因此该操作没有发生。",
+        "notice_injection": "一项并非来自学生本人的转账请求已被阻止。",
+        "notice_identity_failed": "有人对安全问题给出了错误答案。",
+        "notice_money_skipped": "学生没有领取紧急资金。",
+        "notice_standing": "{count} 项定期付款已被停止。",
     },
 }
 
@@ -356,6 +484,49 @@ class _Trail:
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+
+
+@dataclass
+class _Rescue:
+    """What a rescue in progress knows beyond its state: its language, where it began, the card."""
+
+    lang: str
+    started_seq: int
+    instrument: str | None = None
+    freeze: FreezeResult | None = None
+
+
+@dataclass
+class _Outcome:
+    """What one rescue call gathers for its reply, from every step it ran."""
+
+    texts: list[str] = field(default_factory=list)
+    seqs: list[int] = field(default_factory=list)
+    calls: int = 0
+    decision: Decision | None = None
+    confirmation: ConfirmationRequest | None = None
+    receipt: Receipt | None = None
+    freeze: FreezeResult | None = None
+
+    def say(self, text: str) -> None:
+        if text:
+            self.texts.append(text)
+
+    def take(self, reply: AgentReply, own_trail: bool = True) -> None:
+        self.say(reply.text)
+        if not own_trail:
+            self.seqs += reply.ledger_seqs
+        for name in ("decision", "confirmation", "receipt", "freeze"):
+            if getattr(reply, name) is not None:
+                setattr(self, name, getattr(reply, name))
+
+
+def _from_student(message: Message) -> bool:
+    return message.role is Role.USER and message.source is Source.USER_TURN
+
+
+def _normal(answer: str) -> bytes:
+    return answer.strip().casefold().encode("utf-8")
 
 
 def _next_version(mandate_id: str) -> str:
@@ -481,8 +652,13 @@ class AgentLoop:
         pending: dict[str, PendingConfirmation],
         conversations: ConversationStore | None = None,
         council: Council | None = None,
+        plans: dict[str, Plan] | None = None,
     ) -> None:
         self._adapter = adapter
+        self._plans = dict(plans or {})
+        self._machine = RescueMachine()
+        self._rescues: dict[str, _Rescue] = {}
+        self._live: dict[str, str] = {}
         self._council = council
         self._engine = engine
         self._ledger = ledger
@@ -909,11 +1085,8 @@ class AgentLoop:
         return URGENCY != "normal"
 
     def _in_rescue(self, user_id: str) -> bool:
-        """Whether the student is in a rescue state.
-
-        Stage 6 builds the rescue state and decides this for real. Until then no student is in one.
-        """
-        return False
+        """Whether the student is in a rescue that has started and not finished."""
+        return self._machine.active(user_id)
 
     @staticmethod
     def _route_named(routes: list[Route], rail: str | None) -> Route | None:
@@ -1421,6 +1594,483 @@ class AgentLoop:
             model=trail.model,
         )
 
+    # The rescue. Source: docs/decisions.md, 8 October 2026. Every effect below is an action
+    # through the mandate engine or a ledger note; the state machine in core/rescue.py only says
+    # which step comes next. No step calls the model.
+
+    def rescue_state(self, user_id: str) -> RescueState | None:
+        return self._machine.state(user_id)
+
+    def live_instrument(self, user_id: str) -> str | None:
+        """The backup card a rescue moved the student onto, or nothing if no rescue has."""
+        return self._live.get(user_id)
+
+    def rescue_start(self, user_id: str, trigger: str, message: Message) -> RescueReply:
+        plan = self._plan(user_id)
+        trigger = RescueTrigger(trigger)
+        lang = message.lang if "lang" in message.model_fields_set else detect_lang(message.text)
+        trail = self._attempt_trail(user_id, self._mandates[user_id])
+        before = self._machine.state(user_id)
+        out = _Outcome()
+        if not _from_student(message):
+            self._write(
+                trail,
+                "note",
+                {"kind": "rescue_trigger_ignored", "trigger": trigger.value, "source": message.source.value},
+            )
+            out.say(_text(lang, "rescue_not_started"))
+        elif self._machine.active(user_id):
+            out.say(_text(lang, "rescue_in_progress"))
+        else:
+            self._machine.start(user_id)
+            self._write(
+                trail,
+                "note",
+                {"kind": "rescue_started", "trigger": trigger.value, "source": message.source.value, "lang": lang},
+            )
+            self._rescues[user_id] = _Rescue(lang, trail.seqs[-1], plan.primary_instrument)
+            self._advance(trail, user_id, "detected")
+            out.say(_text(lang, "rescue_started", question=plan.identity_check.question))
+        return self._rescue_reply(trail, user_id, lang, before, out)
+
+    def rescue_step(
+        self, user_id: str, message: Message, confirmation_token: str | None = None
+    ) -> RescueReply:
+        plan = self._plan(user_id)
+        rescue = self._rescues.get(user_id)
+        if "lang" in message.model_fields_set:
+            lang = message.lang
+        else:
+            lang = rescue.lang if rescue is not None else detect_lang(message.text)
+        trail = self._attempt_trail(user_id, self._mandates[user_id])
+        before = self._machine.state(user_id)
+        out = _Outcome()
+        if not self._machine.active(user_id) or rescue is None:
+            out.say(_text(lang, "rescue_none"))
+        elif not _from_student(message):
+            self._step_from_data(user_id, plan, rescue, lang, trail, out, message.source)
+        elif before is RescueState.S1:
+            self._check_identity(user_id, plan, rescue, lang, trail, out, message.text)
+        elif before is RescueState.S2 and confirmation_token is not None:
+            self._confirm_freeze(user_id, plan, rescue, lang, trail, out, confirmation_token)
+        elif before is RescueState.S2:
+            self._choose_card(user_id, plan, rescue, lang, trail, out, message.text)
+        elif before is RescueState.S5 and confirmation_token is not None:
+            self._confirm_money(user_id, plan, rescue, lang, trail, out, confirmation_token)
+        elif before is RescueState.S5:
+            self._skip_money(user_id, plan, rescue, lang, trail, out)
+        return self._rescue_reply(trail, user_id, lang, before, out)
+
+    def _plan(self, user_id: str) -> Plan:
+        plan = self._plans.get(user_id)
+        if plan is None:
+            raise ValueError(f"No resilience plan for {user_id}, so no rescue can run.")
+        return plan
+
+    def _advance(self, trail: _Trail, user_id: str, event: str) -> None:
+        before, after = self._machine.advance(user_id, event)
+        self._write(
+            trail,
+            "note",
+            {"kind": "rescue_transition", "event": event, "from": before.value if before else None, "to": after.value},
+        )
+
+    def _rescue_reply(
+        self, trail: _Trail, user_id: str, lang: str, before: RescueState | None, out: _Outcome
+    ) -> RescueReply:
+        # Rescue messages never join the conversation memory, so the identity answer never reaches a
+        # model; the turn entry still records that the call happened.
+        self._write(trail, "turn", {"messages": 0})
+        after = self._machine.state(user_id)
+        rescue = self._rescues.get(user_id)
+        do_now = self._do_now(after, rescue)
+        plan = self._plans[user_id]
+        freeze = rescue.freeze if rescue is not None else None
+        return RescueReply(
+            text=" ".join(out.texts),
+            lang=lang,
+            confirmation=out.confirmation,
+            decision=out.decision,
+            receipt=out.receipt,
+            freeze=out.freeze,
+            ledger_seqs=sorted({*out.seqs, *trail.seqs}),
+            rescue=RescueProgress(
+                state_before=before,
+                state_after=after,
+                do_now=do_now,
+                card_names=[card.name for card in plan.cards] if do_now == "choose_card" else [],
+                live_instrument=self._live.get(user_id),
+                issuer_link=freeze.deep_link if freeze is not None else None,
+            ),
+        )
+
+    @staticmethod
+    def _do_now(state: RescueState | None, rescue: _Rescue | None) -> str:
+        if state is None:
+            return "start_rescue"
+        if state is RescueState.S1:
+            return "answer_identity_question"
+        if state is RescueState.S2:
+            return "choose_card" if rescue is None or rescue.instrument is None else "confirm_freeze"
+        if state is RescueState.S5:
+            return "confirm_transfer_or_skip"
+        if state is RescueState.DONE:
+            return "done"
+        raise RuntimeError(f"A rescue never rests in {state.value}; it runs straight through it.")
+
+    def _rescue_action(
+        self,
+        user_id: str,
+        lang: str,
+        trail: _Trail,
+        out: _Outcome,
+        action_type: ActionType,
+        source: Source = Source.USER_TURN,
+        **fields: Any,
+    ) -> tuple[Action, Decision]:
+        """Propose one rescue action to the engine, writing the proposal and the decision.
+
+        A refusal is said in the reply and carried as its decision; an allowance is left to the
+        caller, which executes it.
+        """
+        out.calls += 1
+        key = f"{user_id}:t{trail.turn}:{action_type.value}:{out.calls}"
+        action = Action(type=action_type, source=source, idempotency_key=key, requested_at=_now(), **fields)
+        state = self._machine.state(user_id)
+        self._write(trail, "proposal", {"rescue": state.value if state else None, "action": _action_json(action)})
+        decision = self._engine.check(action, self._mandates[user_id], self._history.get(user_id, []))
+        self._write(trail, "decision", {"idempotency_key": key, "decision": _decision_json(decision)})
+        if not decision.allowed:
+            out.say(self._refusal(lang, decision))
+            out.decision = decision
+        return action, decision
+
+    def _rescue_executed(self, user_id: str, trail: _Trail, action: Action, result: dict[str, Any]) -> None:
+        self._history.setdefault(user_id, []).append(action)
+        self._write(trail, "execution", {"action": _action_json(action), "result": result})
+
+    def _rescue_tool(
+        self, user_id: str, lang: str, trail: _Trail, out: _Outcome, name: str, arguments: dict[str, Any]
+    ) -> AgentReply | tuple[Decision | None, dict[str, Any]]:
+        """Run a tool the code chose, on the ordinary path a model's call takes."""
+        out.calls += 1
+        call = ToolCall(id=f"rescue_{trail.turn}_{out.calls}", name=name, arguments=arguments)
+        return self._run_tool(user_id, self._mandates[user_id], lang, trail, call, out.calls)
+
+    def _step_from_data(
+        self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome, source: Source
+    ) -> None:
+        """A message from data asks for the waiting step's action with its own source, so R01 refuses it."""
+        state = self._machine.state(user_id)
+        if state is RescueState.S1:
+            self._rescue_action(user_id, lang, trail, out, ActionType.RESCUE_IDENTITY_CHECK, source)
+        elif state is RescueState.S2:
+            self._rescue_action(
+                user_id, lang, trail, out, ActionType.FREEZE_CARD, source, instrument_id=rescue.instrument
+            )
+        else:
+            self._rescue_action(user_id, lang, trail, out, ActionType.TRANSFER, source, **self._money_fields(user_id, plan))
+
+    def _check_identity(
+        self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome, answer: str
+    ) -> None:
+        action, decision = self._rescue_action(user_id, lang, trail, out, ActionType.RESCUE_IDENTITY_CHECK)
+        if not decision.allowed:
+            return
+        expected = plan.identity_check.expected_answer.get_secret_value()
+        # Compared in code, never by a model, and neither answer is ever written.
+        if not hmac.compare_digest(_normal(answer), _normal(expected)):
+            self._write(trail, "note", {"kind": "rescue_identity_failed", "idempotency_key": action.idempotency_key})
+            out.say(_text(lang, "identity_failed", question=plan.identity_check.question))
+            return
+        self._rescue_executed(user_id, trail, action, {"identity_verified": True})
+        out.say(_text(lang, "identity_verified"))
+        self._advance(trail, user_id, "identity_verified")
+        self._run_on(user_id, plan, rescue, lang, trail, out)
+
+    def _choose_card(
+        self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome, answer: str
+    ) -> None:
+        if rescue.instrument is None:
+            names = {card.name.strip().casefold(): card.instrument_id for card in plan.cards}
+            chosen = names.get(answer.strip().casefold())
+            if chosen is None:
+                self._write(trail, "note", {"kind": "rescue_card_unmatched"})
+                out.say(_text(lang, "card_unmatched", names=", ".join(card.name for card in plan.cards)))
+                return
+            rescue.instrument = chosen
+            self._write(trail, "note", {"kind": "rescue_card_chosen", "instrument_id": chosen})
+        self._offer_freeze(user_id, plan, rescue, lang, trail, out)
+
+    def _offer_freeze(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
+        if rescue.instrument is None:
+            out.say(_text(lang, "choose_card", names=", ".join(card.name for card in plan.cards)))
+            return
+        reply = self._rescue_tool(user_id, lang, trail, out, "freeze_card", {"instrument_id": rescue.instrument})
+        if isinstance(reply, AgentReply):
+            out.take(reply)
+
+    def _not_this_step(self, user_id: str, lang: str, trail: _Trail, out: _Outcome, pending: PendingConfirmation) -> None:
+        payload: dict[str, Any] = {"reason": "not_this_rescue_step"}
+        if pending.user_id == user_id:
+            payload["idempotency_key"] = pending.action.idempotency_key
+        self._write(trail, "confirmation_rejected", payload)
+        out.say(_text(lang, "not_this_step"))
+
+    def _confirm_freeze(
+        self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome, token: str
+    ) -> None:
+        pending = self._pending.get(token)
+        if pending is not None and (
+            pending.user_id != user_id
+            or pending.action.type is not ActionType.FREEZE_CARD
+            or pending.action.instrument_id != rescue.instrument
+        ):
+            self._not_this_step(user_id, lang, trail, out, pending)
+            return
+        reply = self._confirm(user_id, self._mandates[user_id], lang, token)
+        out.take(reply, own_trail=False)
+        if reply.freeze is not None:
+            rescue.freeze = reply.freeze
+            self._advance(trail, user_id, "freeze_settled")
+            self._run_on(user_id, plan, rescue, lang, trail, out)
+        elif reply.decision is None:
+            # Expired or unknown: nothing was frozen, so the freeze is offered again.
+            self._offer_freeze(user_id, plan, rescue, lang, trail, out)
+
+    def _money_fields(self, user_id: str, plan: Plan) -> dict[str, Any]:
+        return {
+            "amount": plan.emergency_allowance,
+            "currency": self._mandates[user_id].currency,
+            "corridor": plan.emergency_corridor,
+            "payee_id": plan.emergency_payee,
+            "purpose": plan.emergency_purpose,
+        }
+
+    def _is_money(self, user_id: str, plan: Plan, action: Action) -> bool:
+        fields = self._money_fields(user_id, plan)
+        return action.type is ActionType.TRANSFER and action.standing_mandate_id is None and all(
+            getattr(action, name) == value for name, value in fields.items()
+        )
+
+    def _offer_money(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
+        """S5. The allowance is proposed as an ordinary T2 transfer to a payee the mandate must
+        already allow; the engine decides it exactly as it would outside a rescue."""
+        arguments = {name: str(value) for name, value in self._money_fields(user_id, plan).items()}
+        reply = self._rescue_tool(user_id, lang, trail, out, "propose_transfer", arguments)
+        if not isinstance(reply, AgentReply):
+            raise RuntimeError("A proposed transfer always ends with a reply.")
+        if reply.confirmation is not None:
+            out.say(_text(lang, "money_offer"))
+            out.take(reply)
+            return
+        out.take(reply)
+        self._advance(trail, user_id, "money_settled")
+        self._run_on(user_id, plan, rescue, lang, trail, out)
+
+    def _confirm_money(
+        self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome, token: str
+    ) -> None:
+        pending = self._pending.get(token)
+        if pending is not None and (pending.user_id != user_id or not self._is_money(user_id, plan, pending.action)):
+            self._not_this_step(user_id, lang, trail, out, pending)
+            return
+        reply = self._confirm(user_id, self._mandates[user_id], lang, token)
+        out.take(reply, own_trail=False)
+        if reply.receipt is not None or (reply.decision is not None and not reply.decision.allowed):
+            self._advance(trail, user_id, "money_settled")
+            self._run_on(user_id, plan, rescue, lang, trail, out)
+        elif reply.confirmation is None:
+            self._offer_money(user_id, plan, rescue, lang, trail, out)
+
+    def _skip_money(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
+        waiting = [
+            (token, pending)
+            for token, pending in self._pending.items()
+            if pending.user_id == user_id and self._is_money(user_id, plan, pending.action)
+        ]
+        for token, pending in waiting:
+            del self._pending[token]
+            self._closed[token] = (user_id, "skipped", pending.action.idempotency_key)
+        self._write(
+            trail,
+            "note",
+            {"kind": "rescue_money_skipped", "idempotency_keys": [p.action.idempotency_key for _, p in waiting]},
+        )
+        out.say(_text(lang, "money_skipped"))
+        self._advance(trail, user_id, "money_settled")
+        self._run_on(user_id, plan, rescue, lang, trail, out)
+
+    def _run_on(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> None:
+        """Run every step that needs nothing from the student, until one does or the rescue ends."""
+        while True:
+            state = self._machine.state(user_id)
+            if state is RescueState.S2:
+                self._offer_freeze(user_id, plan, rescue, lang, trail, out)
+                return
+            if state is RescueState.S5:
+                self._offer_money(user_id, plan, rescue, lang, trail, out)
+                return
+            if state is RescueState.DONE:
+                out.say(_text(lang, "rescue_done"))
+                return
+            step = {
+                RescueState.S3: self._check_wallet,
+                RescueState.S4: self._reroute,
+                RescueState.S6: self._list_cash,
+                RescueState.S7: self._replacement,
+                RescueState.S8: self._stop_standing,
+                RescueState.S9: self._notify_family,
+            }.get(state)
+            if step is None:
+                raise RuntimeError(f"No automatic step for {state}.")
+            self._advance(trail, user_id, step(user_id, plan, rescue, lang, trail, out))
+
+    def _check_wallet(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
+        action, decision = self._rescue_action(
+            user_id, lang, trail, out, ActionType.CHECK_WALLET_TOKEN, instrument_id=rescue.instrument
+        )
+        if decision.allowed:
+            self._rescue_executed(user_id, trail, action, {"wallet_token_present": plan.wallet_token_present})
+            out.say(_text(lang, "wallet_present" if plan.wallet_token_present else "wallet_absent"))
+        backup = plan.backup_instrument
+        return "has_backup" if backup is not None and backup != rescue.instrument else "no_backup"
+
+    def _reroute(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
+        backup = plan.backup_instrument
+        action, decision = self._rescue_action(
+            user_id, lang, trail, out, ActionType.REROUTE_TO_BACKUP, instrument_id=backup
+        )
+        if decision.allowed and backup is not None:
+            result = {"frozen_instrument": rescue.instrument, "backup_instrument": backup, "backup_route": plan.backup_route}
+            self._rescue_executed(user_id, trail, action, result)
+            self._live[user_id] = backup
+            out.say(_text(lang, "rerouted", backup=backup))
+        return "rerouted"
+
+    def _list_cash(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
+        entries = load_knowledge()
+        found = [entry_id for entry_id in plan.cash_plan if entry_id in entries]
+        missing = [entry_id for entry_id in plan.cash_plan if entry_id not in entries]
+        self._write(trail, "note", {"kind": "rescue_cash_options", "found": found, "missing": missing})
+        if found:
+            out.say(_text(lang, "cash_intro"))
+            for entry_id in found:
+                out.say(f"{entries[entry_id]['statement']} ({entries[entry_id]['source_url']})")
+        else:
+            out.say(_text(lang, "cash_none"))
+        if found and missing:
+            out.say(_text(lang, "cash_missing", ids=", ".join(missing)))
+        contact = plan.trusted_contact
+        out.say(_text(lang, "contact", person=contact.name, channel=contact.channel))
+        return "cash_listed"
+
+    def _replacement(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
+        link = rescue.freeze.deep_link if rescue.freeze is not None else None
+        issuer = (rescue.instrument or "").partition(":")[0]
+        estimate_id = plan.replacement_estimates.get(issuer)
+        entry = load_knowledge().get(estimate_id) if estimate_id else None
+        self._write(
+            trail,
+            "note",
+            {"kind": "rescue_replacement", "issuer_link": link, "estimate_id": estimate_id if entry else None},
+        )
+        out.say(_text(lang, "replacement_link", link=link) if link else _text(lang, "replacement_no_link"))
+        out.say(f"{entry['statement']} ({entry['source_url']})" if entry else _text(lang, "estimate_none"))
+        return "replacement_given"
+
+    def _stop_standing(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
+        """S8. StandingMandate names no card, so every active one is stopped; docs/decisions.md says why."""
+        active = [standing.id for standing in self._mandates[user_id].standing_mandates if standing.active]
+        stopped = 0
+        for standing_id in active:
+            outcome = self._rescue_tool(
+                user_id, lang, trail, out, "deactivate_standing_mandate", {"standing_mandate_id": standing_id}
+            )
+            if isinstance(outcome, AgentReply):
+                out.take(outcome)
+                continue
+            decision, result = outcome
+            if decision is not None and decision.allowed:
+                stopped += 1
+            elif decision is not None:
+                out.say(self._refusal(lang, decision))
+                out.decision = decision
+        out.say(_text(lang, "standing_stopped", count=stopped) if stopped else _text(lang, "standing_none"))
+        return "standing_stopped"
+
+    def _notify_family(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
+        """S9. The notice is built from this rescue's ledger entries, never from anything said, so a
+        block or a freeze that failed is reported as it happened. Nothing is sent; the app delivers it."""
+        if not plan.family_notice_opt_in:
+            self._write(trail, "note", {"kind": "family_notice_skipped"})
+            out.say(_text(lang, "notice_skipped"))
+            return "notice_settled"
+        action, decision = self._rescue_action(user_id, lang, trail, out, ActionType.NOTIFY_FAMILY)
+        if decision.allowed:
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "family_notice",
+                    "idempotency_key": action.idempotency_key,
+                    "lang": lang,
+                    "to": plan.trusted_contact.model_dump(),
+                    "text": self._family_notice(user_id, rescue, lang),
+                },
+            )
+            self._rescue_executed(user_id, trail, action, {"family_notice_written": True})
+            out.say(_text(lang, "notice_written", person=plan.trusted_contact.name))
+        return "notice_settled"
+
+    def _family_notice(self, user_id: str, rescue: _Rescue, lang: str) -> str:
+        lines = [_text(lang, "notice_intro")]
+        froze = False
+        stopped = 0
+        payees: dict[str, str] = {}
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.seq < rescue.started_seq or payload.get("user_id") != user_id:
+                continue
+            if entry.kind == "execution":
+                kind = payload["action"]["type"]
+                instrument = payload["action"].get("instrument_id")
+                if kind == ActionType.FREEZE_CARD.value:
+                    froze = True
+                    status = payload["result"]["freeze"]["status"]
+                    name = {
+                        FreezeStatus.DONE.value: "notice_frozen",
+                        FreezeStatus.NOT_SUPPORTED.value: "notice_not_supported",
+                    }.get(status, "notice_freeze_failed")
+                    lines.append(_text(lang, name, instrument=instrument))
+                elif kind == ActionType.REROUTE_TO_BACKUP.value:
+                    lines.append(_text(lang, "notice_rerouted", instrument=instrument))
+                elif kind == ActionType.TRANSFER.value:
+                    payees[payload["action"]["idempotency_key"]] = payload["action"]["payee_id"]
+                elif kind == ActionType.DEACTIVATE_STANDING_MANDATE.value:
+                    stopped += 1
+            elif entry.kind == "receipt":
+                receipt = payload["receipt"]
+                payee = payees.get(receipt["idempotency_key"], "")
+                lines.append(_text(lang, "notice_sent", amount=receipt["amount"], currency=receipt["currency"], payee=payee))
+                if receipt["simulated"]:
+                    lines.append(_text(lang, "notice_simulated"))
+            elif entry.kind == "decision" and not payload["decision"]["allowed"]:
+                lines.append(_text(lang, "notice_refused", rules=", ".join(payload["decision"]["rule_ids"])))
+            elif entry.kind == "confirmation_rejected":
+                lines.append(_text(lang, "notice_not_confirmed"))
+            elif entry.kind == "injection_suspected":
+                lines.append(_text(lang, "notice_injection"))
+            elif entry.kind == "note" and payload.get("kind") == "rescue_identity_failed":
+                lines.append(_text(lang, "notice_identity_failed"))
+            elif entry.kind == "note" and payload.get("kind") == "rescue_money_skipped":
+                lines.append(_text(lang, "notice_money_skipped"))
+        if not froze:
+            lines.insert(1, _text(lang, "notice_not_frozen"))
+        if stopped:
+            lines.append(_text(lang, "notice_standing", count=stopped))
+        return " ".join(lines)
+
     def _rebuild_from_ledger(self) -> None:
         proposals: dict[str, dict[str, Any]] = {}
         waiting: dict[str, _Waiting] = {}
@@ -1490,8 +2140,39 @@ class AgentLoop:
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
+            self._rebuild_rescue(user_id, entry, waiting)
         for waited in waiting.values():
             self._restore_pending(waited)
+
+    def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
+        """Replay a rescue through the same transitions it took, so a restart lands in the same state."""
+        payload = entry.payload
+        kind = payload.get("kind") if entry.kind == "note" else None
+        rescue = self._rescues.get(user_id)
+        if kind == "rescue_started":
+            self._machine.start(user_id)
+            plan = self._plans.get(user_id)
+            self._rescues[user_id] = _Rescue(payload["lang"], entry.seq, plan.primary_instrument if plan else None)
+        elif kind == "rescue_transition":
+            self._machine.advance(user_id, payload["event"])
+        elif kind == "rescue_card_chosen" and rescue is not None:
+            rescue.instrument = payload["instrument_id"]
+        elif kind == "rescue_money_skipped":
+            for key in payload.get("idempotency_keys", []):
+                skipped = waiting.pop(key, None)
+                if skipped is not None:
+                    self._close(skipped.user_id, skipped.action, "skipped")
+        elif entry.kind == "execution":
+            action = payload["action"]
+            if (
+                action["type"] == ActionType.FREEZE_CARD.value
+                and rescue is not None
+                and self._machine.active(user_id)
+                and action.get("instrument_id") == rescue.instrument
+            ):
+                rescue.freeze = FreezeResult.model_validate(payload["result"]["freeze"])
+            elif action["type"] == ActionType.REROUTE_TO_BACKUP.value:
+                self._live[user_id] = payload["result"]["backup_instrument"]
 
     def _rebuild_standing(self, user_id: str, payload: dict[str, Any]) -> None:
         mandate = self._mandates.get(user_id)

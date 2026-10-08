@@ -1,0 +1,24 @@
+- id: sg_cash_pickup_001
+  statement: "Money sent through Western Union can be collected as cash at a Western Union agent location in Singapore. The receiver gives the sender's details, including the Money Transfer Control Number, and shows a government issued photo ID."
+  country: SG
+  rail: all
+  kind: rule
+  source_url: "https://www.westernunion.com/sg/en/receive-money.html"
+  source_type: operator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T16]
+  note: "CC means checked by Claude Code against the page. A person must check it and replace CC with their initials."
+- id: sg_card_replacement_002
+  statement: "Wise estimates that a replacement Wise card takes 3 working days to arrive in Singapore. Working days are Monday to Friday and do not include weekends or public holidays."
+  country: SG
+  rail: card
+  kind: rule
+  source_url: "https://wise.com/help/articles/2935787/how-do-i-replace-or-cancel-my-wise-card"
+  source_type: operator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T14]
+  note: "CC means checked by Claude Code against the page. A person must check it and replace CC with their initials."

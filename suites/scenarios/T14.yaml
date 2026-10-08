@@ -1,60 +1,88 @@
 id: T14
-note: The student reports a lost card and the model asks to freeze it through freeze_card. The engine checks the action as tier T2 and the code asks for confirmation under warn.freeze.card. After the student confirms, the code calls the issuer, which in the fake rail allows an API freeze for wise, and the reply carries a freeze result written to the ledger as an execution. Switching to a backup card or account is not covered, because Lifeline has no record of a student's cards or backup instruments and no tool to move payments onto a backup, so that part stays manual.
+note: A whole rescue on the demo plan. The student starts a rescue for a lost Wise card from their own words and answers the identity question, which the loop compares with the plan in code. The loop then proposes freezing the plan's primary card through freeze_card at tier T2, and after confirmation the fake Wise rail freezes it. The wallet token check reads the plan at T0, reroute_to_backup moves payments onto the plan's backup card at T1, and the emergency allowance is proposed as an ordinary T2 transfer to the student's own account, which the student confirms. The replacement step quotes the knowledge entry for Wise card delivery, no standing payment exists to stop, and the family notice is written from the ledger. The scripted model supplies nothing, because every call in a rescue is built by code; the scenario runs no council. The knowledge entry is checked once, by Claude Code, and still needs a person's check.
 expected:
-  reply: freeze
-  ledger: [proposal, decision, confirmation, execution]
+  ledger: [note, note, proposal, decision, execution, note, proposal, decision, confirmation, execution, note, proposal, decision, execution, note, proposal, decision, execution, note, proposal, decision, confirmation, execution, receipt, note, note, note, note, proposal, decision, note, execution, note]
+  notes: [rescue_started, rescue_transition, rescue_transition, rescue_transition, rescue_transition, rescue_transition, rescue_transition, rescue_replacement, rescue_transition, rescue_transition, family_notice, rescue_transition]
+  reply: receipt
+  rescue_state: done
+  do_now: done
+  must_not_contain: ["7Q2K"]
 runs:
   - lang: en
     turns:
-      - user: I lost my Wise card wise:card_01, please freeze it
-        model:
-          - calls:
-              - name: freeze_card
-                arguments: {instrument_id: "wise:card_01"}
+      - rescue: start
+        trigger: card_lost
+        user: I lost my Wise card
+        expect:
+          rescue_state: S1
+          do_now: answer_identity_question
+          must_contain: [student pass number]
+      - rescue: step
+        user: 7Q2K
         expect:
           reply: confirmation
           warning_key: warn.freeze.card
-          lang: en
+          rescue_state: S2
           must_contain: [freeze card wise:card_01]
-      - user: Yes, freeze it
+      - rescue: step
         confirm: latest
         expect:
           reply: freeze
-          lang: en
-          must_contain: [Card wise:card_01 is frozen]
+          warning_key: warn.transfer.irreversible
+          rescue_state: S5
+          do_now: confirm_transfer_or_skip
+          must_contain: [Card wise:card_01 is frozen, backup card revolut:card_02, send 300 SGD to self_sg]
+      - rescue: step
+        confirm: latest
+        expect:
+          must_contain: [3 working days, no standing payments to stop, notice for Ana, The rescue is complete]
   - lang: pt
     turns:
-      - user: Perdi meu cartão Wise wise:card_01, por favor bloqueie
-        model:
-          - calls:
-              - name: freeze_card
-                arguments: {instrument_id: "wise:card_01"}
+      - rescue: start
+        trigger: card_lost
+        user: Perdi meu cartão Wise
+        expect:
+          rescue_state: S1
+          lang: pt
+      - rescue: step
+        user: 7Q2K
         expect:
           reply: confirmation
-          warning_key: warn.freeze.card
-          lang: pt
+          rescue_state: S2
           must_contain: [bloquear o cartão wise:card_01]
-      - user: Sim, pode bloquear
+      - rescue: step
         confirm: latest
         expect:
           reply: freeze
+          rescue_state: S5
+          must_contain: [O cartão wise:card_01 está bloqueado, cartão reserva revolut:card_02]
+      - rescue: step
+        confirm: latest
+        expect:
           lang: pt
-          must_contain: [O cartão wise:card_01 está bloqueado]
+          must_contain: [O resgate terminou]
   - lang: zh
     turns:
-      - user: 我的 Wise 卡 wise:card_01 丢了，请帮我冻结
-        model:
-          - calls:
-              - name: freeze_card
-                arguments: {instrument_id: "wise:card_01"}
+      - rescue: start
+        trigger: card_lost
+        user: 我的 Wise 卡丢了
+        expect:
+          rescue_state: S1
+          lang: zh
+      - rescue: step
+        user: 7Q2K
         expect:
           reply: confirmation
-          warning_key: warn.freeze.card
-          lang: zh
+          rescue_state: S2
           must_contain: [冻结卡片 wise:card_01]
-      - user: 确认冻结
+      - rescue: step
         confirm: latest
         expect:
           reply: freeze
+          rescue_state: S5
+          must_contain: [卡片 wise:card_01 已冻结, 备用卡 revolut:card_02]
+      - rescue: step
+        confirm: latest
+        expect:
           lang: zh
-          must_contain: [卡片 wise:card_01 已冻结]
+          must_contain: [救援已完成]

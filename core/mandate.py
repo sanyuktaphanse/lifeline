@@ -206,6 +206,10 @@ class DeterministicMandateEngine(MandateEngine):
             rule_ids.append("R04")
             reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
 
+        if action.type is ActionType.REROUTE_TO_BACKUP and not action.instrument_id:
+            rule_ids.append("R04")
+            reasons.append("Rerouting to a backup needs the backup's instrument id, and this one has none.")
+
         if action.type is ActionType.CREATE_STANDING_MANDATE:
             missing = [
                 name
