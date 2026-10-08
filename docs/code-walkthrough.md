@@ -3814,6 +3814,48 @@ LATEST = "latest"
 # when the student's own words this turn say it; when only data says it, it is data. Source: docs/decisions.md.
 LATEST_WORDS = re.compile(r"\b(?:latest|last|most recent|newest|[úu]ltim[oa]|recente)\b|最近|最后|上一笔|刚才")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
+# An amount written with an exponent, such as 1.4e3 or 1E+3, which Decimal reads as the whole figure.
+# Source: the Stage 10 review, 9 October 2026.
+EXPONENT_NUMBER = re.compile(r"(?<![\d.])\d+(?:\.\d+)?[eE][+-]?\d{1,3}(?!\d)")
+# Amounts written in words in the three languages Lifeline replies in, and in Chinese numerals, so an amount
+# a paste spells out is traced to it as the same amount in digits is. Source: the Stage 10 review, 9 October 2026.
+NUMBER_WORDS: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "um": 1, "uma": 1, "dois": 2, "duas": 2, "três": 3, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6,
+    "sete": 7, "oito": 8, "nove": 9, "dez": 10, "onze": 11, "doze": 12, "treze": 13, "catorze": 14,
+    "quatorze": 14, "quinze": 15, "dezesseis": 16, "dezasseis": 16, "dezessete": 17, "dezassete": 17,
+    "dezoito": 18, "dezenove": 19, "dezanove": 19, "vinte": 20, "trinta": 30, "quarenta": 40,
+    "cinquenta": 50, "sessenta": 60, "setenta": 70, "oitenta": 80, "noventa": 90,
+    "cem": 100, "cento": 100, "duzentos": 200, "duzentas": 200, "trezentos": 300, "trezentas": 300,
+    "quatrocentos": 400, "quatrocentas": 400, "quinhentos": 500, "quinhentas": 500, "seiscentos": 600,
+    "seiscentas": 600, "setecentos": 700, "setecentas": 700, "oitocentos": 800, "oitocentas": 800,
+    "novecentos": 900, "novecentas": 900,
+}
+# A word that multiplies what comes before it in place: "fourteen hundred" is 1400.
+HUNDRED_WORDS = frozenset({"hundred"})
+# A word that closes a group of three digits: "two thousand", "dois mil".
+SCALE_WORDS: dict[str, int] = {
+    "thousand": 1000, "million": 1_000_000, "mil": 1000, "milhão": 1_000_000, "milhao": 1_000_000,
+    "milhões": 1_000_000, "milhoes": 1_000_000,
+}
+# A word that joins the parts of one amount: "one hundred and five", "mil e quatrocentos".
+NUMBER_JOINERS = frozenset({"and", "e"})
+CHINESE_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+CHINESE_UNITS = {"十": 10, "百": 100, "千": 1000}
+CHINESE_SCALES = {"万": 10_000, "亿": 100_000_000}
+CHINESE_NUMERAL = re.compile("[" + "".join([*CHINESE_DIGITS, *CHINESE_UNITS, *CHINESE_SCALES]) + "]+")
+# The student's own words asking to stop a standing mandate or skip its run, in the three languages. A stop
+# or a skip whose standing mandate only data names, while the student's words this turn ask for neither, is
+# data. Source: the Stage 10 review, 9 October 2026.
+STOP_WORDS = re.compile(
+    r"\b(?:stop|cancel|skip|pause|halt|interromp|suspend|encerr)\w*|\b(?:parar|pare|pular|pule)\b"
+    r"|停止|取消|暂停|跳过|停掉|终止"
+)
+# A date or a time inside a reminder's text, which is not an amount. Source: the Stage 10 review.
+DATE_OR_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(?:[t ]\d{2}:\d{2}(?::\d{2})?)?|\d{1,2}:\d{2}")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
@@ -4340,7 +4382,61 @@ def _amounts_in(text: str) -> set[Decimal]:
                 amounts.add(Decimal(reading))
             except InvalidOperation:
                 continue
+    # Written with an exponent, in words, or in Chinese numerals, an amount is the same amount, so it is
+    # traced to where it was written. Source: the Stage 10 review, 9 October 2026.
+    amounts.update(Decimal(number) for number in EXPONENT_NUMBER.findall(text))
+    amounts.update(Decimal(number) for number in _worded_amounts(text))
+    amounts.update(Decimal(_chinese_amount(numeral)) for numeral in CHINESE_NUMERAL.findall(text))
     return amounts
+
+
+def _worded_amounts(text: str) -> list[int]:
+    """Every amount written in English or Portuguese words, such as "fourteen hundred" or "mil e quatrocentos"."""
+    amounts: list[int] = []
+    total = current = 0
+    started = False
+    for word in WORD.findall(text.casefold()):
+        if word in NUMBER_WORDS:
+            current += NUMBER_WORDS[word]
+        elif word in HUNDRED_WORDS and started:
+            current = (current or 1) * 100
+        elif word in SCALE_WORDS:
+            total += (current or 1) * SCALE_WORDS[word]
+            current = 0
+        elif word in NUMBER_JOINERS and started:
+            continue
+        else:
+            if started:
+                amounts.append(total + current)
+            total = current = 0
+            started = False
+            continue
+        started = True
+    if started:
+        amounts.append(total + current)
+    return amounts
+
+
+def _chinese_amount(numeral: str) -> int:
+    """A run of Chinese numerals as a number. A digit straight after a unit, as in 一千四, is read as the
+    next place down, 1400, as Chinese says it."""
+    total = section = number = 0
+    unit_before = 0
+    for char in numeral:
+        if char in CHINESE_DIGITS:
+            number = CHINESE_DIGITS[char]
+            continue
+        if char in CHINESE_UNITS:
+            section += (number or 1) * CHINESE_UNITS[char]
+            unit_before = CHINESE_UNITS[char]
+        else:
+            total += ((section + number) or 1) * CHINESE_SCALES[char]
+            section = 0
+            unit_before = CHINESE_SCALES[char]
+        number = 0
+    if number and unit_before >= 100 and len(numeral) > 1 and numeral[-2] in {**CHINESE_UNITS, **CHINESE_SCALES}:
+        number *= unit_before // 10
+    return total + section + number
 
 
 @dataclass
@@ -4363,7 +4459,7 @@ class _Details:
             self.amounts.setdefault(amount, source)
 ```
 
-`_amounts_in` reads every figure in a text as a set of `Decimal` amounts. Each figure is first read the English way, with commas as thousands separators, so `1,400` becomes 1400. A figure written the Portuguese way, with dots between thousands or a comma before cents, is also read that way, so `1.400` counts as 1400 as well as 1.4. Reading both ways only adds candidates; it never removes one. `Decimal` raises `InvalidOperation` on text it cannot read, such as `1.2.3`, and that reading is skipped. Amounts that are equal as numbers are equal in a set, so `1400` and `1400.00` match. `_visible` folds compatibility forms, such as fullwidth letters, with `unicodedata.normalize("NFKC", ...)` and drops every character in the Unicode category `Cf`, the invisible format characters such as a zero width space or a soft hyphen; `_skeleton` uses it for a proposed payee id and `_Details.add` for the text it reads, so both sides of the comparison are read alike. `DIGIT_GROUPING` matches a space, a no break space, a narrow no break space, or an apostrophe between a digit and exactly three more, so `1 400` and `1'400` are read as 1400 as well as in pieces.
+`_amounts_in` reads every figure in a text as a set of `Decimal` amounts. Each figure is first read the English way, with commas as thousands separators, so `1,400` becomes 1400. A figure written the Portuguese way, with dots between thousands or a comma before cents, is also read that way, so `1.400` counts as 1400 as well as 1.4. Reading both ways only adds candidates; it never removes one. `Decimal` raises `InvalidOperation` on text it cannot read, such as `1.2.3`, and that reading is skipped. Amounts that are equal as numbers are equal in a set, so `1400` and `1400.00` match. `_visible` folds compatibility forms, such as fullwidth letters, with `unicodedata.normalize("NFKC", ...)` and drops every character in the Unicode category `Cf`, the invisible format characters such as a zero width space or a soft hyphen; `_skeleton` uses it for a proposed payee id and `_Details.add` for the text it reads, so both sides of the comparison are read alike. `DIGIT_GROUPING` matches a space, a no break space, a narrow no break space, or an apostrophe between a digit and exactly three more, so `1 400` and `1'400` are read as 1400 as well as in pieces. Since the Stage 10 review of 9 October an amount is also read when it is written with an exponent, `1.4e3` or `1E+3`, which `Decimal` reads as 1400, when it is written in English or Portuguese words, and when it is written in Chinese numerals, because a paste that spelled the amount out used to escape the check while the same amount in digits was refused. `_worded_amounts` walks the words in order: a number word adds its value, `hundred` multiplies what came before it, so `fourteen hundred` is 1400, `thousand`, `million` or `mil` close a group of three digits, `and` or `e` join the parts, and any other word ends the amount. `_chinese_amount` does the same for a run of Chinese numerals, with `十`, `百` and `千` as places, `万` and `亿` as groups, and a last digit straight after a place read as the next place down, so `一千四` is 1400 as Chinese says it. The same reading applies to the student's own words, so an amount the student writes in words is still theirs.
 
 `_Details` holds the payee ids and amounts that appeared in some text, each with the source of the text where it first appeared. `add` reads one text into it. `setdefault` stores a value only when the key is not there yet, so a detail keeps the source where it was first seen and a later repeat does not overwrite it. Every word that could be an identifier is kept in `casefold` form, which is a lower case made for comparisons, so `Landlord_SP` and `landlord_sp` match. Keeping every identifier, instead of guessing which ones are payees, means the check below needs no list of known payees. Since 8 October it reads each text through `_visible` first, and reads the amounts both as written and with `DIGIT_GROUPING` closed up. `_converse` also adds the model's own earlier replies to the data, labelled `tool_result`, so a payee or an amount only the model has named stays untrusted after the tool result that named it has left the memory; the scam text attacker brief showed why.
 
@@ -4416,6 +4512,9 @@ class _Trail:
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+    # Data from outside the loop only, pastes, translations and tool results, without the model's own words,
+    # which repeat the terms of standing mandates the student already confirmed. Source: the Stage 10 review.
+    from_outside: _Details = field(default_factory=_Details)
     # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
     notices: list[str] = field(default_factory=list)
     # What the student typed in this turn, read as the provenance check reads it.
@@ -4576,11 +4675,33 @@ def _skeleton(payee: str) -> str:
     return DASHES.sub("-", _visible(payee)).strip().casefold()
 
 
+def _named_in(wanted: str, texts: list[tuple[str, Source]]) -> Source | None:
+    """The source of the first text that holds an id as a whole word, so an id glued to more text, such as
+    maria.santos in maria.santos@nubank, is still found. Source: the Stage 10 review, 9 October 2026."""
+    word = re.compile(rf"(?<![a-z0-9_]){re.escape(wanted)}(?![a-z0-9_])")
+    return next((source for text, source in texts if word.search(text)), None)
+
+
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     untrusted: dict[str, Source] = {}
     payee = _skeleton(action.payee_id or "")
-    if payee and payee not in trail.from_user.payee_ids and payee in trail.from_data.payee_ids:
-        untrusted["payee_id"] = trail.from_data.payee_ids[payee]
+    if payee and payee not in trail.from_user.payee_ids and _named_in(payee, trail.from_user.texts) is None:
+        source = trail.from_data.payee_ids.get(payee) or _named_in(payee, trail.from_data.texts)
+        if source is not None:
+            untrusted["payee_id"] = source
+    card = _skeleton(action.instrument_id or "")
+    if action.type is ActionType.FREEZE_CARD and card and _named_in(card, trail.from_user.texts) is None:
+        # A card only data names is not one the student asked to freeze. Source: the Stage 10 review.
+        source = _named_in(card, trail.from_data.texts)
+        if source is not None:
+            untrusted["instrument_id"] = source
+    if action.standing_terms is not None:
+        terms = action.standing_terms
+        day = Decimal(terms.schedule.partition(":")[2] or 0)
+        for value in (terms.tolerance_pct, Decimal(terms.notice_hours), Decimal(terms.cancel_window_hours), day):
+            if value not in trail.from_user.amounts and value in trail.from_outside.amounts:
+                untrusted["standing_terms"] = trail.from_outside.amounts[value]
+                break
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
@@ -4597,7 +4718,7 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 ```
 
-`detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. Its name starts with an underscore because nothing outside this module uses it. `_Waiting` holds what the rebuild learns from the ledger about a confirmation that may still be waiting, before it becomes a `PendingConfirmation`. `_remembered` copies a message keeping only `REMEMBERED_FIELDS`, so the provider's reasoning blocks and the model's name are not kept. `_for_model` wraps a pasted message in `PASTED_FRAME` whenever it is sent, so pasted text is stored as it was pasted and always reaches the model marked as data. `_bounded` keeps the last twenty messages and then drops any at the front until the first is from the student, so the history never opens with a tool result whose call was trimmed away. `_closing_results` answers every tool call of an answer whose turn ended at one of them, the first with a note that the reply follows and the rest as not run, because a provider rejects a tool call with no result. When the reply is a confirmation the council advised on, the first result also carries that advice, which is how a student who asks in the next turn why that route was chosen is answered from the conversation instead of from a guess. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine. `_standing_from` builds a `StandingMandate` from a confirmed `create_standing_mandate` action, its confirmation time, and its token; it raises when the action has no terms, which the engine's R04 already prevents. `_Rescue` and `_Outcome` are the rescue's records, described with the rescue below, `RESTING` names the states where it waits for the student, `_from_student` says whether a message is the student's own turn, and `_normal` is how the identity answer is compared: outer spaces stripped and case folded, and nothing more.
+`detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. A third, `from_outside`, holds pastes, translations and tool results without the model's own words; the terms of a new standing mandate are traced against it, because the loop's own confirmation sentence, which the memory keeps as the model's words, repeats the terms of a standing mandate the student already confirmed. Its name starts with an underscore because nothing outside this module uses it. `_Waiting` holds what the rebuild learns from the ledger about a confirmation that may still be waiting, before it becomes a `PendingConfirmation`. `_remembered` copies a message keeping only `REMEMBERED_FIELDS`, so the provider's reasoning blocks and the model's name are not kept. `_for_model` wraps a pasted message in `PASTED_FRAME` whenever it is sent, so pasted text is stored as it was pasted and always reaches the model marked as data. `_bounded` keeps the last twenty messages and then drops any at the front until the first is from the student, so the history never opens with a tool result whose call was trimmed away. `_closing_results` answers every tool call of an answer whose turn ended at one of them, the first with a note that the reply follows and the rest as not run, because a provider rejects a tool call with no result. When the reply is a confirmation the council advised on, the first result also carries that advice, which is how a student who asks in the next turn why that route was chosen is answered from the conversation instead of from a guess. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine. Since the Stage 10 review a payee id is also looked for as a whole word, with `_named_in`, on both sides, so `maria.santos` inside `maria.santos@nubank` in a paste is found there, and the same id glued to more text in the student's own words is still theirs. A card a freeze names is untrusted when only data names it, and the terms of a new standing mandate, its tolerance, its notice and cancel hours and its day of the month, are untrusted when a value appears in data from outside and not in the student's words. `_standing_from` builds a `StandingMandate` from a confirmed `create_standing_mandate` action, its confirmation time, and its token; it raises when the action has no terms, which the engine's R04 already prevents. `_Rescue` and `_Outcome` are the rescue's records, described with the rescue below, `RESTING` names the states where it waits for the student, `_from_student` says whether a message is the student's own turn, and `_normal` is how the identity answer is compared: outer spaces stripped and case folded, and nothing more.
 
 ```python
 class AgentLoop:
@@ -4745,6 +4866,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 trail.from_user.add(earlier.text, Source.USER_TURN)
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
+                trail.from_outside.add(earlier.text, earlier.source)
             elif earlier.role is Role.ASSISTANT:
                 # The model's own words come from what it was given, so a detail only the model
                 # named counts as data, labelled as tool output, even after its source has left the
@@ -4784,6 +4906,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 decision, result = outcome
                 text = json.dumps(result, ensure_ascii=False, default=str)
                 trail.from_data.add(text, Source.TOOL_RESULT)
+                trail.from_outside.add(text, Source.TOOL_RESULT)
                 tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
                 messages.append(tool_message)
                 turn_messages.append(tool_message)
@@ -4876,6 +4999,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
             ActionType.ADD_PAYEE,
             ActionType.CREATE_STANDING_MANDATE,
             ActionType.CANCEL_TRANSFER,
+            ActionType.FREEZE_CARD,
         )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
@@ -4883,6 +5007,10 @@ A conversation turn takes the next turn number and starts a trail. The student's
             untrusted = _untrusted_withdrawal(trail, action, self._chinese_cards.get(user_id, []))
         elif latest:
             untrusted = _untrusted_latest(trail)
+        elif action.type in (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE):
+            untrusted = _untrusted_standing_stop(trail, action)
+        elif action.type is ActionType.SET_REMINDER:
+            untrusted = _untrusted_reminder(trail, call.arguments)
         else:
             untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
@@ -4935,7 +5063,51 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return decision, result
 ```
 
-`_run_tool` turns one tool call into an `Action` and puts it through the mandate engine before anything runs. An unknown tool or a missing argument goes back to the model as an error and creates no action. The idempotency key joins the user, the turn, the tool, and the call number, as in `student_001:t1:propose_transfer:1`, so it differs in every turn and is never supplied by the model. The `Action` starts with source `user_turn`, because a tool call is the model acting on the student's own request, and `requested_at` is now. `**{...}` passes only the action fields the call actually gave. When pydantic rejects an argument, such as a negative amount, the error names the fields and nothing is written. For a transfer or a new payee, `_untrusted_fields` then looks for a payee or an amount the student never typed; a new payee has no amount, so only its payee id can be untrusted. If it finds one, `model_copy` makes a copy of the action with its source changed to where that detail first appeared, `tool_result` or `pasted_text`, the payee's source when both are untrusted. `next(iter(...))` takes the first value of a dictionary, and dictionaries keep the order their keys were added. The loop does not refuse anything itself. The proposal is written, the engine checks the action against the mandate and the history, and the decision is written. Three paths follow. A tier T3 decision ends the turn with the settings reply, so a T3 action never reaches a tool. Every T2 action, a transfer, a new payee, or a freeze, goes to `_propose`. Anything else that was refused goes back to the model with its rule ids and reasons. An allowed action runs at once, joins the history, and is written as an execution with its result. For `create_standing_mandate` the loop, never the model, gives the standing mandate its id, made from the student, the turn, and the call number, and gathers the four term arguments into `standing_terms`, which pydantic validates. A new standing mandate goes through the provenance check like a transfer. A transfer the engine decides below T2, which only happens under R12, is paid at once by `_pay_standing_now` if allowed, and otherwise ends the turn with the refusal.
+`_run_tool` turns one tool call into an `Action` and puts it through the mandate engine before anything runs. An unknown tool or a missing argument goes back to the model as an error and creates no action. The idempotency key joins the user, the turn, the tool, and the call number, as in `student_001:t1:propose_transfer:1`, so it differs in every turn and is never supplied by the model. The `Action` starts with source `user_turn`, because a tool call is the model acting on the student's own request, and `requested_at` is now. `**{...}` passes only the action fields the call actually gave. When pydantic rejects an argument, such as a negative amount, the error names the fields and nothing is written. For a transfer or a new payee, `_untrusted_fields` then looks for a payee or an amount the student never typed; a new payee has no amount, so only its payee id can be untrusted. If it finds one, `model_copy` makes a copy of the action with its source changed to where that detail first appeared, `tool_result` or `pasted_text`, the payee's source when both are untrusted. `next(iter(...))` takes the first value of a dictionary, and dictionaries keep the order their keys were added. The loop does not refuse anything itself. The proposal is written, the engine checks the action against the mandate and the history, and the decision is written. Three paths follow. A tier T3 decision ends the turn with the settings reply, so a T3 action never reaches a tool. Every T2 action, a transfer, a new payee, or a freeze, goes to `_propose`. Anything else that was refused goes back to the model with its rule ids and reasons. An allowed action runs at once, joins the history, and is written as an execution with its result. For `create_standing_mandate` the loop, never the model, gives the standing mandate its id, made from the student, the turn, and the call number, and gathers the four term arguments into `standing_terms`, which pydantic validates. A new standing mandate goes through the provenance check like a transfer. Since the Stage 10 review a freeze does too, a stop or a skip of a standing mandate goes through `_untrusted_standing_stop`, and a reminder through `_untrusted_reminder`, both shown below. A transfer the engine decides below T2, which only happens under R12, is paid at once by `_pay_standing_now` if allowed, and otherwise ends the turn with the refusal.
+
+```python
+def _untrusted_standing_stop(trail: _Trail, action: Action) -> dict[str, Source]:
+    """Where a stop or a skip of a standing mandate came from. Both are T1 and need no confirmation, so the
+    student's own words this turn must ask for it, or name the standing mandate; when only data does, it is
+    data. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+    """
+    standing = _skeleton(action.standing_mandate_id or "")
+    if STOP_WORDS.search(trail.said) or (standing and _named_in(standing, [(trail.said, Source.USER_TURN)])):
+        return {}
+    asking = [(text, source) for text, source in trail.from_data.texts if STOP_WORDS.search(text)]
+    # The data that asks for a stop and names this standing mandate is the likeliest source, then any that
+    # names it, then any that asks.
+    source = (
+        (_named_in(standing, asking) if standing else None)
+        or (_named_in(standing, trail.from_data.texts) if standing else None)
+        or next((source for _, source in asking), None)
+    )
+    return {} if source is None else {"standing_mandate_id": source}
+
+
+def _untrusted_reminder(trail: _Trail, arguments: dict[str, Any]) -> dict[str, Source]:
+    """Where a reminder's text came from. A reminder is shown to the student as their own, so its text, or an
+    amount or an account in it, that first appears in data and not in the student's words is data. Dates and
+    times are left out, because the model writes the due day. Source: the Stage 10 review, 9 October 2026.
+    """
+    wanted = _skeleton(str(arguments.get("text", "")))
+    if not wanted or any(wanted in text for text, _ in trail.from_user.texts):
+        return {}
+    source = next((source for text, source in trail.from_data.texts if wanted in text), None)
+    plain = DATE_OR_TIME.sub(" ", wanted)
+    for amount in _amounts_in(plain) | _amounts_in(DIGIT_GROUPING.sub("", plain)):
+        if source is None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
+            source = trail.from_data.amounts[amount]
+    for token in IDENTIFIER.findall(plain):
+        if source is not None or not re.search(r"[\d_@.]", token):
+            continue
+        if token in trail.from_user.payee_ids or _named_in(token, trail.from_user.texts) is not None:
+            continue
+        source = trail.from_data.payee_ids.get(token) or _named_in(token, trail.from_data.texts)
+    return {} if source is None else {"text": source}
+```
+
+`_untrusted_standing_stop` decides where a stop or a skip of a standing mandate came from. Both are tier T1 and need no confirmation, so a paste that told the model to stop the rent used to stop it. Now the student's own words this turn have to ask for it, with a word such as stop, cancel or skip in any of the three languages from `STOP_WORDS`, or name the standing mandate. When they do not, and data asks for a stop or names the standing mandate, the action takes the source of that data and the engine refuses it under R01. The data that both asks and names it is preferred, because the loop's own earlier sentences also name the standing mandate. `_untrusted_reminder` does the same for a reminder, which the app shows to the student as their own. Its text is trusted when the student's words hold it. It is untrusted when data holds the whole text, or an amount or an id in it that the student never wrote. Dates and times are left out of that reading with `DATE_OR_TIME`, because the model writes the due day, and only tokens with a digit, an underscore, an at sign or a dot count as ids, so ordinary words are never compared.
 
 When the source was changed, the engine refuses the action under R01, exactly as it refuses any action from data, and after the decision the loop writes an `injection_suspected` entry naming the key, each untrusted field with its source, and the tool call. The loop proposes and the engine decides. Keeping every refusal in the engine means every refusal in the ledger carries a rule from the one place that makes them. `injection_suspected` is its own entry kind, not a `note`, so security events can be counted without reminders mixed in. This stops a payment to a payee who is already on the mandate, which would otherwise have passed every other rule and reached a confirmation.
 
@@ -10070,7 +10242,7 @@ def test_a_cancelled_standing_run_is_not_paid_from_chat_without_confirmation():
     assert reply.decision.rule_ids == ["R13", "R11"]
 ```
 
-Each test in this file is a break that the Stage 10 attackers found and three skeptics failed to refute. The first group covers X17 and break C-B1. Here the student has created and confirmed a monthly rent standing mandate and cancelled this month's run. On a later turn about something else, the model proposes the run from chat. Before the fix the engine found it within the pattern and the loop paid it at once under R12. Now the engine reads the cancel from its history, the run escalates under R13, and the student is asked to confirm. The file's other tests check the same at engine level, over HTTP and after a rebuild from the ledger, that a confirmed escalation still pays, that a cancel made after a period ran applies to the next period, and that cancelling one standing mandate leaves another within its pattern. The second group covers break C-B2: one model answer that stops the standing mandate and proposes its run is refused under R12, and the entries written after the stop name the new version.
+Each test in this file is a break that the Stage 10 attackers found and three skeptics failed to refute. The first group covers X17 and break C-B1. Here the student has created and confirmed a monthly rent standing mandate and cancelled this month's run. On a later turn about something else, the model proposes the run from chat. Before the fix the engine found it within the pattern and the loop paid it at once under R12. Now the engine reads the cancel from its history, the run escalates under R13, and the student is asked to confirm. The file's other tests check the same at engine level, over HTTP and after a rebuild from the ledger, that a confirmed escalation still pays, that a cancel made after a period ran applies to the next period, and that cancelling one standing mandate leaves another within its pattern. The second group covers break C-B2: one model answer that stops the standing mandate and proposes its run is refused under R12, and the entries written after the stop name the new version. The third group covers breaks A-B2, A-B3, A-B4, A-B5, A-B7 and H-B2, each with a control that the student's own words are still trusted: a stop or a skip only a paste asks for, a reminder only a paste wrote, a card or standing terms only a paste gives, an amount a paste writes in words, in Chinese numerals or with an exponent, and a payee a paste glues to more text are all refused under R01 with an `injection_suspected` entry naming the field and the paste.
 
 ## The suites and their scenarios
 

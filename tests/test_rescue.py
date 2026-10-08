@@ -1041,7 +1041,8 @@ def test_pasted_text_cannot_reach_the_family_notice_through_a_freeze():
     _step(rescue, token=money.confirmation.confirmation_token)
 
     assert chat.confirmation is None
-    assert chat.decision.rule_ids == ["R04"]
+    # A card only the paste names is data, so R01 refuses it before R04 reads its form. Source: the Stage 10 review.
+    assert chat.decision.rule_ids == ["R01"]
     assert "acct_999" not in _family_notice(rescue.ledger)
 
 
