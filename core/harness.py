@@ -18,6 +18,10 @@ from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
+from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.cn_bank_remit import CnBankRemitSimRail
+from rails.sim.pix import PixSimRail
+from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -57,7 +61,16 @@ FIXTURE_MANDATE: dict[str, Any] = {
 RESCUE_TURNS = ("start", "step")
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
 # The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
-FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False}
+FIXTURE_RAILS = {
+    "wise": False,
+    "bank_wire": False,
+    "sim_pix": True,
+    "revolut": False,
+    "upi_paynow_sim": True,
+    "cn_bank_remit_sim": True,
+}
+# The simulated rails, each built with the script a scenario chooses in fixtures.rail_scripts.
+SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail, "sim_pix": PixSimRail, "cn_bank_remit_sim": CnBankRemitSimRail}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 
@@ -120,18 +133,36 @@ def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
     return keys
 
 
-def _rails(fixtures: dict[str, Any]) -> dict[str, FakeRail]:
+def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
     names = fixtures.get("rails", list(FIXTURE_RAILS))
     unknown = [name for name in names if name not in FIXTURE_RAILS]
     if unknown:
         raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
     traces = scripted_traces(fixtures.get("traces"))
     failing = _fail_once_keys(fixtures.get("fail_once", []))
-    stray = sorted({*traces, *failing} - set(names))
+    scripts = fixtures.get("rail_scripts", {})
+    stray = sorted({*traces, *failing, *scripts} - set(names))
     if stray:
-        raise ValueError(f"traces or fail_once name rails {stray}, which this scenario does not build")
+        raise ValueError(f"traces, fail_once or rail_scripts name rails {stray}, which this scenario does not build")
+    scripted_fakes = sorted({*traces, *failing} & set(SIM_RAILS))
+    if scripted_fakes:
+        raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
+    not_simulated = sorted(set(scripts) - set(SIM_RAILS))
+    if not_simulated:
+        raise ValueError(f"rail_scripts names {not_simulated}, which are not simulated rails")
+    demo = load_suite(DEMO_FIXTURE)
+    # What a simulated rail is built with beyond its script, from the scenario or else the demo fixture.
+    built_with = {
+        "sim_pix": {"pix_key_on_file": fixtures.get("pix_key_on_file", demo["pix_key_on_file"])},
+        "cn_bank_remit_sim": {
+            "documents_on_file": fixtures.get("documents_on_file", demo["documents_on_file"]),
+            "quota_position_known": fixtures.get("quota_position_known", demo["quota_position_known"]),
+        },
+    }
     return {
-        name: FakeRail(
+        name: SIM_RAILS[name](script=scripts.get(name, "normal"), **built_with.get(name, {}))
+        if name in SIM_RAILS
+        else FakeRail(
             traces.get(name),
             fail_once_keys=failing.get(name, ()),
             name=name,
@@ -307,17 +338,20 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
         mandates = {USER: _mandate(fixtures.get("mandate", {}))}
+        rails = _rails(fixtures)
+        inbound = seed_inbound(rails, inbound_from_fixture(fixtures.get("inbound_receipts"), rails))
         loop = AgentLoop(
             adapter=adapter,
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
-            rails=_rails(fixtures),
+            rails=rails,
             mandates=mandates,
             balances={USER: balances},
             pending={},
             council=_council(fixtures),
             plans={USER: _plan(fixtures)},
+            inbound_receipts={USER: inbound},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):

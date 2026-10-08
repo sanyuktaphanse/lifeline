@@ -18,6 +18,23 @@ valid_days: 365
 balances:
   SGD: "2300"
   BRL: "150"
+# Fixture: the payees who have a Pix key on file, by payee id. The key itself is never held here.
+pix_key_on_file: [landlord_sp]
+# Fixture: the documents held for a remittance from China, named as cn_boc_anxin_009 names them.
+documents_on_file: [passport, ID card or Hukou book, enrollment or admission letter]
+# Fixture: whether the parents' position against China's annual foreign currency quota is known.
+quota_position_known: true
+# Fixture: a parent's transfer from China that has not arrived, which the student can trace.
+# The rail moves it through its stages by its own simulated clock. Not a real transfer.
+inbound_receipts:
+  cn_bank_remit_sim:
+    - receipt_id: cn_bank_remit_sim-in-0001
+      amount: "20000"
+      currency: CNY
+      corridor: "CN>SG"
+      status: created
+      sender: parent
+      sent_hours_ago: 100
 # Scripted traces per rail, so a trace of the first Wise receipt has an answer.
 # The rail stamps stage_entered_at from its own receipt, so the fixture gives no time.
 traces:

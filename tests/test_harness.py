@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 import yaml
 
 from core.harness import (
@@ -14,8 +15,8 @@ from core.harness import (
 
 SCENARIOS = {
     "T01", "T02", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14",
-    "T15", "T16", "T17", "T21", "T22", "T23", "T29", "T32", "T34", "X01", "X02", "X03", "X04", "X05",
-    "X06", "X07", "X08", "X09", "X11", "X12", "X13", "X14", "X16", "X17", "X18", "X19", "X20",
+    "T15", "T16", "T17", "T19", "T21", "T22", "T23", "T29", "T31", "T32", "T34", "T36", "X01", "X02", "X03", "X04", "X05",
+    "X06", "X07", "X08", "X09", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20",
     "X21", "X22", "X23", "X24", "X26",
 }
 
@@ -499,3 +500,124 @@ def test_a_family_notice_expectation_fails_when_the_notice_lacks_a_sentence_or_i
 
     assert any("family notice does not contain 'Everything was fine.'" in f for f in results["T07"].runs[0].failures)
     assert any("no family notice was written" in f for f in results["T99"].runs[0].failures)
+
+
+def test_a_scenario_seeds_an_inbound_receipt_the_student_can_trace(tmp_path):
+    suites = _suites(tmp_path)
+    scenario = {
+        "id": "T07",
+        "fixtures": {
+            "inbound_receipts": {
+                "wise": [{"receipt_id": "wise-in-0001", "amount": "500", "currency": "SGD", "corridor": "SG>SG", "status": "in_transit", "sender": "parent", "sent_hours_ago": 30}]
+            },
+            "traces": {
+                "wise": [{"receipt_id": "wise-in-0001", "status": "in_transit", "typical_duration_hours": 24, "typical_duration_source": "fixture", "next_steps": ["Wait."], "warnings": []}]
+            },
+        },
+        "runs": [
+            {
+                "lang": "en",
+                "turns": [
+                    {
+                        "user": "My parent sent money and it has not arrived, receipt wise-in-0001",
+                        "model": [{"calls": [{"name": "trace_transfer", "arguments": {"receipt_id": "wise-in-0001"}}]}, {"text": "It is in transit."}],
+                        "expect": {"model_saw": []},
+                    }
+                ],
+                "expected": {"ledger": ["proposal", "decision", "execution"], "must_not_contain": ["No receipt"]},
+            }
+        ],
+    }
+    _write_scenario(suites, scenario)
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert [run.failures for run in result.runs] == [[]]
+
+
+def _quote_scenario(fixtures: dict, corridor: str, amount: str, purpose: str, currency: str, expected: dict) -> dict:
+    return {
+        "id": "T07",
+        "fixtures": fixtures,
+        "runs": [
+            {
+                "lang": "en",
+                "turns": [
+                    {
+                        "user": f"Quote {amount} {currency} for {purpose} on {corridor}",
+                        "model": [
+                            {"calls": [{"name": "get_quote", "arguments": {"corridor": corridor, "amount": amount, "currency": currency, "purpose": purpose}}]},
+                            {"text": "Here is the quote."},
+                        ],
+                    }
+                ],
+                "expected": expected,
+            }
+        ],
+    }
+
+
+def test_the_harness_builds_the_simulated_upi_paynow_rail_by_default(tmp_path):
+    from core.harness import _rails
+
+    rails = _rails({})
+
+    assert type(rails["upi_paynow_sim"]).__name__ == "UpiPayNowSimRail"
+    assert rails["upi_paynow_sim"].script == "normal"
+
+
+def test_a_scenario_chooses_a_simulated_rails_script(tmp_path):
+    from core.harness import _rails
+
+    rails = _rails({"rail_scripts": {"upi_paynow_sim": "held_for_review"}})
+
+    assert rails["upi_paynow_sim"].script == "held_for_review"
+
+
+@pytest.mark.parametrize(
+    ("fixtures", "message"),
+    [
+        ({"rail_scripts": {"wise": "delayed"}}, "simulated"),
+        ({"rail_scripts": {"upi_paynow_sim": "instant_riches"}}, "normal"),
+        ({"rails": ["wise"], "rail_scripts": {"upi_paynow_sim": "delayed"}}, "does not build"),
+        ({"fail_once": [{"rail": "upi_paynow_sim", "turn": 1, "call": 1}]}, "simulated"),
+    ],
+)
+def test_a_script_or_a_failure_for_the_wrong_rail_is_refused(fixtures, message):
+    from core.harness import _rails
+
+    with pytest.raises(ValueError, match=message):
+        _rails(fixtures)
+
+
+def test_the_harness_builds_sim_pix_as_the_pix_rail_with_the_demo_keys():
+    from core.harness import _rails
+
+    rails = _rails({})
+
+    assert type(rails["sim_pix"]).__name__ == "PixSimRail"
+    assert "landlord_sp" in rails["sim_pix"].pix_key_on_file
+
+
+def test_a_scenario_chooses_which_payees_have_a_pix_key():
+    from core.harness import _rails
+
+    assert _rails({"pix_key_on_file": ["landlord_two"]})["sim_pix"].pix_key_on_file == frozenset({"landlord_two"})
+
+
+def test_the_harness_builds_the_china_rail_with_the_demo_documents_and_quota_position():
+    from core.harness import _rails
+
+    rail = _rails({})["cn_bank_remit_sim"]
+
+    assert type(rail).__name__ == "CnBankRemitSimRail"
+    assert rail.documents_on_file == frozenset(load_suite(Path("fixtures/demo_user.yaml"))["documents_on_file"])
+    assert rail.quota_position_known is True
+
+
+def test_a_scenario_chooses_the_documents_on_file_and_the_quota_position():
+    from core.harness import _rails
+
+    rail = _rails({"documents_on_file": ["passport"], "quota_position_known": False})["cn_bank_remit_sim"]
+
+    assert (rail.documents_on_file, rail.quota_position_known) == (frozenset({"passport"}), False)

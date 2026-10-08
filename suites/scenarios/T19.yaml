@@ -1,0 +1,26 @@
+id: T19
+note: A parent's allowance of 70,000 rupees over UPI to PayNow is above the daily cap the RBI gives, 60,000 rupees, which the router reads from in_upi_paynow_cap_002. The scripted model asks for a quote in rupees, the quote passes the engine at T0, and on the next turn the model is seen to have received the route marked blocked, with limit_ok false, the blocked reason naming the cap, and the entry id as its rule. The scripted model supplies the get_quote call and both replies; what the scenario asserts is what the router gave the model. The entry is checked by SP and waits for a second check.
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution]
+runs:
+  - lang: en
+    turns:
+      - user: My mother wants to send me 70,000 rupees from India through UPI to PayNow today as a gift. Can she?
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {corridor: "IN>SG", amount: "70000", currency: INR, purpose: gift}
+          - text: UPI to PayNow cannot carry 70,000 rupees in one day; the route is blocked by the daily cap.
+        expect: {reply: answer, lang: en}
+      - user: What exactly blocks it?
+        model:
+          - text: The daily cap of 60,000 rupees from the RBI, entry in_upi_paynow_cap_002.
+        expect:
+          reply: answer
+          model_saw:
+            - '"rail": "upi_paynow_sim"'
+            - '"limit_ok": false'
+            - "70000 INR would take the day's UPI to PayNow total to 70000 INR, above the daily cap of 60000 INR. Source: in_upi_paynow_cap_002."
+            - '"rule_id": "in_upi_paynow_cap_002"'
+            - '"simulated": true'

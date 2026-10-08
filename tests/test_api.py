@@ -699,3 +699,73 @@ def test_a_malformed_rescue_step_never_echoes_what_was_typed(body):
     assert response.status_code == 422
     assert DEMO_ANSWER not in response.text
     assert response.json()["detail"][0]["loc"]
+
+
+def test_an_inbound_receipt_in_the_fixture_is_traceable_after_every_start(tmp_path):
+    import yaml
+
+    fixture = yaml.safe_load(Path(DEMO_FIXTURE).read_text(encoding="utf-8"))
+    fixture["inbound_receipts"] = {
+        "wise": [{"receipt_id": "wise-in-0001", "amount": "500", "currency": "SGD", "corridor": "SG>SG", "status": "in_transit", "sender": "parent", "sent_hours_ago": 30}]
+    }
+    fixture["traces"]["wise"].append(
+        {"receipt_id": "wise-in-0001", "status": "in_transit", "typical_duration_hours": 24, "typical_duration_source": "fixture", "next_steps": ["Wait."], "warnings": []}
+    )
+    path = tmp_path / "fixture.yaml"
+    path.write_text(yaml.safe_dump(fixture), encoding="utf-8")
+
+    for _ in range(2):
+        client = _client(fixture_path=path)
+        response = client.post("/trace", json={"user_id": USER, "receipt_id": "wise-in-0001"})
+        assert response.status_code == 200
+        assert response.json()["status"] == "in_transit"
+    kinds = [e["kind"] for e in client.get(f"/ledger/{USER}").json()]
+    assert "receipt" not in kinds
+
+
+@pytest.mark.parametrize(("setting", "built"), [("on", True), ("off", False), ("", True)])
+def test_sim_rails_registers_the_new_simulated_rails_and_is_on_by_default(monkeypatch, setting, built):
+    monkeypatch.setenv("SIM_RAILS", setting)
+    loop = _client().app.state.loop
+
+    assert ("upi_paynow_sim" in loop._rails) is built
+
+
+def test_create_app_takes_sim_rails_explicitly(monkeypatch):
+    monkeypatch.setenv("SIM_RAILS", "off")
+
+    assert "upi_paynow_sim" in _client(sim_rails=True).app.state.loop._rails
+    monkeypatch.setenv("SIM_RAILS", "on")
+    assert "upi_paynow_sim" not in _client(sim_rails=False).app.state.loop._rails
+
+
+def test_env_example_names_sim_rails():
+    assert "SIM_RAILS=" in (Path(DEMO_FIXTURE).parent.parent / ".env.example").read_text(encoding="utf-8")
+
+
+def test_the_api_runs_sim_pix_as_the_pix_rail_with_the_fixture_keys():
+    rail = _client().app.state.loop._rails["sim_pix"]
+
+    assert type(rail).__name__ == "PixSimRail"
+    assert rail.pix_key_on_file == frozenset({"landlord_sp"})
+
+
+def test_the_api_registers_the_china_rail_and_traces_the_demo_parents_transfer():
+    client = _client(sim_rails=True)
+    rail = client.app.state.loop._rails["cn_bank_remit_sim"]
+
+    response = client.post("/trace", json={"user_id": USER, "receipt_id": "cn_bank_remit_sim-in-0001"})
+
+    assert rail.quota_position_known is True
+    assert response.status_code == 200
+    body = response.json()
+    assert body["typical_duration_hours"] is None
+    assert body["typical_duration_source"] == "cn_boc_anxin_009: no sourced duration on file"
+    assert body["status"] != "completed"
+
+
+def test_without_sim_rails_the_demo_parents_transfer_is_not_seeded():
+    client = _client(sim_rails=False)
+
+    assert "cn_bank_remit_sim" not in client.app.state.loop._rails
+    assert client.post("/trace", json={"user_id": USER, "receipt_id": "cn_bank_remit_sim-in-0001"}).status_code == 404

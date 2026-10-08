@@ -83,6 +83,9 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 NUMBER = re.compile(r"\d(?:[\d.,]*\d)?")
 DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
+# A thousands grouping written with a space, a no break space, a narrow no break space, or an
+# apostrophe, between a digit and exactly three more.
+DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
@@ -436,6 +439,12 @@ def _spoken(advice: dict[str, Any], position: str) -> str:
     return str(speaker.get("reason", ""))
 
 
+def _visible(text: str) -> str:
+    """Text with compatibility forms folded, such as fullwidth letters, and invisible characters removed."""
+    folded = unicodedata.normalize("NFKC", text)
+    return "".join(char for char in folded if unicodedata.category(char) != "Cf")
+
+
 def _amounts_in(text: str) -> set[Decimal]:
     amounts: set[Decimal] = set()
     for number in NUMBER.findall(text):
@@ -456,9 +465,14 @@ class _Details:
     amounts: dict[Decimal, Source] = field(default_factory=dict)
 
     def add(self, text: str, source: Source) -> None:
+        # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
+        # detail on one side of the comparison only.
+        text = _visible(text)
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
-        for amount in _amounts_in(text):
+        # An amount may be grouped with a space or an apostrophe, such as 1 400 or 1'400, so both the
+        # text as written and the text with that grouping closed are read.
+        for amount in _amounts_in(text) | _amounts_in(DIGIT_GROUPING.sub("", text)):
             self.amounts.setdefault(amount, source)
 
 
@@ -663,9 +677,7 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
 def _skeleton(payee: str) -> str:
     """A payee id as the provenance check compares it: compatibility forms folded, invisible
     characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
-    folded = unicodedata.normalize("NFKC", payee)
-    visible = "".join(char for char in folded if unicodedata.category(char) != "Cf")
-    return visible.strip().casefold()
+    return _visible(payee).strip().casefold()
 
 
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
@@ -693,6 +705,7 @@ class AgentLoop:
         conversations: ConversationStore | None = None,
         council: Council | None = None,
         plans: dict[str, Plan] | None = None,
+        inbound_receipts: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self._adapter = adapter
         self._plans = dict(plans or {})
@@ -709,7 +722,11 @@ class AgentLoop:
         self._pending = pending
         self._history: dict[str, list[Action]] = {}
         self._turns: dict[str, int] = {}
-        self._receipt_rails: dict[str, dict[str, str]] = {}
+        # Money sent to a student, such as a parent's transfer: which rail holds each receipt. It is
+        # given on every start and never written to the ledger, because the student did not send it.
+        self._receipt_rails: dict[str, dict[str, str]] = {
+            user_id: dict(receipts) for user_id, receipts in (inbound_receipts or {}).items()
+        }
         self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
         self._store = ConversationStore() if conversations is None else conversations
         self._conversations: dict[str, list[Message]] = {}
@@ -790,6 +807,11 @@ class AgentLoop:
                 trail.from_user.add(earlier.text, Source.USER_TURN)
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
+            elif earlier.role is Role.ASSISTANT:
+                # The model's own words come from what it was given, so a detail only the model
+                # named counts as data, labelled as tool output, even after its source has left the
+                # memory. Source: docs/decisions.md, 8 October 2026.
+                trail.from_data.add(earlier.text, Source.TOOL_RESULT)
         messages = [
             Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)),
             *(_for_model(earlier) for earlier in history),
@@ -1460,6 +1482,8 @@ class AgentLoop:
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
     ) -> Receipt | RailError:
+        # The one place a route learns its payee: a rail such as Pix must know who it is paying.
+        route = route.model_copy(update={"payee_id": action.payee_id})
         try:
             receipt = self._rails[route.rail].execute(route, mandate_ref, action.idempotency_key, token)
         except RailError as error:

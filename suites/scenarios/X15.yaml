@@ -1,0 +1,24 @@
+id: X15
+note: A transfer for a business purpose over UPI to PayNow, which the RBI allows only for person to person remittances for Maintenance of Relatives Abroad and Gift. The router reads the permitted purposes from in_upi_paynow_purpose_001 and returns the route blocked, with a reason that lists the permitted purposes and the entry id, and that entry as its rule. The scripted model supplies the get_quote call and both replies; what the scenario asserts is what the router gave the model. The entry is checked by SP and waits for a second check.
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Quote 20,000 rupees from India over UPI to PayNow to pay a supplier for my business
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {corridor: "IN>SG", amount: "20000", currency: INR, purpose: business}
+          - text: UPI to PayNow does not carry business payments.
+        expect: {reply: answer, lang: en}
+      - user: Which purposes does it carry, and where does that come from?
+        model:
+          - text: Maintenance of relatives abroad and gift, from the RBI.
+        expect:
+          reply: answer
+          model_saw:
+            - '"rail": "upi_paynow_sim"'
+            - "UPI to PayNow carries only person to person remittances for maintenance_of_relatives_abroad and gift, not 'business'. Source: in_upi_paynow_purpose_001."
+            - '"rule_id": "in_upi_paynow_purpose_001"'
