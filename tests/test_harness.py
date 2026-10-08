@@ -603,3 +603,21 @@ def test_a_scenario_chooses_which_payees_have_a_pix_key():
     from core.harness import _rails
 
     assert _rails({"pix_key_on_file": ["landlord_two"]})["sim_pix"].pix_key_on_file == frozenset({"landlord_two"})
+
+
+def test_the_harness_builds_the_china_rail_with_the_demo_documents_and_quota_position():
+    from core.harness import _rails
+
+    rail = _rails({})["cn_bank_remit_sim"]
+
+    assert type(rail).__name__ == "CnBankRemitSimRail"
+    assert rail.documents_on_file == frozenset(load_suite(Path("fixtures/demo_user.yaml"))["documents_on_file"])
+    assert rail.quota_position_known is True
+
+
+def test_a_scenario_chooses_the_documents_on_file_and_the_quota_position():
+    from core.harness import _rails
+
+    rail = _rails({"documents_on_file": ["passport"], "quota_position_known": False})["cn_bank_remit_sim"]
+
+    assert (rail.documents_on_file, rail.quota_position_known) == (frozenset({"passport"}), False)

@@ -748,3 +748,24 @@ def test_the_api_runs_sim_pix_as_the_pix_rail_with_the_fixture_keys():
 
     assert type(rail).__name__ == "PixSimRail"
     assert rail.pix_key_on_file == frozenset({"landlord_sp"})
+
+
+def test_the_api_registers_the_china_rail_and_traces_the_demo_parents_transfer():
+    client = _client(sim_rails=True)
+    rail = client.app.state.loop._rails["cn_bank_remit_sim"]
+
+    response = client.post("/trace", json={"user_id": USER, "receipt_id": "cn_bank_remit_sim-in-0001"})
+
+    assert rail.quota_position_known is True
+    assert response.status_code == 200
+    body = response.json()
+    assert body["typical_duration_hours"] is None
+    assert body["typical_duration_source"] == "cn_boc_anxin_009: no sourced duration on file"
+    assert body["status"] != "completed"
+
+
+def test_without_sim_rails_the_demo_parents_transfer_is_not_seeded():
+    client = _client(sim_rails=False)
+
+    assert "cn_bank_remit_sim" not in client.app.state.loop._rails
+    assert client.post("/trace", json={"user_id": USER, "receipt_id": "cn_bank_remit_sim-in-0001"}).status_code == 404

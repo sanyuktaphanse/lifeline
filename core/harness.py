@@ -19,6 +19,7 @@ from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.cn_bank_remit import CnBankRemitSimRail
 from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
@@ -60,9 +61,16 @@ FIXTURE_MANDATE: dict[str, Any] = {
 RESCUE_TURNS = ("start", "step")
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
 # The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
-FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False, "upi_paynow_sim": True}
+FIXTURE_RAILS = {
+    "wise": False,
+    "bank_wire": False,
+    "sim_pix": True,
+    "revolut": False,
+    "upi_paynow_sim": True,
+    "cn_bank_remit_sim": True,
+}
 # The simulated rails, each built with the script a scenario chooses in fixtures.rail_scripts.
-SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail, "sim_pix": PixSimRail}
+SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail, "sim_pix": PixSimRail, "cn_bank_remit_sim": CnBankRemitSimRail}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 
@@ -144,7 +152,13 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"rail_scripts names {not_simulated}, which are not simulated rails")
     demo = load_suite(DEMO_FIXTURE)
     # What a simulated rail is built with beyond its script, from the scenario or else the demo fixture.
-    built_with = {"sim_pix": {"pix_key_on_file": fixtures.get("pix_key_on_file", demo["pix_key_on_file"])}}
+    built_with = {
+        "sim_pix": {"pix_key_on_file": fixtures.get("pix_key_on_file", demo["pix_key_on_file"])},
+        "cn_bank_remit_sim": {
+            "documents_on_file": fixtures.get("documents_on_file", demo["documents_on_file"]),
+            "quota_position_known": fixtures.get("quota_position_known", demo["quota_position_known"]),
+        },
+    }
     return {
         name: SIM_RAILS[name](script=scripts.get(name, "normal"), **built_with.get(name, {}))
         if name in SIM_RAILS

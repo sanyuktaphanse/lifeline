@@ -44,6 +44,7 @@ from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.cn_bank_remit import CnBankRemitSimRail
 from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
@@ -127,6 +128,8 @@ def demo_rails(
     traces: dict[str, list[dict[str, Any]]] | None = None,
     sim_rails: bool = True,
     pix_key_on_file: list[str] | None = None,
+    documents_on_file: list[str] | None = None,
+    quota_position_known: bool = False,
 ) -> dict[str, Any]:
     scripted = scripted_traces(traces)
     rails: dict[str, Any] = {
@@ -138,6 +141,9 @@ def demo_rails(
     if sim_rails:
         # The API always runs the normal script; a scenario chooses others through the harness.
         rails["upi_paynow_sim"] = UpiPayNowSimRail()
+        rails["cn_bank_remit_sim"] = CnBankRemitSimRail(
+            documents_on_file=documents_on_file or (), quota_position_known=quota_position_known
+        )
     return rails
 
 
@@ -224,7 +230,13 @@ def create_app(
             fixture.get("traces"),
             sim_rails_on() if sim_rails is None else sim_rails,
             fixture.get("pix_key_on_file"),
+            fixture.get("documents_on_file"),
+            bool(fixture.get("quota_position_known")),
         )
+    # A fixture's inbound receipts on a rail this process does not build are left out, not an error.
+    fixture = {**fixture, "inbound_receipts": {
+        key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
+    }}
     _restore_rails(rails, ledger)
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))
