@@ -1415,6 +1415,15 @@ class LocalSignedAnchor(Anchor):
     def verify(self, head_hash: str) -> bool:
         return self._record(head_hash) is not None
 
+    def signed_heads(self) -> list[tuple[str, int]]:
+        """Every head and sequence number the store holds in a line whose signature checks."""
+        return [(record["head_hash"], record["seq"]) for record in self._records() if self._signed_by_us(record)]
+
+    @staticmethod
+    def uses_development_secret() -> bool:
+        """Whether lines are signed with the public development secret, which anyone can sign with."""
+        return not os.environ.get(ANCHOR_SECRET_VAR) and os.environ.get("LIFELINE_ENV") != "production"
+
     def anchored_at(self, head_hash: str) -> datetime | None:
         """The time recorded for the latest signed line of this head, or None when none checks."""
         record = self._record(head_hash)
@@ -1451,7 +1460,7 @@ class LocalSignedAnchor(Anchor):
         return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
 ```
 
-`anchor` refuses anything that is not a head hash, a sequence number, and a user hash before it writes a byte, so an amount, a payee, a balance, or a user id cannot reach the file through it: each would fail the digest check or the sequence check. It records the time in UTC, signs the four values, appends one line, and returns an id made of the kind and the first 32 characters of the signature, so the id names that one line. `verify` is True only when a line for that head exists whose signature checks under the current secret. `anchored_at` is not part of the `Anchor` interface; it gives the API the time the store recorded for that head. `_records` passes over a line that is not JSON, not an object, or not exactly the five fields, so a damaged line anchors nothing and stops nothing. `_signed_by_us` recomputes the signature from the line's own values and compares it with `hmac.compare_digest`, which takes the same time whether the first or the last character differs. Changing any of the five fields of a line makes it fail.
+`anchor` refuses anything that is not a head hash, a sequence number, and a user hash before it writes a byte, so an amount, a payee, a balance, or a user id cannot reach the file through it: each would fail the digest check or the sequence check. It records the time in UTC, signs the four values, appends one line, and returns an id made of the kind and the first 32 characters of the signature, so the id names that one line. `verify` is True only when a line for that head exists whose signature checks under the current secret. `anchored_at` is not part of the `Anchor` interface; it gives the API the time the store recorded for that head. `signed_heads` lists every head and sequence number held in a line that checks, so the loop can compare the whole store with the ledger, and `uses_development_secret` says whether the public development secret is signing. `_records` passes over a line that is not JSON, not an object, or not exactly the five fields, so a damaged line anchors nothing and stops nothing. `_signed_by_us` recomputes the signature from the line's own values and compares it with `hmac.compare_digest`, which takes the same time whether the first or the last character differs. Changing any of the five fields of a line makes it fail.
 
 ```python
 def anchor_for(env: Mapping[str, str] | None, path: Path) -> Anchor:
@@ -3218,6 +3227,7 @@ from contracts.schemas import (
 )
 from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.ledger import GENESIS_PREV_HASH
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
@@ -5232,14 +5242,24 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         if not (self._anchor_due or hourly):
             return
         self._anchor_due = False
+        # A broken chain, or one the anchor store disagrees with, is never anchored, so a later
+        # anchor cannot sign a tampered head and launder it. Source: the anchor attacker brief of 8 October.
+        mandate = self._mandates.get(user_id)
+        trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
         head, seq = self._ledger.head(), self._head_seq
         # Only a hash of the student's id leaves the ledger, never the id.
         user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
         try:
+            broken = self._ledger.verify()
+            if broken is not None:
+                reason: str | None = f"The ledger chain breaks at entry {broken}, so its head is not anchored."
+            else:
+                reason = self._store_mismatch(self._ledger.entries())
+            if reason is not None:
+                self._write(trail, "note", {"kind": "anchor_skipped", "reason": reason})
+                return
             anchor_id = self._anchor.anchor(head, seq, user_hash)
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
-            mandate = self._mandates.get(user_id)
-            trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
             self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
             return
         # No user id, turn, or mandate: an anchor entry holds what was anchored and nothing about anyone.
@@ -5255,22 +5275,45 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
 `_anchor_if_due` does nothing without an anchor. The hour is measured on the loop's clock, which a test injects, from the last anchor, or from the first entry when there has been none, and it fires only when something was written after the last anchor, so an idle hour anchors nothing again. The head is read just before the anchor entry is appended, so the anchored head is the head before that entry and its sequence is one less than the entry's own. The anchor is given a SHA 256 of the student's id, never the id. When the anchor store raises, a `note` of kind `anchor_failed` names the error and the call returns as it was; the payment that caused it has already happened and is never undone. The anchor entry is appended straight to the ledger without `_write`, so it holds no user id, turn, mandate, provider, or model, only the head hash, its sequence, the anchor id, and the time.
 
 ```python
+    def _store_mismatch(self, entries: list[LedgerEntry]) -> str | None:
+        """Why the ledger disagrees with a head the anchor store signed, or None when every one matches.
+
+        Every signed line must name an entry this ledger still holds, with that entry's hash, so an
+        edited and rechained ledger, a truncated one, and a line copied from another ledger all fail.
+        """
+        if not isinstance(self._anchor, LocalSignedAnchor):
+            return None
+        hashes = {0: GENESIS_PREV_HASH, **{entry.seq: entry.hash for entry in entries}}
+        for head, seq in self._anchor.signed_heads():
+            if hashes.get(seq) != head:
+                return f"The anchor store signed a head for entry {seq} that does not match the ledger."
+        return None
+
     def anchor_status(self) -> dict[str, Any]:
-        """The latest anchor entry in the ledger, and whether the anchor store still holds it signed."""
+        """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
+        naming the entry just before it with that entry's hash, and every other signed head matching too."""
+        local = isinstance(self._anchor, LocalSignedAnchor)
         kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
-        latest = next((entry for entry in reversed(self._ledger.entries()) if entry.kind == ANCHOR_KIND), None)
-        if self._anchor is None or latest is None:
-            return {"anchored": False, "kind": kind}
-        head = str(latest.payload.get("head_hash", ""))
-        status: dict[str, Any] = {"anchored": True, "head_hash": head, "head_seq": latest.payload.get("head_seq")}
-        try:
-            status["verified"] = self._anchor.verify(head)
-            at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
-        except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
-            status["verified"], at = False, None
-            status["error"] = f"{type(error).__name__}: {error}"
-        status["anchored_at"] = at.isoformat() if at is not None else None
+        entries = self._ledger.entries()
+        latest = next((entry for entry in reversed(entries) if entry.kind == ANCHOR_KIND), None)
+        status: dict[str, Any] = {"anchored": False}
+        if self._anchor is not None and latest is not None:
+            head, head_seq = str(latest.payload.get("head_hash", "")), latest.payload.get("head_seq")
+            status = {"anchored": True, "head_hash": head, "head_seq": head_seq}
+            hashes = {entry.seq: entry.hash for entry in entries}
+            try:
+                signed = self._anchor.verify(head)
+                at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+                matches = head_seq == latest.seq - 1 and hashes.get(head_seq) == head and self._store_mismatch(entries) is None
+            except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
+                signed, matches, at = False, False, None
+                status["error"] = f"{type(error).__name__}: {error}"
+            status["verified"] = signed and matches
+            status["matches_ledger"] = matches
+            status["anchored_at"] = at.isoformat() if at is not None else None
         status["kind"] = kind
+        if local and LocalSignedAnchor.uses_development_secret():
+            status["development_secret"] = True
         return status
 
     def _ledger_report(self, user_id: str, at: datetime) -> dict[str, Any]:
@@ -5291,7 +5334,7 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         }
 ```
 
-`anchor_status` reads the latest `anchor` entry in the ledger and asks the anchor store whether that head is signed there, with the time the store recorded. With no anchor entry it says `anchored` false and names the kind. A store that cannot be read is reported as not verified, with its error. `_ledger_report` is what the T0 tool `verify_ledger` returns: the student's entries of the current UTC day, the first broken entry of the whole chain, and the anchor status. The API's verify endpoint returns the same anchor status. The rebuild reads every `anchor` entry first, before the check for a user id, so a restart knows when the last anchor was made and which entry it was.
+`_store_mismatch` compares every head the anchor store holds signed with the ledger: each must name an entry the ledger still holds, with that entry's hash, so a ledger edited and rechained, a ledger cut short, and a line copied from another ledger all disagree with the store. `_anchor_if_due` refuses to anchor a chain that breaks or that the store disagrees with, writing a `note` of kind `anchor_skipped` with the reason, so a later anchor can never sign a tampered head. `anchor_status` reads the latest `anchor` entry in the ledger and asks the anchor store whether that head is signed there, with the time the store recorded. `verified` is true only when the head is signed, the entry names the entry just before it with that entry's hash, and the store agrees with the ledger everywhere; `matches_ledger` says whether the ledger side holds. Under the public development secret the status adds `development_secret` true, because anyone can sign with it. With no anchor entry it says `anchored` false and names the kind. A store that cannot be read is reported as not verified, with its error. `_ledger_report` is what the T0 tool `verify_ledger` returns: the student's entries of the current UTC day, the first broken entry of the whole chain, and the anchor status. The API's verify endpoint returns the same anchor status. The rebuild reads every `anchor` entry first, before the check for a user id, so a restart knows when the last anchor was made and which entry it was.
 
 ### The rescue, `core/agent.py`
 
@@ -7646,8 +7689,16 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_api_anchor.py` | `test_an_anchor_store_that_fails_names_its_error_without_the_secret_and_the_payment_goes_through` | An anchor store that fails names its error without the secret and the payment goes through |
 | `test_api_anchor.py` | `test_anchor_fisco_is_not_configured_yet` | Anchor fisco is not configured yet |
 | `test_harness_anchor.py` | `test_the_harness_gives_the_loop_a_local_anchor_outside_data_and_keeps_anchor_entries_out_of_the_trail` | The harness gives the loop a local anchor outside data and keeps anchor entries out of the trail |
+| `test_anchor_attacks.py` | `test_an_edited_and_rechained_ledger_does_not_verify_against_its_anchor` | An edited and rechained ledger does not verify against its anchor |
+| `test_anchor_attacks.py` | `test_an_anchor_entry_pointed_at_an_older_signed_head_does_not_verify` | An anchor entry pointed at an older signed head does not verify |
+| `test_anchor_attacks.py` | `test_a_line_replayed_from_another_ledger_does_not_verify` | A line replayed from another ledger does not verify |
+| `test_anchor_attacks.py` | `test_a_ledger_truncated_after_its_first_anchor_does_not_verify` | A ledger truncated after its first anchor does not verify |
+| `test_anchor_attacks.py` | `test_a_tampered_ledger_is_never_anchored_so_a_later_payment_cannot_launder_it` | A tampered ledger is never anchored so a later payment cannot launder it |
+| `test_anchor_attacks.py` | `test_a_broken_chain_is_never_anchored` | A broken chain is never anchored |
+| `test_anchor_attacks.py` | `test_an_honest_ledger_with_several_anchors_still_verifies` | An honest ledger with several anchors still verifies |
+| `test_anchor_attacks.py` | `test_the_status_says_when_the_public_development_secret_signs` | The status says when the public development secret signs |
 
-In all, 64 parametrized tests add 171 extra runs, which is how 621 test functions become 792 tests.
+In all, 64 parametrized tests add 171 extra runs, which is how 629 test functions become 800 tests.
 
 ## The suites and their scenarios
 

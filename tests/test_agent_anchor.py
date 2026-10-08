@@ -310,6 +310,7 @@ def test_verify_ledger_reports_the_latest_anchor_and_that_it_verifies(tmp_path):
         "head_hash": anchored.payload["head_hash"],
         "head_seq": anchored.payload["head_seq"],
         "verified": True,
+        "matches_ledger": True,
         "anchored_at": clock.now.isoformat(),
         "kind": "local",
     }

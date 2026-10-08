@@ -83,6 +83,15 @@ class LocalSignedAnchor(Anchor):
     def verify(self, head_hash: str) -> bool:
         return self._record(head_hash) is not None
 
+    def signed_heads(self) -> list[tuple[str, int]]:
+        """Every head and sequence number the store holds in a line whose signature checks."""
+        return [(record["head_hash"], record["seq"]) for record in self._records() if self._signed_by_us(record)]
+
+    @staticmethod
+    def uses_development_secret() -> bool:
+        """Whether lines are signed with the public development secret, which anyone can sign with."""
+        return not os.environ.get(ANCHOR_SECRET_VAR) and os.environ.get("LIFELINE_ENV") != "production"
+
     def anchored_at(self, head_hash: str) -> datetime | None:
         """The time recorded for the latest signed line of this head, or None when none checks."""
         record = self._record(head_hash)

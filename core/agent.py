@@ -46,6 +46,7 @@ from contracts.schemas import (
 )
 from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.ledger import GENESIS_PREV_HASH
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
@@ -1762,14 +1763,24 @@ class AgentLoop:
         if not (self._anchor_due or hourly):
             return
         self._anchor_due = False
+        # A broken chain, or one the anchor store disagrees with, is never anchored, so a later
+        # anchor cannot sign a tampered head and launder it. Source: the anchor attacker brief of 8 October.
+        mandate = self._mandates.get(user_id)
+        trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
         head, seq = self._ledger.head(), self._head_seq
         # Only a hash of the student's id leaves the ledger, never the id.
         user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
         try:
+            broken = self._ledger.verify()
+            if broken is not None:
+                reason: str | None = f"The ledger chain breaks at entry {broken}, so its head is not anchored."
+            else:
+                reason = self._store_mismatch(self._ledger.entries())
+            if reason is not None:
+                self._write(trail, "note", {"kind": "anchor_skipped", "reason": reason})
+                return
             anchor_id = self._anchor.anchor(head, seq, user_hash)
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
-            mandate = self._mandates.get(user_id)
-            trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
             self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
             return
         # No user id, turn, or mandate: an anchor entry holds what was anchored and nothing about anyone.
@@ -1781,22 +1792,45 @@ class AgentLoop:
         self._wrote(entry)
         self._last_anchor_at, self._anchored_seq = now, entry.seq
 
+    def _store_mismatch(self, entries: list[LedgerEntry]) -> str | None:
+        """Why the ledger disagrees with a head the anchor store signed, or None when every one matches.
+
+        Every signed line must name an entry this ledger still holds, with that entry's hash, so an
+        edited and rechained ledger, a truncated one, and a line copied from another ledger all fail.
+        """
+        if not isinstance(self._anchor, LocalSignedAnchor):
+            return None
+        hashes = {0: GENESIS_PREV_HASH, **{entry.seq: entry.hash for entry in entries}}
+        for head, seq in self._anchor.signed_heads():
+            if hashes.get(seq) != head:
+                return f"The anchor store signed a head for entry {seq} that does not match the ledger."
+        return None
+
     def anchor_status(self) -> dict[str, Any]:
-        """The latest anchor entry in the ledger, and whether the anchor store still holds it signed."""
+        """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
+        naming the entry just before it with that entry's hash, and every other signed head matching too."""
+        local = isinstance(self._anchor, LocalSignedAnchor)
         kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
-        latest = next((entry for entry in reversed(self._ledger.entries()) if entry.kind == ANCHOR_KIND), None)
-        if self._anchor is None or latest is None:
-            return {"anchored": False, "kind": kind}
-        head = str(latest.payload.get("head_hash", ""))
-        status: dict[str, Any] = {"anchored": True, "head_hash": head, "head_seq": latest.payload.get("head_seq")}
-        try:
-            status["verified"] = self._anchor.verify(head)
-            at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
-        except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
-            status["verified"], at = False, None
-            status["error"] = f"{type(error).__name__}: {error}"
-        status["anchored_at"] = at.isoformat() if at is not None else None
+        entries = self._ledger.entries()
+        latest = next((entry for entry in reversed(entries) if entry.kind == ANCHOR_KIND), None)
+        status: dict[str, Any] = {"anchored": False}
+        if self._anchor is not None and latest is not None:
+            head, head_seq = str(latest.payload.get("head_hash", "")), latest.payload.get("head_seq")
+            status = {"anchored": True, "head_hash": head, "head_seq": head_seq}
+            hashes = {entry.seq: entry.hash for entry in entries}
+            try:
+                signed = self._anchor.verify(head)
+                at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+                matches = head_seq == latest.seq - 1 and hashes.get(head_seq) == head and self._store_mismatch(entries) is None
+            except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
+                signed, matches, at = False, False, None
+                status["error"] = f"{type(error).__name__}: {error}"
+            status["verified"] = signed and matches
+            status["matches_ledger"] = matches
+            status["anchored_at"] = at.isoformat() if at is not None else None
         status["kind"] = kind
+        if local and LocalSignedAnchor.uses_development_secret():
+            status["development_secret"] = True
         return status
 
     def _ledger_report(self, user_id: str, at: datetime) -> dict[str, Any]:

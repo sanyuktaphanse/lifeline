@@ -693,6 +693,7 @@ Response `200` after a confirmed payment:
     "head_hash": "9007632c329e17bf20352c8dcae33048dd1e4c2e73657c051a8540ab9328b432",
     "head_seq": 7,
     "verified": true,
+    "matches_ledger": true,
     "anchored_at": "2026-10-08T11:44:57.806133+00:00",
     "kind": "local"
   }
@@ -704,10 +705,12 @@ Response `200` after a confirmed payment:
 | `anchored` | Whether the ledger holds an anchor entry. When false, only `kind` follows |
 | `head_hash` | The ledger head the latest anchor recorded: the hash of entry `head_seq` |
 | `head_seq` | The sequence number of that entry. The anchor entry itself comes right after it |
-| `verified` | Whether `data/anchors.jsonl` holds that head in a line whose signature checks. A line that was edited in any field is false |
+| `verified` | True only when `data/anchors.jsonl` holds that head in a line whose signature checks and `matches_ledger` is true. A line edited in any field makes it false |
+| `matches_ledger` | Whether the ledger agrees with the anchor store: the anchor entry names the entry just before it with that entry's hash, and every head the store holds signed names an entry the ledger still holds, with its hash. A ledger edited and rechained, cut short, or paired with a line from another ledger makes it false |
 | `anchored_at` | The time the anchor store recorded for that head, or `null` when no signed line holds it |
 | `kind` | Where the head is anchored: `local` today |
 | `error` | Present only when the anchor store could not be read; `verified` is then false |
+| `development_secret` | Present and true only when `LIFELINE_ANCHOR_SECRET` is unset and the public development secret signs, so anyone could forge a line; never in production |
 
 An anchor entry carries no user id, so `GET /ledger/{user_id}` does not list it. A student can ask for the same check in chat, which runs the T0 tool `verify_ledger` and shows today's entries beside it.
 
