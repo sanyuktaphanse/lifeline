@@ -1444,6 +1444,13 @@ All times are local time.
 | `70ecb2f` | 8 Oct | T38: the arrival precheck, the inbound Wise quote, and update_plan at T1 |
 | `722c483` | 8 Oct | Docs: Stage 8 first half, the guard, the prechecks, the cash cap, the arrival and update_plan |
 | `977f729` | 8 Oct | Attacker briefs: close the breaks two independent attackers found in Stage 8 |
+| `50761e3` | 8 Oct | T26: cancel a transfer that is still pending |
+| `3043283` | 8 Oct | T35: the monthly note, built from the ledger alone |
+| `7535b81` | 8 Oct | T18: the parent as a user |
+| `4957ac1` | 8 Oct | T30: the full first week of a Chinese student in Singapore funded from China |
+| `7519069` | 8 Oct | Docs: Stage 8 second half, cancels, the monthly note, the parent and the first week |
+| `668b4fa` | 8 Oct | Attacker brief three: receipt ids with other dashes, months in other digits, cancelled transfers in the note |
+| `3459d95` | 8 Oct | Attacker brief four: a transfer the rail refused at the cap is listed in the monthly note |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
