@@ -49,7 +49,7 @@ The token itself is never written to the ledger; the engine recomputes it from t
 
 | Field present | What happened | What to show |
 | --- | --- | --- |
-| `receipt` | Money moved | The receipt; if `receipt.simulated` is true, `text` already says it was a simulation |
+| `receipt` | A payment was executed | The receipt and its `status`. `text` says the money was sent only when `status` is `completed`, says the transfer failed and no money arrived when it is `failed` or `returned`, and says it is not completed, naming the status, otherwise. If `receipt.simulated` is true, `text` also says it was a simulation |
 | `freeze` | A card freeze ran | `freeze.status`: `done`, `not_supported` with `freeze.deep_link` to the issuer's app, or `failed` with `freeze.reason` |
 | `confirmation` | An action waits for the student's yes | The warning for `confirmation.warning_key`, the action, and for a transfer the routes with `selected_route` marked, then a confirm button. When `confirmation.council` is present, what the council advised: `chosen`, `runner_up`, `reason`, `disagreement` and `triggers` |
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
@@ -858,6 +858,7 @@ Both endpoints return a `RescueReply`: an `AgentReply`, read exactly as above, w
 | `do_now` | What to show | What to send to `/rescue/step` |
 | --- | --- | --- |
 | `answer_identity_question` | `text`, which holds the question from the plan, and an answer box | `text`: the answer |
+| `locked` | `text`, which says the rescue is locked after three wrong answers; offer no answer box | nothing; an answer is not compared |
 | `choose_card` | The names in `card_names` | `text`: one name exactly as listed |
 | `confirm_freeze` | The freeze confirmation with `warn.freeze.card` | `confirmation_token` from `confirmation` |
 | `confirm_transfer_or_skip` | The allowance confirmation with `warn.transfer.irreversible`, and two buttons | Confirm: `confirmation_token`. Continue without money: no token |
@@ -870,7 +871,7 @@ Rules the app must keep:
 
 1. Only the student's own words start or move a rescue. These endpoints take no pasted text. Never send a pasted message as `text`, because it would count as the student's own.
 2. The identity answer is compared in code and never written to the ledger, to a reply, or to the conversation. Do not store it in the app.
-3. A wrong answer leaves the machine at `S1` and does nothing else. The family notice reports it.
+3. A wrong answer leaves the machine at `S1` and does nothing else. The third locks the rescue there: `do_now` becomes `locked`, no further answer is compared, the lock survives a restart, and the family notice reporting it is written at once. The family notice reports every wrong answer.
 4. A freeze that comes back `not_supported` or `failed` still moves the rescue on, because the reply has told the student the truth. Show `freeze.deep_link` as a button.
 5. The family notice is written to the ledger as a `note` of kind `family_notice`, with its `text`, `lang`, and `to`, the trusted contact's name and channel. Nothing is sent: the app delivers it.
 
