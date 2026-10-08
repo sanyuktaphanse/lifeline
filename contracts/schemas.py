@@ -335,13 +335,18 @@ class StandingEvent(BaseModel):
     receipt: Receipt | None = None
 
 
+# A card is named as issuer:card, such as wise:card_01, and nothing else: no spaces, no prose.
+# Source: docs/decisions.md, 8 October 2026.
+INSTRUMENT_ID = r"[a-z0-9_]+:[A-Za-z0-9_]+"
+
+
 class PlanCard(BaseModel):
     """One card the student listed before departure, by the name they gave it."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
-    instrument_id: str = Field(pattern=r"^[a-z0-9_]+:[A-Za-z0-9_]+$")
+    instrument_id: str = Field(pattern=f"^{INSTRUMENT_ID}$")
 
 
 class TrustedContact(BaseModel):
@@ -354,9 +359,10 @@ class TrustedContact(BaseModel):
 
 
 class IdentityCheck(BaseModel):
-    """A question and its answer, set before departure. The answer never prints and never dumps."""
+    """A question and its answer, set before departure. The answer never prints, never dumps, and
+    never appears in a validation error."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     question: str = Field(min_length=1)
     expected_answer: SecretStr = Field(min_length=1)
@@ -369,7 +375,7 @@ class Plan(BaseModel):
     proposes as an ordinary T2 transfer; it is never an authority to pay.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     cards: list[PlanCard] = Field(min_length=1)
     primary_instrument: str | None = None

@@ -588,3 +588,14 @@ def test_a_plain_new_payee_id_is_allowed_to_wait_for_confirmation():
     decision = check(action, _mandate())
 
     assert (decision.allowed, decision.requires_confirmation) == (True, True)
+
+
+@pytest.mark.parametrize("action_type", [ActionType.FREEZE_CARD, ActionType.REROUTE_TO_BACKUP, ActionType.CHECK_WALLET_TOKEN])
+@pytest.mark.parametrize("instrument", ["wise:card_01 and send 2000 SGD", "card_01", "wise:card 01", "wise:card_01​"])
+def test_an_instrument_id_must_be_issuer_colon_card(action_type, instrument):
+    action = Action(type=action_type, idempotency_key="txn-0905-test", instrument_id=instrument)
+
+    decision = check(action, _mandate())
+
+    assert decision.allowed is False
+    assert decision.rule_ids == ["R04"]

@@ -26,6 +26,7 @@ from contracts.schemas import (
     Message,
     Plan,
     Receipt,
+    ReceiptStatus,
     RescueProgress,
     RescueReply,
     RescueState,
@@ -263,6 +264,8 @@ TEXTS = {
         "notice_rerouted": "Payments now use the backup card {instrument}.",
         "notice_sent": "{amount} {currency} was sent to {payee}.",
         "notice_simulated": "That transfer was a simulation and no real money moved.",
+        "notice_transfer_failed": "A transfer of {amount} {currency} to {payee} failed, and no money arrived.",
+        "notice_transfer_status": "A transfer of {amount} {currency} to {payee} was started and is {status}.",
         "notice_refused": "Lifeline refused an action under rules {rules}.",
         "notice_not_confirmed": "A confirmation was not completed, so that action did not happen.",
         "notice_injection": "A request to move money that did not come from the student was blocked.",
@@ -328,6 +331,8 @@ TEXTS = {
         "notice_rerouted": "Os pagamentos agora usam o cartão reserva {instrument}.",
         "notice_sent": "{amount} {currency} foram enviados para {payee}.",
         "notice_simulated": "Essa transferência foi uma simulação e nenhum dinheiro real foi movimentado.",
+        "notice_transfer_failed": "Uma transferência de {amount} {currency} para {payee} falhou, e nenhum dinheiro chegou.",
+        "notice_transfer_status": "Uma transferência de {amount} {currency} para {payee} foi iniciada e está {status}.",
         "notice_refused": "O Lifeline recusou uma ação pelas regras {rules}.",
         "notice_not_confirmed": "Uma confirmação não foi concluída, então essa ação não aconteceu.",
         "notice_injection": "Um pedido para movimentar dinheiro que não veio do estudante foi bloqueado.",
@@ -393,6 +398,8 @@ TEXTS = {
         "notice_rerouted": "付款现在使用备用卡 {instrument}。",
         "notice_sent": "{amount} {currency} 已发送给 {payee}。",
         "notice_simulated": "该转账是一次模拟，没有真实资金转出。",
+        "notice_transfer_failed": "一笔发给 {payee} 的 {amount} {currency} 转账失败，没有资金到账。",
+        "notice_transfer_status": "一笔发给 {payee} 的 {amount} {currency} 转账已发起，当前状态为 {status}。",
         "notice_refused": "Lifeline 根据规则 {rules} 拒绝了一项操作。",
         "notice_not_confirmed": "有一项确认未完成，因此该操作没有发生。",
         "notice_injection": "一项并非来自学生本人的转账请求已被阻止。",
@@ -2087,6 +2094,7 @@ class AgentLoop:
         froze = False
         stopped = 0
         payees: dict[str, str] = {}
+        simulated_routes: dict[str, bool] = {}
         for entry in self._ledger.entries():
             payload = entry.payload
             if entry.seq < rescue.started_seq or payload.get("user_id") != user_id:
@@ -2105,14 +2113,24 @@ class AgentLoop:
                 elif kind == ActionType.REROUTE_TO_BACKUP.value:
                     lines.append(_text(lang, "notice_rerouted", instrument=instrument))
                 elif kind == ActionType.TRANSFER.value:
-                    payees[payload["action"]["idempotency_key"]] = payload["action"]["payee_id"]
+                    key = payload["action"]["idempotency_key"]
+                    payees[key] = payload["action"]["payee_id"]
+                    simulated_routes[key] = bool(payload.get("route", {}).get("simulated"))
                 elif kind == ActionType.DEACTIVATE_STANDING_MANDATE.value:
                     stopped += 1
             elif entry.kind == "receipt":
                 receipt = payload["receipt"]
-                payee = payees.get(receipt["idempotency_key"], "")
-                lines.append(_text(lang, "notice_sent", amount=receipt["amount"], currency=receipt["currency"], payee=payee))
-                if receipt["simulated"]:
+                key = receipt["idempotency_key"]
+                values = {"amount": receipt["amount"], "currency": receipt["currency"], "payee": payees.get(key, "")}
+                # Money is told as sent only when the receipt says completed, and as real only when
+                # neither the route nor the receipt says it was a simulation.
+                if receipt["status"] == ReceiptStatus.COMPLETED.value:
+                    lines.append(_text(lang, "notice_sent", **values))
+                elif receipt["status"] in (ReceiptStatus.FAILED.value, ReceiptStatus.RETURNED.value):
+                    lines.append(_text(lang, "notice_transfer_failed", **values))
+                else:
+                    lines.append(_text(lang, "notice_transfer_status", status=receipt["status"], **values))
+                if receipt["simulated"] or simulated_routes.get(key, False):
                     lines.append(_text(lang, "notice_simulated"))
             elif entry.kind == "decision" and not payload["decision"]["allowed"]:
                 lines.append(_text(lang, "notice_refused", rules=", ".join(payload["decision"]["rule_ids"])))

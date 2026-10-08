@@ -11,6 +11,8 @@ from typing import Any
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, Field
@@ -259,6 +261,14 @@ def create_app(
     @app.exception_handler(ModelAdapterError)
     async def model_unavailable(request: Request, error: ModelAdapterError) -> JSONResponse:
         return JSONResponse(status_code=503, content={"detail": str(error)})
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid(request: Request, error: RequestValidationError) -> JSONResponse:
+        errors = error.errors()
+        if request.url.path.startswith("/rescue/"):
+            # A rescue request can hold the identity answer, so its 422 never echoes what was sent.
+            errors = [{name: value for name, value in item.items() if name != "input"} for item in errors]
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
     def known(user: str) -> str:
         if user not in users:

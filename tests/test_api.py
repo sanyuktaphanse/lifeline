@@ -687,3 +687,15 @@ def test_the_demo_self_payee_is_past_its_cooling_period():
     assert {"SG>SG"} <= mandate.allowed_corridors
     assert "emergency" in mandate.allowed_purposes
     assert mandate.payee_added_at["self_sg"] < mandate.valid_from
+
+
+@pytest.mark.parametrize("body", [{"text": DEMO_ANSWER}, {"user_id": USER, "text": DEMO_ANSWER, "lang": "xx"}])
+def test_a_malformed_rescue_step_never_echoes_what_was_typed(body):
+    client = _client()
+    _rescue_start(client)
+
+    response = client.post("/rescue/step", json=body)
+
+    assert response.status_code == 422
+    assert DEMO_ANSWER not in response.text
+    assert response.json()["detail"][0]["loc"]

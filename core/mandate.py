@@ -8,7 +8,7 @@ from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
-from contracts.schemas import Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
+from contracts.schemas import INSTRUMENT_ID, Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
 from core.standing import occurrence_containing
 from core.tiers import TIERS
 
@@ -28,6 +28,8 @@ WARNING_KEYS = {
 ALLOWED_RULE = {Tier.T0: "R02", Tier.T1: "R02", Tier.T2: "R11"}
 # Source: docs/decisions.md, 8 October 2026. A new payee id is plain ASCII letters, digits, and
 # the joiners . @ - _, so a lookalike letter, a space, or an invisible character cannot pass for one.
+CARD_ACTIONS = (ActionType.FREEZE_CARD, ActionType.REROUTE_TO_BACKUP, ActionType.CHECK_WALLET_TOKEN)
+PLAIN_INSTRUMENT_ID = re.compile(INSTRUMENT_ID)
 PLAIN_PAYEE_ID = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 
 
@@ -214,6 +216,10 @@ class DeterministicMandateEngine(MandateEngine):
         if action.type is ActionType.FREEZE_CARD and not action.instrument_id:
             rule_ids.append("R04")
             reasons.append("Freezing a card needs the card's instrument id, and this one has none.")
+
+        if action.type in CARD_ACTIONS and action.instrument_id and not PLAIN_INSTRUMENT_ID.fullmatch(action.instrument_id):
+            rule_ids.append("R04")
+            reasons.append(f"Instrument id {action.instrument_id!r} is not written as issuer:card.")
 
         if action.type is ActionType.REROUTE_TO_BACKUP and not action.instrument_id:
             rule_ids.append("R04")
