@@ -3,6 +3,8 @@ note: The student pays this month's rent, which the loop anchors after its execu
 expected:
   reply: answer
   ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, execution]
+  # One anchor, after the transfer's execution; the T0 read that follows within the hour adds none.
+  anchors: 1
 runs:
   - lang: en
     turns:

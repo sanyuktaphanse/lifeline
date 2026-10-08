@@ -1783,14 +1783,14 @@ class AgentLoop:
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
             self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
             return
-        # No user id, turn, or mandate: an anchor entry holds what was anchored and nothing about anyone.
-        entry = self._ledger.append(
-            ACTOR,
+        # The entry carries the student like every entry, so it is listed in their ledger; the line in
+        # the anchor store holds only the hash of their id. Source: docs/decisions.md, 8 October 2026.
+        self._write(
+            trail,
             ANCHOR_KIND,
             {"head_hash": head, "head_seq": seq, "anchor_id": anchor_id, "anchored_at": now.isoformat()},
         )
-        self._wrote(entry)
-        self._last_anchor_at, self._anchored_seq = now, entry.seq
+        self._last_anchor_at, self._anchored_seq = now, self._head_seq
 
     def _store_mismatch(self, entries: list[LedgerEntry]) -> str | None:
         """Why the ledger disagrees with a head the anchor store signed, or None when every one matches.

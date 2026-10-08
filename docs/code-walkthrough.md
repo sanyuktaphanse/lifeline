@@ -5262,17 +5262,17 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
             self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
             return
-        # No user id, turn, or mandate: an anchor entry holds what was anchored and nothing about anyone.
-        entry = self._ledger.append(
-            ACTOR,
+        # The entry carries the student like every entry, so it is listed in their ledger; the line in
+        # the anchor store holds only the hash of their id. Source: docs/decisions.md, 8 October 2026.
+        self._write(
+            trail,
             ANCHOR_KIND,
             {"head_hash": head, "head_seq": seq, "anchor_id": anchor_id, "anchored_at": now.isoformat()},
         )
-        self._wrote(entry)
-        self._last_anchor_at, self._anchored_seq = now, entry.seq
+        self._last_anchor_at, self._anchored_seq = now, self._head_seq
 ```
 
-`_anchor_if_due` does nothing without an anchor. The hour is measured on the loop's clock, which a test injects, from the last anchor, or from the first entry when there has been none, and it fires only when something was written after the last anchor, so an idle hour anchors nothing again. The head is read just before the anchor entry is appended, so the anchored head is the head before that entry and its sequence is one less than the entry's own. The anchor is given a SHA 256 of the student's id, never the id. When the anchor store raises, a `note` of kind `anchor_failed` names the error and the call returns as it was; the payment that caused it has already happened and is never undone. The anchor entry is appended straight to the ledger without `_write`, so it holds no user id, turn, mandate, provider, or model, only the head hash, its sequence, the anchor id, and the time.
+`_anchor_if_due` does nothing without an anchor. The hour is measured on the loop's clock, which a test injects, from the last anchor, or from the first entry when there has been none, and it fires only when something was written after the last anchor, so an idle hour anchors nothing again. The head is read just before the anchor entry is appended, so the anchored head is the head before that entry and its sequence is one less than the entry's own. The anchor is given a SHA 256 of the student's id, never the id. When the anchor store raises, a `note` of kind `anchor_failed` names the error and the call returns as it was; the payment that caused it has already happened and is never undone. The anchor entry is written through `_write`, so it carries the student's id, the turn and the mandate like every entry and is listed in the student's ledger, beside the head hash, its sequence, the anchor id, and the time. The line in the anchor store holds only the hash of the id.
 
 ```python
     def _store_mismatch(self, entries: list[LedgerEntry]) -> str | None:
@@ -6004,7 +6004,7 @@ TEXT_CHECKS = ("must_contain", "must_not_contain")
 # entries only record the head, so neither is part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
-RUN_CHECKS = ("ledger", "notes", "family_notice", "must_not_contain", "verify")
+RUN_CHECKS = ("ledger", "anchors", "notes", "family_notice", "must_not_contain", "verify")
 # A turn whose language is this one is built without a language, so the loop detects it.
 DETECT = "detect"
 # The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
@@ -6220,7 +6220,7 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
     return failures
 ```
 
-`TURN_KIND` and `ANCHOR_KIND` are the entry kinds the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and an `anchor` entry only records the head, and neither is part of the action trail. `run_scenario_run` gives every run a `LocalSignedAnchor` in a temporary directory of its own under `.harness_tmp/`, which is removed when the run ends, so no scenario writes into `data/`. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09. `rescue_state` and `do_now` are read from a rescue reply's `rescue` field; any other reply has none, so the expectation fails rather than passing on a missing field.
+`TURN_KIND` and `ANCHOR_KIND` are the entry kinds the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and an `anchor` entry only records the head, and neither is part of the action trail. The `anchors` expectation counts the anchor entries of the run instead, so a scenario can assert that an anchor happened, or that none did. `run_scenario_run` gives every run a `LocalSignedAnchor` in a temporary directory of its own under `.harness_tmp/`, which is removed when the run ends, so no scenario writes into `data/`. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09. `rescue_state` and `do_now` are read from a rescue reply's `rescue` field; any other reply has none, so the expectation fails rather than passing on a missing field.
 
 ```python
 def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]]], expect: dict[str, Any]) -> list[str]:
@@ -6393,6 +6393,10 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
     kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
+    # Anchor entries are left out of the trail, so a scenario asserts them by their count.
+    anchors = sum(entry.kind == ANCHOR_KIND for entry in ledger.entries())
+    if "anchors" in expected and anchors != expected["anchors"]:
+        result.failures.append(f"anchor entries were {anchors}, expected {expected['anchors']}")
     notes = [entry.payload.get("kind") for entry in ledger.entries() if entry.kind == "note"]
     if "notes" in expected and notes != expected["notes"]:
         result.failures.append(f"notes were {notes}, expected {expected['notes']}")
@@ -7657,8 +7661,8 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_agent_anchor.py` | `test_a_t2_execution_is_anchored_once_after_its_trail` | A t2 execution is anchored once after its trail |
 | `test_agent_anchor.py` | `test_a_t0_read_writes_no_anchor` | A t0 read writes no anchor |
 | `test_agent_anchor.py` | `test_the_anchored_head_is_the_head_before_the_anchor_entry` | The anchored head is the head before the anchor entry |
-| `test_agent_anchor.py` | `test_the_anchor_entry_holds_the_head_the_sequence_the_id_and_the_time_and_nothing_else` | The anchor entry holds the head the sequence the id and the time and nothing else |
-| `test_agent_anchor.py` | `test_nothing_about_money_or_the_student_reaches_an_anchor_line_or_entry` | Nothing about money or the student reaches an anchor line or entry |
+| `test_agent_anchor.py` | `test_the_anchor_entry_holds_the_student_the_head_the_sequence_the_id_and_the_time` | The anchor entry holds the student the head the sequence the id and the time |
+| `test_agent_anchor.py` | `test_nothing_about_money_reaches_an_anchor_line_or_entry_and_the_student_only_the_entry` | Nothing about money reaches an anchor line or entry and the student only the entry |
 | `test_agent_anchor.py` | `test_an_hourly_anchor_fires_when_the_last_anchor_is_older_than_an_hour_and_not_before` | An hourly anchor fires when the last anchor is older than an hour and not before |
 | `test_agent_anchor.py` | `test_with_no_anchor_yet_the_hour_is_measured_from_the_first_entry` | With no anchor yet the hour is measured from the first entry |
 | `test_agent_anchor.py` | `test_a_restart_rebuilds_the_last_anchor_time_from_the_ledger` | A restart rebuilds the last anchor time from the ledger |
@@ -7697,8 +7701,12 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_anchor_attacks.py` | `test_a_broken_chain_is_never_anchored` | A broken chain is never anchored |
 | `test_anchor_attacks.py` | `test_an_honest_ledger_with_several_anchors_still_verifies` | An honest ledger with several anchors still verifies |
 | `test_anchor_attacks.py` | `test_the_status_says_when_the_public_development_secret_signs` | The status says when the public development secret signs |
+| `test_api_anchor.py` | `test_the_students_ledger_lists_the_anchor_entry_after_a_t2_execution_and_the_anchors_file_holds_no_user_id` | The students ledger lists the anchor entry after a t2 execution and the anchors file holds no user id |
+| `test_harness_anchor.py` | `test_an_anchors_expectation_passes_on_the_count_of_anchor_entries` | An anchors expectation passes on the count of anchor entries |
+| `test_harness_anchor.py` | `test_an_anchors_expectation_fails_with_the_count_when_it_differs` | An anchors expectation fails with the count when it differs |
+| `test_harness_anchor.py` | `test_a_read_only_run_can_assert_that_no_anchor_happened` | A read only run can assert that no anchor happened |
 
-In all, 64 parametrized tests add 171 extra runs, which is how 629 test functions become 800 tests.
+In all, 64 parametrized tests add 171 extra runs, which is how 633 test functions become 804 tests.
 
 ## The suites and their scenarios
 

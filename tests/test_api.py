@@ -43,7 +43,7 @@ def _call(name: str, arguments: dict) -> Message:
 
 
 def _trail_kinds(client: TestClient) -> list[str]:
-    return [entry["kind"] for entry in client.get(f"/ledger/{USER}").json() if entry["kind"] != "turn"]
+    return [entry["kind"] for entry in client.get(f"/ledger/{USER}").json() if entry["kind"] not in ("turn", "anchor")]
 
 
 def _client(responses=(), **overrides) -> TestClient:

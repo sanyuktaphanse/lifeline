@@ -123,3 +123,18 @@ def test_anchor_fisco_is_not_configured_yet(monkeypatch):
 
     with pytest.raises(AnchorNotConfigured, match="fisco"):
         _client()
+
+
+def test_the_students_ledger_lists_the_anchor_entry_after_a_t2_execution_and_the_anchors_file_holds_no_user_id(ledger_file):
+    client = _client([_call("propose_transfer", RENT)])
+    _pay_rent(client)
+
+    listed = client.get(f"/ledger/{USER}").json()
+
+    kinds = [entry["kind"] for entry in listed]
+    assert kinds[-1] == "anchor"
+    assert kinds.index("receipt") < kinds.index("anchor")
+    assert listed[-1]["payload"]["user_id"] == USER
+    anchors = (ledger_file.parent / "anchors.jsonl").read_text(encoding="utf-8")
+    assert anchors.strip()
+    assert USER not in anchors

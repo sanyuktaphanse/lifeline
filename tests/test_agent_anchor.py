@@ -19,7 +19,8 @@ USER = "student_001"
 SECRET = "anchor-loop-secret-0123456789"
 RENT = {"amount": "1200", "currency": "SGD", "corridor": "SG>BR", "payee_id": "landlord_sp", "purpose": "rent"}
 RENT_REQUEST = "Send 1,200 SGD rent to landlord_sp in Brazil"
-ANCHOR_FIELDS = {"head_hash", "head_seq", "anchor_id", "anchored_at"}
+# The anchor entry carries the student, the turn and the mandate like every entry, and the four anchor values.
+ANCHOR_FIELDS = {"user_id", "turn", "mandate_id", "head_hash", "head_seq", "anchor_id", "anchored_at"}
 
 
 @pytest.fixture(autouse=True)
@@ -149,7 +150,7 @@ def test_the_anchored_head_is_the_head_before_the_anchor_entry(tmp_path):
     assert ledger.verify() is None
 
 
-def test_the_anchor_entry_holds_the_head_the_sequence_the_id_and_the_time_and_nothing_else(tmp_path):
+def test_the_anchor_entry_holds_the_student_the_head_the_sequence_the_id_and_the_time(tmp_path):
     ledger = HashChainLedger()
     clock = Clock()
     anchor = LocalSignedAnchor(tmp_path / "anchors.jsonl", clock=clock)
@@ -159,6 +160,7 @@ def test_the_anchor_entry_holds_the_head_the_sequence_the_id_and_the_time_and_no
 
     [entry] = _anchors(ledger)
     assert set(entry.payload) == ANCHOR_FIELDS
+    assert entry.payload["user_id"] == USER
     assert entry.payload["anchor_id"].startswith("local:")
     assert datetime.fromisoformat(entry.payload["anchored_at"]) == clock.now
     [line] = [json.loads(line) for line in anchor.path.read_text(encoding="utf-8").splitlines()]
@@ -168,17 +170,19 @@ def test_the_anchor_entry_holds_the_head_the_sequence_the_id_and_the_time_and_no
     assert anchor.verify(entry.payload["head_hash"]) is True
 
 
-def test_nothing_about_money_or_the_student_reaches_an_anchor_line_or_entry(tmp_path):
+def test_nothing_about_money_reaches_an_anchor_line_or_entry_and_the_student_only_the_entry(tmp_path):
     ledger = HashChainLedger()
     loop, _ = _loop([_call("propose_transfer", RENT)], tmp_path, ledger=ledger)
 
     _pay_rent(loop)
 
     [entry] = _anchors(ledger)
-    written = [json.dumps(entry.payload), (tmp_path / "anchors.jsonl").read_text(encoding="utf-8")]
-    for text in written:
-        for detail in (USER, "1200", "2300", "landlord_sp", "SGD", "rent", "wise"):
+    line = (tmp_path / "anchors.jsonl").read_text(encoding="utf-8")
+    for text in (json.dumps(entry.payload), line):
+        for detail in ("1200", "2300", "landlord_sp", "SGD", "rent", "wise"):
             assert detail not in text
+    # The line outside the ledger holds only a hash of the student's id, never the id.
+    assert USER not in line
 
 
 def test_an_hourly_anchor_fires_when_the_last_anchor_is_older_than_an_hour_and_not_before(tmp_path):
@@ -315,7 +319,8 @@ def test_verify_ledger_reports_the_latest_anchor_and_that_it_verifies(tmp_path):
         "kind": "local",
     }
     kinds = [entry["kind"] for entry in report["entries"]]
-    assert "receipt" in kinds and "anchor" not in kinds
+    # The anchor entry carries the student, so today's entries list it right after the payment's turn.
+    assert kinds.index("receipt") < kinds.index("anchor")
     assert len(_anchors(ledger)) == 1
     assert SECRET not in json.dumps(report)
     assert SECRET not in json.dumps([entry.payload for entry in ledger.entries()])

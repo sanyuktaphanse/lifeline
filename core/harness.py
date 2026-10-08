@@ -42,7 +42,7 @@ TEXT_CHECKS = ("must_contain", "must_not_contain")
 # entries only record the head, so neither is part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
-RUN_CHECKS = ("ledger", "notes", "family_notice", "must_not_contain", "verify")
+RUN_CHECKS = ("ledger", "anchors", "notes", "family_notice", "must_not_contain", "verify")
 # A turn whose language is this one is built without a language, so the loop detects it.
 DETECT = "detect"
 # The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
@@ -409,6 +409,10 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
     kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
+    # Anchor entries are left out of the trail, so a scenario asserts them by their count.
+    anchors = sum(entry.kind == ANCHOR_KIND for entry in ledger.entries())
+    if "anchors" in expected and anchors != expected["anchors"]:
+        result.failures.append(f"anchor entries were {anchors}, expected {expected['anchors']}")
     notes = [entry.payload.get("kind") for entry in ledger.entries() if entry.kind == "note"]
     if "notes" in expected and notes != expected["notes"]:
         result.failures.append(f"notes were {notes}, expected {expected['notes']}")

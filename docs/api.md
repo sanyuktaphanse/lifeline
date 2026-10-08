@@ -712,7 +712,7 @@ Response `200` after a confirmed payment:
 | `error` | Present only when the anchor store could not be read; `verified` is then false |
 | `development_secret` | Present and true only when `LIFELINE_ANCHOR_SECRET` is unset and the public development secret signs, so anyone could forge a line; never in production |
 
-An anchor entry carries no user id, so `GET /ledger/{user_id}` does not list it. A student can ask for the same check in chat, which runs the T0 tool `verify_ledger` and shows today's entries beside it.
+An anchor entry carries the student's id like every entry, so `GET /ledger/{user_id}` lists it, after the entries it anchors. The line in `data/anchors.jsonl` holds only a hash of the id. A student can ask for the same check in chat, which runs the T0 tool `verify_ledger` and shows today's entries beside it.
 
 ## POST /trace
 
