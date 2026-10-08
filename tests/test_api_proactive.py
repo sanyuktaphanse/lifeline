@@ -160,3 +160,87 @@ def test_a_malformed_month_writes_nothing():
     client.get(f"/note/{USER}/monthly", params={"month": "2026-13"})
 
     assert _trail(client) == []
+
+
+# GET /reminders/{user}
+
+T13_REMINDER = {"text": "Rent is due on 1 October", "due": "2026-09-28"}
+
+
+def _set_reminder(client: TestClient) -> None:
+    client.post("/chat", json={"user_id": USER, "text": "Remind me three days before rent is due on 1 October"})
+
+
+def _reminder_client(*arguments: dict) -> TestClient:
+    responses = []
+    for reminder in arguments:
+        responses += [_call("set_reminder", reminder), _say("Done.")]
+    client = _client(responses)
+    for _ in arguments:
+        _set_reminder(client)
+    return client
+
+
+def test_the_reminder_t13_sets_appears_in_the_upcoming_list():
+    client = _reminder_client(T13_REMINDER)
+    note = next(e for e in client.get(f"/ledger/{USER}").json() if e["kind"] == "note")
+
+    body = client.get(f"/reminders/{USER}", params={"now": "2026-09-01T00:00:00Z"}).json()
+
+    assert body["due"] == []
+    assert body["upcoming"] == [{"text": "Rent is due on 1 October", "due": "2026-09-28T00:00:00Z", "seq": note["seq"]}]
+
+
+def test_reminders_are_split_into_due_and_upcoming_at_the_time_given():
+    client = _reminder_client(T13_REMINDER, {"text": "Visa renewal", "due": "2026-11-02"})
+
+    body = client.get(f"/reminders/{USER}", params={"now": "2026-10-01T00:00:00Z"}).json()
+
+    assert [item["text"] for item in body["due"]] == ["Rent is due on 1 October"]
+    assert [item["text"] for item in body["upcoming"]] == ["Visa renewal"]
+    assert body["now"] == "2026-10-01T00:00:00Z"
+
+
+def test_the_boundary_is_the_due_time_itself():
+    client = _reminder_client(T13_REMINDER)
+
+    at = client.get(f"/reminders/{USER}", params={"now": "2026-09-28T00:00:00Z"}).json()
+    before = client.get(f"/reminders/{USER}", params={"now": "2026-09-27T23:59:59.999999Z"}).json()
+
+    assert len(at["due"]) == 1 and at["upcoming"] == []
+    assert before["due"] == [] and len(before["upcoming"]) == 1
+
+
+def test_without_a_time_the_current_time_splits_the_lists():
+    client = _reminder_client({"text": "Long ago", "due": "2000-01-01"}, {"text": "Far ahead", "due": "2999-01-01"})
+
+    body = client.get(f"/reminders/{USER}").json()
+
+    assert [item["text"] for item in body["due"]] == ["Long ago"]
+    assert [item["text"] for item in body["upcoming"]] == ["Far ahead"]
+
+
+def test_a_student_with_no_reminders_gets_two_empty_lists():
+    body = _client().get(f"/reminders/{USER}", params={"now": "2026-10-01T00:00:00Z"}).json()
+
+    assert body["due"] == [] and body["upcoming"] == []
+
+
+def test_nothing_is_marked_delivered_and_reading_writes_nothing():
+    client = _reminder_client(T13_REMINDER)
+    before = client.get(f"/ledger/{USER}").json()
+
+    first = client.get(f"/reminders/{USER}", params={"now": "2026-10-01T00:00:00Z"}).json()
+    second = client.get(f"/reminders/{USER}", params={"now": "2026-10-01T00:00:00Z"}).json()
+
+    assert first == second
+    assert client.get(f"/ledger/{USER}").json() == before
+    assert "delivered" not in str(first)
+
+
+def test_reminders_for_an_unknown_student_are_404():
+    assert _client().get("/reminders/nobody").status_code == 404
+
+
+def test_a_time_without_a_zone_is_422():
+    assert _client().get(f"/reminders/{USER}", params={"now": "2026-10-01T00:00:00"}).status_code == 422

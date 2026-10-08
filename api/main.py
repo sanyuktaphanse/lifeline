@@ -43,6 +43,7 @@ from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
 from core.monthly import is_month, render
+from core.reminders import reminders_of, split
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
@@ -136,6 +137,23 @@ class VerifyResult(BaseModel):
 
 class Health(BaseModel):
     status: str
+
+
+class Reminder(BaseModel):
+    text: str
+    # When it falls due, in UTC, or None when the reminder's due value is not a date or a time.
+    due: AwareDatetime | None
+    # The sequence of the reminder note that set it.
+    seq: int
+
+
+class Reminders(BaseModel):
+    """The student's reminders, split at a time. Nothing is marked delivered: the app delivers them."""
+
+    user_id: str
+    now: AwareDatetime
+    due: list[Reminder]
+    upcoming: list[Reminder]
 
 
 class MonthlyNote(BaseModel):
@@ -459,6 +477,15 @@ def create_app(
         return MonthlyNote(
             user_id=user, month=chosen, lang=lang, text=render(summary, lang), summary=summary, seqs=result["seqs"]
         )
+
+    @app.get("/reminders/{user}")
+    def reminders(user: str, now: AwareDatetime | None = None) -> Reminders:
+        known(user)
+        at = now or datetime.now(timezone.utc)
+        with lock:
+            # A read of the reminder notes, as GET /ledger is a read of the entries, so nothing is written.
+            lists = split(reminders_of(ledger.entries(), user), at)
+        return Reminders.model_validate({"user_id": user, "now": at, **lists})
 
     @app.post("/standing/run_due")
     def standing_run_due(request: RunDueRequest) -> list[StandingEvent]:
