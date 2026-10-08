@@ -13,7 +13,8 @@ from typing import Any
 
 from contracts.schemas import LedgerEntry
 
-MONTH = re.compile(r"^(?P<year>\d{4})-(?P<month>0[1-9]|1[0-2])$")
+# ASCII digits only: a year in fullwidth or other digits would match no entry and read as an empty month.
+MONTH = re.compile(r"^(?P<year>[0-9]{4})-(?P<month>0[1-9]|1[0-2])$")
 # The receipt statuses a note lists as not having arrived. A cancel the rail carried out is listed too.
 PROBLEM_STATUSES = ("failed", "returned")
 
@@ -68,6 +69,29 @@ def _decimal(value: Any) -> Decimal:
 
 def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[str, Any]:
     """Every figure of the note for one student and one month, each with the entries it came from."""
+    entries = list(entries)
+    # A transfer is counted as sent only when it was not cancelled, failed or returned, in any month, as a
+    # reply says money was sent only when it was; those are listed with their outcome instead.
+    # Source: the attacker brief of 8 October.
+    keys = {
+        entry.payload.get("receipt", {}).get("receipt_id"): entry.payload.get("receipt", {}).get("idempotency_key")
+        for entry in entries
+        if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+    }
+    not_sent = {
+        entry.payload["receipt"].get("idempotency_key")
+        for entry in entries
+        if entry.kind == "receipt"
+        and entry.payload.get("user_id") == user_id
+        and entry.payload.get("receipt", {}).get("status") in PROBLEM_STATUSES
+    } | {
+        keys.get(entry.payload.get("receipt_id"))
+        for entry in entries
+        if entry.kind == "note"
+        and entry.payload.get("user_id") == user_id
+        and entry.payload.get("kind") == "cancel_result"
+        and entry.payload.get("status") == "done"
+    }
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     standing: list[dict[str, Any]] = []
     problems: list[dict[str, Any]] = []
@@ -77,7 +101,12 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         if payload.get("user_id") != user_id or month_of(entry.ts) != month:
             continue
         action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
-        if entry.kind == "execution" and action.get("type") == "transfer" and "route" in payload:
+        if (
+            entry.kind == "execution"
+            and action.get("type") == "transfer"
+            and "route" in payload
+            and action.get("idempotency_key") not in not_sent
+        ):
             key = (str(action.get("currency")), str(action.get("corridor")))
             group = groups.setdefault(
                 key, {"currency": key[0], "corridor": key[1], "count": 0, "total": Decimal(0), "fees": Decimal(0), "seqs": []}

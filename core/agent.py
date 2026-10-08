@@ -133,6 +133,9 @@ DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # A thousands grouping written with a space, a no break space, a narrow no break space, or an
 # apostrophe, between a digit and exactly three more.
+# Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
+# a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
+DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -651,7 +654,7 @@ class _Details:
     def add(self, text: str, source: Source) -> None:
         # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
         # detail on one side of the comparison only.
-        text = _visible(text)
+        text = DASHES.sub("-", _visible(text))
         self.texts.append((text.casefold(), source))
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
@@ -864,7 +867,7 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
 def _skeleton(payee: str) -> str:
     """A payee id as the provenance check compares it: compatibility forms folded, invisible
     characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
-    return _visible(payee).strip().casefold()
+    return DASHES.sub("-", _visible(payee)).strip().casefold()
 
 
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
@@ -876,8 +879,15 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
     receipt = _skeleton(action.receipt_id or "")
-    if receipt and receipt not in trail.from_user.payee_ids and receipt in trail.from_data.payee_ids:
-        untrusted["receipt_id"] = trail.from_data.payee_ids[receipt]
+    if receipt and receipt not in trail.from_user.payee_ids:
+        # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
+        # as a whole word anywhere in the data.
+        word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
+        source = trail.from_data.payee_ids.get(receipt) or next(
+            (source for text, source in trail.from_data.texts if word.search(text)), None
+        )
+        if source is not None:
+            untrusted["receipt_id"] = source
     return untrusted
 
 

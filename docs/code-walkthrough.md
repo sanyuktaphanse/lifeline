@@ -3545,6 +3545,9 @@ DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # A thousands grouping written with a space, a no break space, a narrow no break space, or an
 # apostrophe, between a digit and exactly three more.
+# Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
+# a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
+DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -4058,7 +4061,7 @@ class _Details:
     def add(self, text: str, source: Source) -> None:
         # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
         # detail on one side of the comparison only.
-        text = _visible(text)
+        text = DASHES.sub("-", _visible(text))
         self.texts.append((text.casefold(), source))
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
@@ -4276,7 +4279,7 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
 def _skeleton(payee: str) -> str:
     """A payee id as the provenance check compares it: compatibility forms folded, invisible
     characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
-    return _visible(payee).strip().casefold()
+    return DASHES.sub("-", _visible(payee)).strip().casefold()
 
 
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
@@ -4288,8 +4291,15 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
     receipt = _skeleton(action.receipt_id or "")
-    if receipt and receipt not in trail.from_user.payee_ids and receipt in trail.from_data.payee_ids:
-        untrusted["receipt_id"] = trail.from_data.payee_ids[receipt]
+    if receipt and receipt not in trail.from_user.payee_ids:
+        # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
+        # as a whole word anywhere in the data.
+        word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
+        source = trail.from_data.payee_ids.get(receipt) or next(
+            (source for text, source in trail.from_data.texts if word.search(text)), None
+        )
+        if source is not None:
+            untrusted["receipt_id"] = source
     return untrusted
 ```
 
@@ -6943,6 +6953,29 @@ def previous_month(month: str) -> str:
 ```python
 def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[str, Any]:
     """Every figure of the note for one student and one month, each with the entries it came from."""
+    entries = list(entries)
+    # A transfer is counted as sent only when it was not cancelled, failed or returned, in any month, as a
+    # reply says money was sent only when it was; those are listed with their outcome instead.
+    # Source: the attacker brief of 8 October.
+    keys = {
+        entry.payload.get("receipt", {}).get("receipt_id"): entry.payload.get("receipt", {}).get("idempotency_key")
+        for entry in entries
+        if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+    }
+    not_sent = {
+        entry.payload["receipt"].get("idempotency_key")
+        for entry in entries
+        if entry.kind == "receipt"
+        and entry.payload.get("user_id") == user_id
+        and entry.payload.get("receipt", {}).get("status") in PROBLEM_STATUSES
+    } | {
+        keys.get(entry.payload.get("receipt_id"))
+        for entry in entries
+        if entry.kind == "note"
+        and entry.payload.get("user_id") == user_id
+        and entry.payload.get("kind") == "cancel_result"
+        and entry.payload.get("status") == "done"
+    }
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     standing: list[dict[str, Any]] = []
     problems: list[dict[str, Any]] = []
@@ -6952,7 +6985,12 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         if payload.get("user_id") != user_id or month_of(entry.ts) != month:
             continue
         action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
-        if entry.kind == "execution" and action.get("type") == "transfer" and "route" in payload:
+        if (
+            entry.kind == "execution"
+            and action.get("type") == "transfer"
+            and "route" in payload
+            and action.get("idempotency_key") not in not_sent
+        ):
             key = (str(action.get("currency")), str(action.get("corridor")))
             group = groups.setdefault(
                 key, {"currency": key[0], "corridor": key[1], "count": 0, "total": Decimal(0), "fees": Decimal(0), "seqs": []}
@@ -6982,7 +7020,7 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
     }
 ```
 
-`summarize` walks the entries once and keeps only the student's, in the month. A transfer execution, one with a route, adds to the group for its currency and corridor, with its amount and the fee its route recorded, and its sequence goes into the group's `seqs`, so every figure can be checked against the entry it came from. `setdefault` creates a group the first time a key is seen. A receipt that failed or was returned, a cancel the rail carried out, and a refused decision are listed with their sequences too. Totals are kept as `Decimal` and written with `format(..., "f")`, so no amount is rounded through a float.
+`summarize` walks the entries once and keeps only the student's, in the month. It first gathers the idempotency keys of every transfer the student's ledger shows cancelled, failed or returned, in any month, because a note says a transfer was sent only when it was. Every other transfer execution, one with a route, adds to the group for its currency and corridor, with its amount and the fee its route recorded, and its sequence goes into the group's `seqs`, so every figure can be checked against the entry it came from. `setdefault` creates a group the first time a key is seen. A receipt that failed or was returned, a cancel the rail carried out, and a refused decision are listed with their sequences too. Totals are kept as `Decimal` and written with `format(..., "f")`, so no amount is rounded through a float.
 
 ```python
 def render(summary: dict[str, Any], lang: str) -> str:
