@@ -756,7 +756,7 @@ from contracts.schemas import (
     StandingMandate,
     Tier,
 )
-from core.standing import occurrence_containing
+from core.standing import next_occurrence, occurrence_containing
 from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
@@ -862,6 +862,32 @@ def _confirmed_standing(action: Action, mandate: Mandate) -> StandingMandate | N
     return standing
 
 
+def _ran_in(standing: StandingMandate, period: str, history: Sequence[Action]) -> bool:
+    return any(
+        past.type is ActionType.TRANSFER
+        and past.standing_mandate_id == standing.id
+        and (occurrence_containing(standing.schedule, standing.notice_hours, past.requested_at) or ("",))[0] == period
+        for past in history
+    )
+
+
+def _cancelled_periods(standing: StandingMandate, history: Sequence[Action]) -> set[str]:
+    """The periods the student cancelled, read from executed cancel_standing_run actions.
+
+    A cancel skips the next period that has not run when it was made, as the loop records it, so a run
+    for that period is outside the pattern whoever proposes it. Source: docs/decisions.md, 9 October 2026.
+    """
+    periods = set()
+    for index, past in enumerate(history):
+        if past.type is not ActionType.CANCEL_STANDING_RUN or past.standing_mandate_id != standing.id:
+            continue
+        period, due = next_occurrence(standing.schedule, past.requested_at)
+        if _ran_in(standing, period, history[:index]):
+            period, _ = next_occurrence(standing.schedule, due + timedelta(hours=24))
+        periods.add(period)
+    return periods
+
+
 def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]) -> list[str]:
     standing = _standing_named(action, mandate)
     if standing is None:
@@ -897,10 +923,12 @@ def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]
         for past in history
     ):
         outside.append(f"a run for {occurrence[0]} already executed")
+    elif occurrence[0] in _cancelled_periods(standing, history):
+        outside.append(f"the student cancelled the run for {occurrence[0]}")
     return outside
 ```
 
-`_utc_date` converts a request time to UTC before taking the date, so a transfer at 07:00 in Singapore and one at 23:00 the previous evening in London are compared on the same calendar. `_spent_on` adds up every earlier transfer on that day. Starting the sum at `Decimal(0)` keeps the total a `Decimal` even when there is no history. The three functions after them read standing mandates. `_standing_named` finds the standing mandate an action names on the mandate. `_confirmed_standing` returns it only when it is active and was confirmed before the request, which is what R01 asks of a run the loop starts. `_outside_pattern` lists every way a transfer falls outside its standing mandate: an unknown, inactive, or later confirmed standing mandate stops the list at once. Otherwise it checks a different payee, corridor, or purpose, and an amount further than `tolerance_pct` percent from the standing amount. It checks a request time outside the window, using `occurrence_containing` from `core/standing.py`, and a run that already executed in the same period. An empty list means the transfer is within the pattern. `_confirmed_standing` no longer asks for the standing mandate to be active, so a run under a stopped one gets past R01 and is refused under R12 with a reason that says so. For the same reason `_outside_pattern` returns no escalation for an inactive standing mandate: stopping one is not a pattern to escalate but a refusal.
+`_utc_date` converts a request time to UTC before taking the date, so a transfer at 07:00 in Singapore and one at 23:00 the previous evening in London are compared on the same calendar. `_spent_on` adds up every earlier transfer on that day. Starting the sum at `Decimal(0)` keeps the total a `Decimal` even when there is no history. The three functions after them read standing mandates. `_standing_named` finds the standing mandate an action names on the mandate. `_confirmed_standing` returns it only when it is active and was confirmed before the request, which is what R01 asks of a run the loop starts. `_outside_pattern` lists every way a transfer falls outside its standing mandate: an unknown, inactive, or later confirmed standing mandate stops the list at once. Otherwise it checks a different payee, corridor, or purpose, and an amount further than `tolerance_pct` percent from the standing amount. It checks a request time outside the window, using `occurrence_containing` from `core/standing.py`, a run that already executed in the same period, and a period the student cancelled. `_cancelled_periods` reads each executed `cancel_standing_run` in the history and works out the period it skipped the way the loop does: the next occurrence after the cancel, or the one after that when the next one had already run, which `_ran_in` checks against the history before the cancel only. Since the review of 9 October a cancelled period is outside the pattern for every source, so a run the model proposes from chat for it escalates under R13 to an ordinary confirmation instead of being paid at T1. An empty list means the transfer is within the pattern. `_confirmed_standing` no longer asks for the standing mandate to be active, so a run under a stopped one gets past R01 and is refused under R12 with a reason that says so. For the same reason `_outside_pattern` returns no escalation for an inactive standing mandate: stopping one is not a pattern to escalate but a refusal.
 
 ```python
 class DeterministicMandateEngine(MandateEngine):
@@ -10022,6 +10050,23 @@ def test_a_turn_that_runs_out_of_steps_still_carries_the_ninety_percent_warning(
 ```
 
 Written by an attacker who did not write Stage 9, before the fix. The model records a withdrawal that crosses the 90 percent line and then calls tools until the loop's limit of eight. The reply used to be only the sentence that the loop stopped, so the warning written to the ledger never reached the student; the loop now keeps its own sentences in that reply. The other seven tests are the other breaks the brief found, each described in `docs/decisions.md`.
+
+### The Stage 10 adversarial review, `tests/test_attack_seven.py`
+
+```python
+def test_a_cancelled_standing_run_is_not_paid_from_chat_without_confirmation():
+    s = _cancelled_setup()
+    s.adapter._responses[:0] = [_call("propose_transfer", {**RENT, "standing_mandate_id": STANDING_ID})]
+
+    reply = s.loop.handle(USER, _user("What is my balance?"))
+
+    assert reply.receipt is None, reply.text
+    assert "receipt" not in _kinds(s.ledger)
+    assert reply.confirmation is not None
+    assert reply.decision.rule_ids == ["R13", "R11"]
+```
+
+Each test in this file is a break that the Stage 10 attackers found and three skeptics failed to refute. Here the student has created and confirmed a monthly rent standing mandate and cancelled this month's run. On a later turn about something else, the model proposes the run from chat. Before the fix the engine found it within the pattern and the loop paid it at once under R12. Now the engine reads the cancel from its history, the run escalates under R13, and the student is asked to confirm. The file's other tests check the same at engine level, over HTTP and after a rebuild from the ledger, that a confirmed escalation still pays, that a cancel made after a period ran applies to the next period, and that cancelling one standing mandate leaves another within its pattern.
 
 ## The suites and their scenarios
 

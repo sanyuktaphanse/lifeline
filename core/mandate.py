@@ -19,7 +19,7 @@ from contracts.schemas import (
     StandingMandate,
     Tier,
 )
-from core.standing import occurrence_containing
+from core.standing import next_occurrence, occurrence_containing
 from core.tiers import TIERS
 
 DEVELOPMENT_CONFIRM_SECRET = "lifeline-development-secret-not-for-production"
@@ -119,6 +119,32 @@ def _confirmed_standing(action: Action, mandate: Mandate) -> StandingMandate | N
     return standing
 
 
+def _ran_in(standing: StandingMandate, period: str, history: Sequence[Action]) -> bool:
+    return any(
+        past.type is ActionType.TRANSFER
+        and past.standing_mandate_id == standing.id
+        and (occurrence_containing(standing.schedule, standing.notice_hours, past.requested_at) or ("",))[0] == period
+        for past in history
+    )
+
+
+def _cancelled_periods(standing: StandingMandate, history: Sequence[Action]) -> set[str]:
+    """The periods the student cancelled, read from executed cancel_standing_run actions.
+
+    A cancel skips the next period that has not run when it was made, as the loop records it, so a run
+    for that period is outside the pattern whoever proposes it. Source: docs/decisions.md, 9 October 2026.
+    """
+    periods = set()
+    for index, past in enumerate(history):
+        if past.type is not ActionType.CANCEL_STANDING_RUN or past.standing_mandate_id != standing.id:
+            continue
+        period, due = next_occurrence(standing.schedule, past.requested_at)
+        if _ran_in(standing, period, history[:index]):
+            period, _ = next_occurrence(standing.schedule, due + timedelta(hours=24))
+        periods.add(period)
+    return periods
+
+
 def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]) -> list[str]:
     standing = _standing_named(action, mandate)
     if standing is None:
@@ -154,6 +180,8 @@ def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]
         for past in history
     ):
         outside.append(f"a run for {occurrence[0]} already executed")
+    elif occurrence[0] in _cancelled_periods(standing, history):
+        outside.append(f"the student cancelled the run for {occurrence[0]}")
     return outside
 
 
