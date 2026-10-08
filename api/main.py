@@ -44,6 +44,7 @@ from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -62,6 +63,8 @@ TICK_SECONDS = 60.0
 # Source: .env.example. The council costs five model calls per escalated transfer, so it is off
 # unless COUNCIL names one of these values.
 COUNCIL_ON = frozenset({"on", "true", "1", "yes"})
+# Source: .env.example. The simulated rails beyond Pix are on unless SIM_RAILS names one of these.
+SIM_RAILS_OFF = frozenset({"off", "false", "0", "no"})
 
 logger = logging.getLogger("lifeline.api")
 
@@ -119,14 +122,23 @@ class Health(BaseModel):
     status: str
 
 
-def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, FakeRail]:
+def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None, sim_rails: bool = True) -> dict[str, Any]:
     scripted = scripted_traces(traces)
-    return {
+    rails: dict[str, Any] = {
         "wise": FakeRail(scripted.get("wise"), name="wise", simulated=False),
         "bank_wire": FakeRail(scripted.get("bank_wire"), name="bank_wire", simulated=False),
         "sim_pix": FakeRail(scripted.get("sim_pix"), name="sim_pix", simulated=True),
         "revolut": FakeRail(scripted.get("revolut"), name="revolut", simulated=False),
     }
+    if sim_rails:
+        # The API always runs the normal script; a scenario chooses others through the harness.
+        rails["upi_paynow_sim"] = UpiPayNowSimRail()
+    return rails
+
+
+def sim_rails_on(env: Mapping[str, str] | None = None) -> bool:
+    """Whether the API registers the simulated rails beyond Pix: on unless SIM_RAILS turns them off."""
+    return environment(env).get("SIM_RAILS", "").strip().casefold() not in SIM_RAILS_OFF
 
 
 def _load_fixture(path: Path) -> dict[str, Any]:
@@ -197,11 +209,13 @@ def create_app(
     conversations_path: Path | None = None,
     tick_seconds: float | None = TICK_SECONDS,
     council: Council | None = None,
+    sim_rails: bool | None = None,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
     ledger = JsonlLedger(ledger_path or LEDGER_PATH)
-    rails = rails if rails is not None else demo_rails(fixture.get("traces"))
+    if rails is None:
+        rails = demo_rails(fixture.get("traces"), sim_rails_on() if sim_rails is None else sim_rails)
     _restore_rails(rails, ledger)
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))

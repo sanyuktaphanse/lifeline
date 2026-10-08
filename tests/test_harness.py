@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 import yaml
 
 from core.harness import (
@@ -532,3 +533,58 @@ def test_a_scenario_seeds_an_inbound_receipt_the_student_can_trace(tmp_path):
     result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
 
     assert [run.failures for run in result.runs] == [[]]
+
+
+def _quote_scenario(fixtures: dict, corridor: str, amount: str, purpose: str, currency: str, expected: dict) -> dict:
+    return {
+        "id": "T07",
+        "fixtures": fixtures,
+        "runs": [
+            {
+                "lang": "en",
+                "turns": [
+                    {
+                        "user": f"Quote {amount} {currency} for {purpose} on {corridor}",
+                        "model": [
+                            {"calls": [{"name": "get_quote", "arguments": {"corridor": corridor, "amount": amount, "currency": currency, "purpose": purpose}}]},
+                            {"text": "Here is the quote."},
+                        ],
+                    }
+                ],
+                "expected": expected,
+            }
+        ],
+    }
+
+
+def test_the_harness_builds_the_simulated_upi_paynow_rail_by_default(tmp_path):
+    from core.harness import _rails
+
+    rails = _rails({})
+
+    assert type(rails["upi_paynow_sim"]).__name__ == "UpiPayNowSimRail"
+    assert rails["upi_paynow_sim"].script == "normal"
+
+
+def test_a_scenario_chooses_a_simulated_rails_script(tmp_path):
+    from core.harness import _rails
+
+    rails = _rails({"rail_scripts": {"upi_paynow_sim": "held_for_review"}})
+
+    assert rails["upi_paynow_sim"].script == "held_for_review"
+
+
+@pytest.mark.parametrize(
+    ("fixtures", "message"),
+    [
+        ({"rail_scripts": {"wise": "delayed"}}, "simulated"),
+        ({"rail_scripts": {"upi_paynow_sim": "instant_riches"}}, "normal"),
+        ({"rails": ["wise"], "rail_scripts": {"upi_paynow_sim": "delayed"}}, "does not build"),
+        ({"fail_once": [{"rail": "upi_paynow_sim", "turn": 1, "call": 1}]}, "simulated"),
+    ],
+)
+def test_a_script_or_a_failure_for_the_wrong_rail_is_refused(fixtures, message):
+    from core.harness import _rails
+
+    with pytest.raises(ValueError, match=message):
+        _rails(fixtures)

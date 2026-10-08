@@ -721,3 +721,23 @@ def test_an_inbound_receipt_in_the_fixture_is_traceable_after_every_start(tmp_pa
         assert response.json()["status"] == "in_transit"
     kinds = [e["kind"] for e in client.get(f"/ledger/{USER}").json()]
     assert "receipt" not in kinds
+
+
+@pytest.mark.parametrize(("setting", "built"), [("on", True), ("off", False), ("", True)])
+def test_sim_rails_registers_the_new_simulated_rails_and_is_on_by_default(monkeypatch, setting, built):
+    monkeypatch.setenv("SIM_RAILS", setting)
+    loop = _client().app.state.loop
+
+    assert ("upi_paynow_sim" in loop._rails) is built
+
+
+def test_create_app_takes_sim_rails_explicitly(monkeypatch):
+    monkeypatch.setenv("SIM_RAILS", "off")
+
+    assert "upi_paynow_sim" in _client(sim_rails=True).app.state.loop._rails
+    monkeypatch.setenv("SIM_RAILS", "on")
+    assert "upi_paynow_sim" not in _client(sim_rails=False).app.state.loop._rails
+
+
+def test_env_example_names_sim_rails():
+    assert "SIM_RAILS=" in (Path(DEMO_FIXTURE).parent.parent / ".env.example").read_text(encoding="utf-8")

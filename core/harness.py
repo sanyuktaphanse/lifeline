@@ -19,6 +19,7 @@ from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -58,7 +59,9 @@ FIXTURE_MANDATE: dict[str, Any] = {
 RESCUE_TURNS = ("start", "step")
 FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
 # The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
-FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False}
+FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False, "upi_paynow_sim": True}
+# The simulated rails, each built with the script a scenario chooses in fixtures.rail_scripts.
+SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 
@@ -121,18 +124,27 @@ def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
     return keys
 
 
-def _rails(fixtures: dict[str, Any]) -> dict[str, FakeRail]:
+def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
     names = fixtures.get("rails", list(FIXTURE_RAILS))
     unknown = [name for name in names if name not in FIXTURE_RAILS]
     if unknown:
         raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
     traces = scripted_traces(fixtures.get("traces"))
     failing = _fail_once_keys(fixtures.get("fail_once", []))
-    stray = sorted({*traces, *failing} - set(names))
+    scripts = fixtures.get("rail_scripts", {})
+    stray = sorted({*traces, *failing, *scripts} - set(names))
     if stray:
-        raise ValueError(f"traces or fail_once name rails {stray}, which this scenario does not build")
+        raise ValueError(f"traces, fail_once or rail_scripts name rails {stray}, which this scenario does not build")
+    scripted_fakes = sorted({*traces, *failing} & set(SIM_RAILS))
+    if scripted_fakes:
+        raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
+    not_simulated = sorted(set(scripts) - set(SIM_RAILS))
+    if not_simulated:
+        raise ValueError(f"rail_scripts names {not_simulated}, which are not simulated rails")
     return {
-        name: FakeRail(
+        name: SIM_RAILS[name](script=scripts.get(name, "normal"))
+        if name in SIM_RAILS
+        else FakeRail(
             traces.get(name),
             fail_once_keys=failing.get(name, ()),
             name=name,
