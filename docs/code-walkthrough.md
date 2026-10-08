@@ -6585,7 +6585,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 724 tests. Each was written before the code it checks and was seen to fail first.
+There are 748 tests. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -6856,7 +6856,6 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_fake_router.py` | `test_fake_router_implements_the_router` | The fake is a complete `Router` |
 | `test_fake_router.py` | `test_sg_to_br_returns_wise_sim_pix_and_bank_wire` | Brazil gets three open routes from SGD to BRL, in that order |
 | `test_fake_router.py` | `test_wise_route_has_its_fee_and_no_spread` | Wise costs 5.60 with no spread and arrives in 24 hours |
-| `test_fake_router.py` | `test_sim_pix_route_is_simulated_and_arrives_in_an_hour` | The Pix route is marked simulated |
 | `test_fake_router.py` | `test_bank_wire_route_has_its_fee_spread_and_arrival` | The bank wire costs 25 plus 30.00 of spread on 1,200 and takes 72 hours |
 | `test_fake_router.py` | `test_bank_wire_spread_is_two_and_a_half_percent_of_the_amount` | The spread follows the amount: 12.50 on 500 |
 | `test_fake_router.py` | `test_unknown_corridor_returns_no_routes` | Runs for SG>IN and SG>US; neither has routes |
@@ -6872,6 +6871,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_fake_router.py` | `test_cn_to_sg_funding_the_student_is_blocked_for_want_of_a_sourced_duration` | CN to SG funding the student is blocked for want of a sourced duration |
 | `test_fake_router.py` | `test_cn_to_sg_for_any_other_purpose_is_blocked_with_no_sourced_rule` | CN to SG for any other purpose is blocked with no sourced rule |
 | `test_fake_router.py` | `test_the_china_precheck_gives_the_bank_of_china_checklist_and_the_chinese_side_rules` | The china precheck gives the bank of china checklist and the chinese side rules |
+| `test_fake_router.py` | `test_sim_pix_route_is_simulated_and_arrives_when_the_entry_it_cites_says` | Sim pix route is simulated and arrives when the entry it cites says |
 | `test_fake_rail.py` | `test_fake_rail_implements_the_rail` | The fake is a complete `Rail`, named `fake` and simulated by default |
 | `test_fake_rail.py` | `test_name_and_simulated_are_chosen_when_the_rail_is_made` | A rail made as `wise` and not simulated reports both and issues a receipt that is not simulated |
 | `test_fake_rail.py` | `test_the_receipt_names_the_rail_that_executed_it_not_the_route` | A rail named `wise_backend` puts its own name on the receipt |
@@ -7056,6 +7056,10 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_agent.py` | `test_a_standing_run_is_paid_on_a_route_stamped_with_its_payee` | A standing run is paid on a route stamped with its payee |
 | `test_agent.py` | `test_a_seeded_inbound_receipt_is_traceable_and_writes_nothing_to_the_ledger` | A seeded inbound receipt is traceable and writes nothing to the ledger |
 | `test_agent.py` | `test_an_inbound_receipt_of_another_student_is_not_traceable` | An inbound receipt of another student is not traceable |
+| `test_agent.py` | `test_a_pasted_payee_hidden_by_invisible_or_fullwidth_characters_is_still_traced_to_the_paste` | A pasted payee hidden by invisible or fullwidth characters is still traced to the paste |
+| `test_agent.py` | `test_a_pasted_amount_grouped_with_spaces_or_apostrophes_is_still_traced_to_the_paste` | A pasted amount grouped with spaces or apostrophes is still traced to the paste |
+| `test_agent.py` | `test_an_amount_the_student_groups_with_a_space_is_still_the_students_own` | An amount the student groups with a space is still the students own |
+| `test_agent.py` | `test_a_payee_only_the_model_named_stays_untrusted_after_its_source_leaves_the_memory` | A payee only the model named stays untrusted after its source leaves the memory |
 | `test_council.py` | `test_an_escalated_transfer_writes_one_council_entry_after_the_decision` | The trail is proposal, decision, council, and the entry holds the chair's choice, the runner up, the reason, the voices and nothing else |
 | `test_council.py` | `test_the_confirmation_carries_the_advice_as_data` | `ConfirmationRequest.council` holds exactly the five advice fields |
 | `test_council.py` | `test_the_reply_names_the_chosen_rail_and_its_reason` | The confirmation text gains the chosen rail and one reason |
@@ -7216,6 +7220,8 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_knowledge_values.py` | `test_the_upi_paynow_purposes_are_exactly_the_rbi_two` | The UPI paynow purposes are exactly the rbi two |
 | `test_knowledge_values.py` | `test_pix_settles_in_real_time_and_names_its_keys` | Pix settles in real time and names its keys |
 | `test_knowledge_values.py` | `test_the_bank_of_china_checklist_is_the_pages_three_originals` | The bank of china checklist is the pages three originals |
+| `test_knowledge_values.py` | `test_the_values_check_finds_every_number_its_statement_does_not_write` | The values check finds every number its statement does not write |
+| `test_knowledge_values.py` | `test_every_entry_the_rail_rules_name_exists` | Every entry the rail rules name exists |
 | `test_sim_cn_bank_remit.py` | `test_the_rail_is_a_simulated_rail_named_cn_bank_remit_sim` | The rail is a simulated rail named CN bank remit sim |
 | `test_sim_cn_bank_remit.py` | `test_funding_the_student_with_the_checklist_complete_and_the_quota_known_is_paid` | Funding the student with the checklist complete and the quota known is paid |
 | `test_sim_cn_bank_remit.py` | `test_paying_the_institution_is_refused_citing_nus_and_the_hsbc_entry` | Paying the institution is refused citing nus and the hsbc entry |
@@ -7229,6 +7235,8 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_sim_cn_bank_remit.py` | `test_the_engine_refuses_a_student_transfer_from_china_to_singapore_under_r05` | The engine refuses a student transfer from china to singapore under r05 |
 | `test_sim_cn_bank_remit.py` | `test_a_parents_transfer_that_has_not_arrived_is_traced_through_the_loop` | A parents transfer that has not arrived is traced through the loop |
 | `test_sim_cn_bank_remit.py` | `test_scam_text_in_a_trace_reaches_the_loop_as_data_and_its_payment_is_refused_under_r01` | Scam text in a trace reaches the loop as data and its payment is refused under r01 |
+| `test_sim_cn_bank_remit.py` | `test_a_trace_dates_each_stage_by_the_clock_that_moved_it_there` | A trace dates each stage by the clock that moved it there |
+| `test_sim_cn_bank_remit.py` | `test_a_scam_account_hidden_in_a_trace_by_a_zero_width_space_is_still_traced_to_the_trace` | A scam account hidden in a trace by a zero width space is still traced to the trace |
 | `test_sim_pix.py` | `test_the_rail_keeps_the_name_and_corridor_scenarios_rely_on` | The rail keeps the name and corridor scenarios rely on |
 | `test_sim_pix.py` | `test_a_payee_with_a_pix_key_on_file_is_paid_at_once_because_pix_settles_in_real_time` | A payee with a pix key on file is paid at once because pix settles in real time |
 | `test_sim_pix.py` | `test_a_payee_with_no_pix_key_on_file_is_refused_naming_the_entry` | A payee with no pix key on file is refused naming the entry |
@@ -7255,8 +7263,12 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_sim_upi_paynow.py` | `test_scam_text_puts_a_release_fee_demand_in_the_trace` | Scam text puts a release fee demand in the trace |
 | `test_sim_upi_paynow.py` | `test_an_unknown_receipt_raises` | An unknown receipt raises |
 | `test_sim_upi_paynow.py` | `test_the_rail_freezes_no_card` | The rail freezes no card |
+| `test_sim_upi_paynow.py` | `test_the_cap_counts_the_sender_across_mandate_versions` | The cap counts the sender across mandate versions |
+| `test_sim_upi_paynow.py` | `test_the_cap_day_is_the_senders_day_in_india` | The cap day is the senders day in india |
+| `test_sim_upi_paynow.py` | `test_a_payment_the_next_day_in_india_has_its_own_cap` | A payment the next day in india has its own cap |
+| `test_sim_upi_paynow.py` | `test_the_cap_sum_is_exact_whatever_the_decimal_precision` | The cap sum is exact whatever the decimal precision |
 
-Sixty parametrized tests add one hundred and fifty extra runs, which is how 574 test functions become 724 tests.
+In all, 63 parametrized tests add 162 extra runs, which is how 586 test functions become 748 tests.
 
 ## The suites and their scenarios
 
