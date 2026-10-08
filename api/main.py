@@ -42,6 +42,8 @@ from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
+from core.monthly import is_month
+from core.reminders import reminders_of, split
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
@@ -135,6 +137,34 @@ class VerifyResult(BaseModel):
 
 class Health(BaseModel):
     status: str
+
+
+class Reminder(BaseModel):
+    text: str
+    # When it falls due, in UTC, or None when the reminder's due value is not a date or a time.
+    due: AwareDatetime | None
+    # The sequence of the reminder note that set it.
+    seq: int
+
+
+class Reminders(BaseModel):
+    """The student's reminders, split at a time. Nothing is marked delivered: the app delivers them."""
+
+    user_id: str
+    now: AwareDatetime
+    due: list[Reminder]
+    upcoming: list[Reminder]
+
+
+class MonthlyNote(BaseModel):
+    """The monthly note for the app: the text, the figures it was built from, and every entry behind them."""
+
+    user_id: str
+    month: str
+    lang: str
+    text: str
+    summary: dict[str, Any]
+    seqs: list[int]
 
 
 def demo_rails(
@@ -427,6 +457,27 @@ def create_app(
         if request.senders is not None:
             arguments["senders"] = request.senders
         return PrecheckResult.model_validate(direct(request.user_id, "precheck", arguments, "precheck"))
+
+    @app.get("/note/{user}/monthly")
+    def monthly_note(user: str, month: str | None = None) -> MonthlyNote:
+        known(user)
+        if month is not None and not is_month(month):
+            # The month is never echoed, so nothing a caller sends comes back in the error.
+            raise HTTPException(status_code=422, detail="month must be a four digit year, a hyphen and a two digit month.")
+        with lock:
+            # A read, as GET /ledger and GET /reminders are: the note is built by monthly_note, the code the
+            # chat tool and the tick render with, and nothing is written to the ledger.
+            note = loop.monthly_note(user, month or loop.latest_month(user))
+        return MonthlyNote.model_validate(note)
+
+    @app.get("/reminders/{user}")
+    def reminders(user: str, now: AwareDatetime | None = None) -> Reminders:
+        known(user)
+        at = now or datetime.now(timezone.utc)
+        with lock:
+            # A read of the reminder notes, as GET /ledger is a read of the entries, so nothing is written.
+            lists = split(reminders_of(ledger.entries(), user), at)
+        return Reminders.model_validate({"user_id": user, "now": at, **lists})
 
     @app.post("/standing/run_due")
     def standing_run_due(request: RunDueRequest) -> list[StandingEvent]:

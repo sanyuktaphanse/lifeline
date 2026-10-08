@@ -15,6 +15,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.REROUTE_TO_BACKUP: Tier.T1,
     ActionType.NOTIFY_FAMILY: Tier.T1,
     ActionType.UPDATE_PLAN: Tier.T1,
+    ActionType.RECORD_CASH_WITHDRAWAL: Tier.T1,
     ActionType.CANCEL_TRANSFER: Tier.T2,
     ActionType.CREATE_STANDING_MANDATE: Tier.T2,
     ActionType.TRANSFER: Tier.T2,

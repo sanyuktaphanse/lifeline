@@ -170,3 +170,22 @@ def test_the_walkthrough_covers_stage_5b():
     assert {"core/anchor_fisco.py", "core/fisco_tx.py", "core/evm_tx.py"} <= files
     assert "## The evidence contract, `chain/LifelineEvidence.sol`" in text
     assert "test_the_factory_says_fisco_is_not_configured_yet" not in text
+
+
+def test_the_walkthrough_covers_stage_9():
+    files = {path for path, _, _ in excerpts()}
+    agent = [excerpt for path, _, excerpt in excerpts() if path == "core/agent.py"]
+    text = WALKTHROUGH.read_text(encoding="utf-8")
+
+    stage_9 = {
+        "core/reminders.py",
+        "tests/test_cash_withdrawal.py",
+        "tests/test_reminders.py",
+        "tests/test_api_proactive.py",
+        "tests/test_attack_six.py",
+    }
+    assert stage_9 <= files
+    for name in ("def _untrusted_withdrawal", "def _record_withdrawal", "def _warn_cash_cap", "def monthly_note"):
+        assert any(name in excerpt for excerpt in agent), name
+    assert "## The reminders, `core/reminders.py`" in text
+    assert "## The Stage 9 tests" in text
