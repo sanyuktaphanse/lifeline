@@ -72,6 +72,9 @@ CONFIRMATION_TTL = timedelta(
 # Source: this module. A guard against a runaway tool loop, not a money rule.
 # The cap is per conversation turn: eight model calls, then the turn ends.
 MAX_MODEL_CALLS_PER_TURN = 8
+# Source: docs/decisions.md, 8 October 2026. A product choice, not a sourced figure: after this many
+# wrong identity answers a rescue locks at S1 and compares no further answer.
+MAX_IDENTITY_ATTEMPTS = 3
 # Source: docs/decisions.md, 18 September 2026. The model sees at most this many earlier messages.
 MAX_HISTORY_MESSAGES = 20
 
@@ -209,6 +212,8 @@ TEXTS = {
     "en": {
         "confirm": "Please confirm: send {amount} {currency} to {payee} for {purpose} over {rail}, fee {fee} {currency} and exchange cost {spread} {currency}. Nothing moves until you confirm.",
         "sent": "Done. {amount} {currency} was sent over {rail}. Receipt {receipt_id}.",
+        "transfer_failed": "The transfer of {amount} {currency} over {rail} failed, and no money arrived. Receipt {receipt_id}.",
+        "transfer_not_completed": "The transfer of {amount} {currency} over {rail} is not completed; its status is {status}. Receipt {receipt_id}.",
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
@@ -236,6 +241,7 @@ TEXTS = {
         "confirm_in_rescue": "This confirmation belongs to a step of your rescue, so nothing changed here. Confirm it in the rescue.",
         "identity_failed": "That answer does not match your plan, so Lifeline did nothing. Try again: {question}",
         "identity_verified": "That answer matches your plan.",
+        "identity_locked": "That was the third wrong answer, so this rescue is locked and Lifeline will compare no further answer. Your family has been told if you chose that.",
         "choose_card": "Which card is it? Answer with its name as written in your plan: {names}.",
         "card_unmatched": "No card in your plan has that name, so nothing changed. Answer with one of: {names}.",
         "not_this_step": "That confirmation does not belong to this step of the rescue, so nothing changed.",
@@ -270,12 +276,15 @@ TEXTS = {
         "notice_not_confirmed": "A confirmation was not completed, so that action did not happen.",
         "notice_injection": "A request to move money that did not come from the student was blocked.",
         "notice_identity_failed": "A wrong answer was given to the safety question.",
+        "notice_identity_locked": "The safety question was answered wrongly {count} times, so the rescue was locked and nothing else was done.",
         "notice_money_skipped": "The student did not take emergency money.",
         "notice_standing": "{count} standing payments were stopped.",
     },
     "pt": {
         "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
         "sent": "Pronto. {amount} {currency} enviados via {rail}. Recibo {receipt_id}.",
+        "transfer_failed": "A transferência de {amount} {currency} via {rail} falhou, e nenhum dinheiro chegou. Recibo {receipt_id}.",
+        "transfer_not_completed": "A transferência de {amount} {currency} via {rail} não foi concluída; o status é {status}. Recibo {receipt_id}.",
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
@@ -303,6 +312,7 @@ TEXTS = {
         "confirm_in_rescue": "Esta confirmação pertence a uma etapa do seu resgate, então nada mudou aqui. Confirme no resgate.",
         "identity_failed": "Essa resposta não corresponde ao seu plano, então o Lifeline não fez nada. Tente de novo: {question}",
         "identity_verified": "Essa resposta corresponde ao seu plano.",
+        "identity_locked": "Essa foi a terceira resposta errada, então este resgate está travado e o Lifeline não vai comparar mais nenhuma resposta. Sua família foi avisada, se você escolheu isso.",
         "choose_card": "Qual é o cartão? Responda com o nome escrito no seu plano: {names}.",
         "card_unmatched": "Nenhum cartão do seu plano tem esse nome, então nada mudou. Responda com um destes: {names}.",
         "not_this_step": "Essa confirmação não pertence a esta etapa do resgate, então nada mudou.",
@@ -337,12 +347,15 @@ TEXTS = {
         "notice_not_confirmed": "Uma confirmação não foi concluída, então essa ação não aconteceu.",
         "notice_injection": "Um pedido para movimentar dinheiro que não veio do estudante foi bloqueado.",
         "notice_identity_failed": "Uma resposta errada foi dada à pergunta de segurança.",
+        "notice_identity_locked": "A pergunta de segurança foi respondida errado {count} vezes, então o resgate foi travado e nada mais foi feito.",
         "notice_money_skipped": "O estudante não recebeu dinheiro de emergência.",
         "notice_standing": "{count} ordens permanentes foram interrompidas.",
     },
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
         "sent": "已完成。{amount} {currency} 已通过 {rail} 发出。回执 {receipt_id}。",
+        "transfer_failed": "通过 {rail} 发送的 {amount} {currency} 转账失败，没有资金到账。回执 {receipt_id}。",
+        "transfer_not_completed": "通过 {rail} 发送的 {amount} {currency} 转账尚未完成，当前状态为 {status}。回执 {receipt_id}。",
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
@@ -370,6 +383,7 @@ TEXTS = {
         "confirm_in_rescue": "该确认属于你救援中的一步，因此这里没有任何更改。请在救援中确认。",
         "identity_failed": "该答案与你的计划不符，因此 Lifeline 没有执行任何操作。请重试：{question}",
         "identity_verified": "该答案与你的计划相符。",
+        "identity_locked": "这是第三次错误答案，因此本次救援已锁定，Lifeline 不会再比对任何答案。如果你选择了通知家人，他们已收到通知。",
         "choose_card": "是哪张卡？请用你计划中写的名称回答：{names}。",
         "card_unmatched": "你的计划中没有这个名称的卡，因此没有任何更改。请从以下名称中选择：{names}。",
         "not_this_step": "该确认不属于救援的这一步，因此没有任何更改。",
@@ -404,6 +418,7 @@ TEXTS = {
         "notice_not_confirmed": "有一项确认未完成，因此该操作没有发生。",
         "notice_injection": "一项并非来自学生本人的转账请求已被阻止。",
         "notice_identity_failed": "有人对安全问题给出了错误答案。",
+        "notice_identity_locked": "安全问题被答错 {count} 次，因此救援已锁定，没有执行任何其他操作。",
         "notice_money_skipped": "学生没有领取紧急资金。",
         "notice_standing": "{count} 项定期付款已被停止。",
     },
@@ -505,6 +520,8 @@ class _Rescue:
     started_seq: int
     instrument: str | None = None
     freeze: FreezeResult | None = None
+    identity_failures: int = 0
+    locked: bool = False
 
 
 @dataclass
@@ -1503,13 +1520,25 @@ class AgentLoop:
             )
 
     def _sent_text(self, lang: str, receipt: Receipt) -> str:
+        """What the student is told about a payment: what its receipt's status says, and nothing more.
+
+        Money is said to be sent only when the receipt is completed; a failed or returned receipt is
+        said to have failed, and any other status is said to be not completed, by name.
+        """
+        if receipt.status is ReceiptStatus.COMPLETED:
+            name = "sent"
+        elif receipt.status in (ReceiptStatus.FAILED, ReceiptStatus.RETURNED):
+            name = "transfer_failed"
+        else:
+            name = "transfer_not_completed"
         text = _text(
             lang,
-            "sent",
+            name,
             amount=receipt.amount,
             currency=receipt.currency,
             rail=receipt.rail,
             receipt_id=receipt.receipt_id,
+            status=receipt.status.value,
         )
         return f"{text} {_text(lang, 'simulated')}" if receipt.simulated else text
 
@@ -1654,6 +1683,8 @@ class AgentLoop:
             out.say(_text(lang, "rescue_not_started"))
         elif self._machine.active(user_id) and self._machine.state(user_id) not in RESTING:
             self._run_on(user_id, plan, self._rescues[user_id], lang, trail, out)
+        elif self._machine.active(user_id) and self._rescues[user_id].locked:
+            out.say(_text(lang, "identity_locked"))
         elif self._machine.active(user_id):
             out.say(_text(lang, "rescue_in_progress"))
         else:
@@ -1687,6 +1718,10 @@ class AgentLoop:
         elif before not in RESTING:
             # A restart fell between two steps that need nothing from the student; run on from there.
             self._run_on(user_id, plan, rescue, lang, trail, out)
+        elif before is RescueState.S1 and rescue.locked:
+            # Locked: the answer is never compared, and no action is proposed for it.
+            self._write(trail, "note", {"kind": "rescue_locked_attempt"})
+            out.say(_text(lang, "identity_locked"))
         elif before is RescueState.S1:
             self._check_identity(user_id, plan, rescue, lang, trail, out, message.text)
         elif before is RescueState.S2 and confirmation_token is not None:
@@ -1747,7 +1782,7 @@ class AgentLoop:
         if state is None:
             return "start_rescue"
         if state is RescueState.S1:
-            return "answer_identity_question"
+            return "locked" if rescue is not None and rescue.locked else "answer_identity_question"
         if state is RescueState.S2:
             return "choose_card" if rescue is None or rescue.instrument is None else "confirm_freeze"
         if state is RescueState.S5:
@@ -1818,8 +1853,17 @@ class AgentLoop:
         expected = plan.identity_check.expected_answer.get_secret_value()
         # Compared in code, never by a model, and neither answer is ever written.
         if not hmac.compare_digest(_normal(answer), _normal(expected)):
+            rescue.identity_failures += 1
             self._write(trail, "note", {"kind": "rescue_identity_failed", "idempotency_key": action.idempotency_key})
-            out.say(_text(lang, "identity_failed", question=plan.identity_check.question))
+            if rescue.identity_failures < MAX_IDENTITY_ATTEMPTS:
+                out.say(_text(lang, "identity_failed", question=plan.identity_check.question))
+                return
+            rescue.locked = True
+            self._write(trail, "note", {"kind": "rescue_identity_locked", "failures": rescue.identity_failures})
+            out.say(_text(lang, "identity_locked"))
+            # A lock is a security event, so the family hears of it now, not at S9, which a locked
+            # rescue never reaches.
+            self._family_notice_step(user_id, plan, rescue, lang, trail, out)
             return
         self._rescue_executed(user_id, trail, action, {"identity_verified": True})
         out.say(_text(lang, "identity_verified"))
@@ -2068,10 +2112,16 @@ class AgentLoop:
     def _notify_family(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
         """S9. The notice is built from this rescue's ledger entries, never from anything said, so a
         block or a freeze that failed is reported as it happened. Nothing is sent; the app delivers it."""
+        self._family_notice_step(user_id, plan, rescue, lang, trail, out)
+        return "notice_settled"
+
+    def _family_notice_step(
+        self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome
+    ) -> None:
         if not plan.family_notice_opt_in:
             self._write(trail, "note", {"kind": "family_notice_skipped"})
             out.say(_text(lang, "notice_skipped"))
-            return "notice_settled"
+            return
         action, decision = self._rescue_action(user_id, lang, trail, out, ActionType.NOTIFY_FAMILY)
         if decision.allowed:
             self._write(
@@ -2087,7 +2137,6 @@ class AgentLoop:
             )
             self._rescue_executed(user_id, trail, action, {"family_notice_written": True})
             out.say(_text(lang, "notice_written", person=plan.trusted_contact.name))
-        return "notice_settled"
 
     def _family_notice(self, user_id: str, rescue: _Rescue, lang: str) -> str:
         lines = [_text(lang, "notice_intro")]
@@ -2140,6 +2189,8 @@ class AgentLoop:
                 lines.append(_text(lang, "notice_injection"))
             elif entry.kind == "note" and payload.get("kind") == "rescue_identity_failed":
                 lines.append(_text(lang, "notice_identity_failed"))
+            elif entry.kind == "note" and payload.get("kind") == "rescue_identity_locked":
+                lines.append(_text(lang, "notice_identity_locked", count=payload["failures"]))
             elif entry.kind == "note" and payload.get("kind") == "rescue_money_skipped":
                 lines.append(_text(lang, "notice_money_skipped"))
         if not froze:
@@ -2232,6 +2283,10 @@ class AgentLoop:
             self._rescues[user_id] = _Rescue(payload["lang"], entry.seq, plan.primary_instrument if plan else None)
         elif kind == "rescue_transition":
             self._machine.advance(user_id, payload["event"])
+        elif kind == "rescue_identity_failed" and rescue is not None:
+            rescue.identity_failures += 1
+        elif kind == "rescue_identity_locked" and rescue is not None:
+            rescue.locked = True
         elif kind == "rescue_card_chosen" and rescue is not None:
             rescue.instrument = payload["instrument_id"]
         elif kind == "rescue_money_skipped":

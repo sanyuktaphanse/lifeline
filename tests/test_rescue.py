@@ -19,7 +19,7 @@ from contracts.schemas import (
     Source,
     StandingMandate,
 )
-from core.agent import AgentLoop, PendingConfirmation
+from core.agent import MAX_IDENTITY_ATTEMPTS, AgentLoop, PendingConfirmation
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil, VOICES
 from core.fake_adapter import FakeModelAdapter
@@ -1095,3 +1095,118 @@ def test_a_plan_answer_never_appears_in_a_validation_error():
         Plan.model_validate(fields)
 
     assert "938471" not in str(caught.value)
+
+
+# The identity check locks after three wrong answers.
+
+
+def _three_wrong(rescue: Rescue) -> list[RescueReply]:
+    _start(rescue)
+    return [_step(rescue, WRONG) for _ in range(MAX_IDENTITY_ATTEMPTS)]
+
+
+def test_the_limit_on_identity_answers_is_three():
+    assert MAX_IDENTITY_ATTEMPTS == 3
+
+
+def test_three_wrong_answers_lock_the_rescue_at_s1():
+    rescue = _setup()
+
+    replies = _three_wrong(rescue)
+
+    assert [r.rescue.do_now for r in replies] == ["answer_identity_question", "answer_identity_question", "locked"]
+    assert replies[-1].rescue.state_after is RescueState.S1
+    assert "locked" in replies[-1].text
+    notes = _notes(rescue.ledger)
+    assert notes.count("rescue_identity_failed") == 3
+    assert "rescue_identity_locked" in notes
+    assert notes.index("rescue_identity_locked") > max(i for i, n in enumerate(notes) if n == "rescue_identity_failed")
+
+
+def test_two_wrong_answers_then_the_right_one_goes_on():
+    rescue = _setup()
+    _start(rescue)
+    _step(rescue, WRONG)
+    _step(rescue, WRONG)
+
+    assert _step(rescue, ANSWER).rescue.state_after is RescueState.S2
+
+
+def test_a_locked_rescue_refuses_the_right_answer_without_comparing_it():
+    rescue = _setup()
+    _three_wrong(rescue)
+    proposals = len([e for e in rescue.ledger.entries() if e.kind == "proposal"])
+
+    reply = _step(rescue, ANSWER)
+
+    assert reply.rescue.state_after is RescueState.S1
+    assert reply.rescue.do_now == "locked"
+    assert reply.confirmation is None
+    assert len([e for e in rescue.ledger.entries() if e.kind == "proposal"]) == proposals
+    assert _notes(rescue.ledger)[-1] == "rescue_locked_attempt"
+    assert _executed(rescue.ledger, ActionType.RESCUE_IDENTITY_CHECK) == []
+    assert ANSWER not in _ledger_text(rescue.ledger)
+
+
+def test_the_lock_survives_a_restart():
+    first = _setup()
+    _three_wrong(first)
+
+    second = _setup(ledger=first.ledger)
+    reply = _step(second, ANSWER)
+
+    assert reply.rescue.do_now == "locked"
+    assert _executed(second.ledger, ActionType.RESCUE_IDENTITY_CHECK) == []
+
+
+def test_two_wrong_answers_before_a_restart_and_one_after_lock_it():
+    first = _setup()
+    _start(first)
+    _step(first, WRONG)
+    _step(first, WRONG)
+
+    second = _setup(ledger=first.ledger)
+
+    assert _step(second, WRONG).rescue.do_now == "locked"
+
+
+def test_starting_again_while_locked_restarts_nothing():
+    rescue = _setup()
+    _three_wrong(rescue)
+
+    reply = _start(rescue)
+
+    assert reply.rescue.do_now == "locked"
+    assert _notes(rescue.ledger).count("rescue_started") == 1
+
+
+def test_the_lock_is_reported_to_the_family_at_once():
+    rescue = _setup()
+
+    _three_wrong(rescue)
+
+    notice = _family_notice(rescue.ledger)
+    assert "The safety question was answered wrongly 3 times, so the rescue was locked and nothing else was done." in notice
+    assert notice.count("A wrong answer was given to the safety question.") == 3
+    assert _executed(rescue.ledger, ActionType.NOTIFY_FAMILY) != []
+
+
+def test_without_opt_in_the_lock_writes_no_notice():
+    rescue = _setup({"family_notice_opt_in": False})
+
+    _three_wrong(rescue)
+
+    assert "family_notice" not in _notes(rescue.ledger)
+    assert "family_notice_skipped" in _notes(rescue.ledger)
+
+
+@pytest.mark.parametrize("lang", ["pt", "zh"])
+def test_the_lock_is_said_in_the_student_language(lang):
+    rescue = _setup()
+    _start(rescue, lang)
+
+    reply = [_step(rescue, WRONG, lang=lang) for _ in range(MAX_IDENTITY_ATTEMPTS)][-1]
+
+    assert reply.lang == lang
+    assert reply.rescue.do_now == "locked"
+    assert "locked" not in reply.text

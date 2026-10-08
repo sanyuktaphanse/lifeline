@@ -430,6 +430,7 @@ class RescueTrigger(str, Enum):
 RescueDoNow = Literal[
     "start_rescue",
     "answer_identity_question",
+    "locked",
     "choose_card",
     "confirm_freeze",
     "confirm_transfer_or_skip",

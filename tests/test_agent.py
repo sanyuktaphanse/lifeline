@@ -1322,3 +1322,50 @@ def test_a_new_loop_rebuilds_a_deactivation():
 
     assert again.mandates[USER].id == "mandate-student_001-v3"
     assert [standing.active for standing in again.mandates[USER].standing_mandates] == [False]
+
+
+class _StatusRail(FakeRail):
+    """A Wise rail whose receipts carry a chosen status, as a real rail's might."""
+
+    def __init__(self, status: ReceiptStatus) -> None:
+        super().__init__(name="wise", simulated=False)
+        self._status = status
+
+    def execute(self, route, mandate_ref, idempotency_key, confirmation_token):
+        receipt = super().execute(route, mandate_ref, idempotency_key, confirmation_token)
+        return receipt.model_copy(update={"status": self._status})
+
+
+SENT = {"en": "Done. 1200 SGD was sent over wise.", "pt": "Pronto. 1200 SGD enviados via wise.", "zh": "已完成。1200 SGD 已通过 wise 发出。"}
+FAILED = {
+    "en": "The transfer of 1200 SGD over wise failed, and no money arrived.",
+    "pt": "A transferência de 1200 SGD via wise falhou, e nenhum dinheiro chegou.",
+    "zh": "通过 wise 发送的 1200 SGD 转账失败，没有资金到账。",
+}
+NOT_COMPLETED = {
+    "en": "The transfer of 1200 SGD over wise is not completed; its status is {status}.",
+    "pt": "A transferência de 1200 SGD via wise não foi concluída; o status é {status}.",
+    "zh": "通过 wise 发送的 1200 SGD 转账尚未完成，当前状态为 {status}。",
+}
+DONE_WORDS = {"en": "Done.", "pt": "Pronto.", "zh": "已完成。"}
+
+
+@pytest.mark.parametrize("lang", ["en", "pt", "zh"])
+@pytest.mark.parametrize("status", list(ReceiptStatus))
+def test_a_transfer_reply_says_what_the_receipt_status_says(status, lang):
+    rails = {**_honest_rails(), "wise": _StatusRail(status)}
+    setup = _setup([_call("propose_transfer", RENT)], rails=rails)
+    proposed = setup.loop.handle(USER, _user(RENT_REQUEST, lang=lang))
+
+    reply = setup.loop.handle(USER, _user("", lang=lang), confirmation_token=proposed.confirmation.confirmation_token)
+
+    assert reply.receipt.status is status
+    assert reply.receipt.receipt_id in reply.text
+    if status is ReceiptStatus.COMPLETED:
+        assert SENT[lang] in reply.text
+    elif status in (ReceiptStatus.FAILED, ReceiptStatus.RETURNED):
+        assert FAILED[lang] in reply.text
+        assert DONE_WORDS[lang] not in reply.text
+    else:
+        assert NOT_COMPLETED[lang].format(status=status.value) in reply.text
+        assert DONE_WORDS[lang] not in reply.text
