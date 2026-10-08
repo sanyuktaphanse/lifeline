@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, Field
 
-from contracts.interfaces import Council, Ledger, ModelAdapter
+from contracts.interfaces import Anchor, Council, Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
@@ -37,6 +37,7 @@ from contracts.schemas import (
     TraceResult,
 )
 from core.agent import AgentLoop
+from core.anchor_local import anchor_for
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
@@ -53,6 +54,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
 CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
+# The anchors are kept beside the ledger they anchor, so data/anchors.jsonl for data/ledger.jsonl.
+ANCHORS_FILE = "anchors.jsonl"
 # Source: this module. The Next.js app runs on localhost; any port is allowed, no other host is.
 LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 # Source: this module. A guard against oversized requests to the model, not a money rule.
@@ -118,6 +121,9 @@ class RunDueRequest(BaseModel):
 
 class VerifyResult(BaseModel):
     first_broken_seq: int | None
+    # AgentLoop.anchor_status: anchored false and the kind when there is no anchor, else the latest
+    # anchored head, its sequence, whether the anchor store verifies it, its time, and the kind.
+    anchor: dict[str, Any]
 
 
 class Health(BaseModel):
@@ -221,10 +227,14 @@ def create_app(
     tick_seconds: float | None = TICK_SECONDS,
     council: Council | None = None,
     sim_rails: bool | None = None,
+    anchor: Anchor | None = None,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
-    ledger = JsonlLedger(ledger_path or LEDGER_PATH)
+    ledger_path = ledger_path or LEDGER_PATH
+    ledger = JsonlLedger(ledger_path)
+    if anchor is None:
+        anchor = anchor_for(None, ledger_path.parent / ANCHORS_FILE)
     if rails is None:
         rails = demo_rails(
             fixture.get("traces"),
@@ -253,6 +263,7 @@ def create_app(
         council=council if council is not None else council_for(),
         plans={user_id: Plan.model_validate(fixture["plan"])},
         inbound_receipts={user_id: inbound},
+        anchor=anchor,
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
@@ -375,7 +386,7 @@ def create_app(
     def verify(user: str) -> VerifyResult:
         known(user)
         with lock:
-            return VerifyResult(first_broken_seq=ledger.verify())
+            return VerifyResult(first_broken_seq=ledger.verify(), anchor=loop.anchor_status())
 
     @app.post("/trace")
     def trace(request: TraceRequest) -> TraceResult:

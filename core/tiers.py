@@ -6,6 +6,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.PRECHECK: Tier.T0,
     ActionType.GET_QUOTE: Tier.T0,
     ActionType.CHECK_WALLET_TOKEN: Tier.T0,
+    ActionType.VERIFY_LEDGER: Tier.T0,
     ActionType.SET_REMINDER: Tier.T1,
     ActionType.CANCEL_STANDING_RUN: Tier.T1,
     ActionType.DEACTIVATE_STANDING_MANDATE: Tier.T1,

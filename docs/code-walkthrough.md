@@ -183,6 +183,7 @@ class ActionType(str, Enum):
     CHECK_WALLET_TOKEN = "check_wallet_token"
     REROUTE_TO_BACKUP = "reroute_to_backup"
     NOTIFY_FAMILY = "notify_family"
+    VERIFY_LEDGER = "verify_ledger"
 
 
 class RouteStatus(str, Enum):
@@ -634,6 +635,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.PRECHECK: Tier.T0,
     ActionType.GET_QUOTE: Tier.T0,
     ActionType.CHECK_WALLET_TOKEN: Tier.T0,
+    ActionType.VERIFY_LEDGER: Tier.T0,
     ActionType.SET_REMINDER: Tier.T1,
     ActionType.CANCEL_STANDING_RUN: Tier.T1,
     ActionType.DEACTIVATE_STANDING_MANDATE: Tier.T1,
@@ -1164,7 +1166,7 @@ class Router(ABC):
     ) -> PrecheckResult: ...
 ```
 
-An `Anchor` will publish the ledger head somewhere outside the app and later confirm it. `user_hash` lets an anchor identify a user without revealing who they are. A `Router` returns every route for a payment so the cheapest can be explained, and runs prechecks before provider actions.
+An `Anchor` writes the ledger head somewhere outside the app and later confirms it; `core/anchor_local.py` is the first. `user_hash` lets an anchor identify a user without revealing who they are. A `Router` returns every route for a payment so the cheapest can be explained, and runs prechecks before provider actions.
 
 ```python
 class Rail(ABC):
@@ -1332,6 +1334,151 @@ class JsonlLedger(HashChainLedger):
 ```
 
 `JsonlLedger` keeps the chain in a file, one JSON entry per line, which is the format called JSON Lines. When it is created it reads every non empty line back into a `LedgerEntry` with `model_validate_json`, which parses and validates in one step. A file that does not exist yet is an empty ledger, and nothing is written until the first entry. `append` first turns the payload into plain JSON exactly as the hash reads it: `json.dumps` with `default=str` writes a time or a decimal as text, and `json.loads` reads it back as plain data. The payload that is hashed, the one kept, and the one written are therefore identical, so the chain verifies after a reload. `_store` creates the folder if needed, opens the file with `"a"`, which adds to the end, and writes the entry as one line before adding it to the list, so a failed write never leaves an entry that the file lacks. `super()` calls the parent class's version of the method.
+
+## The local anchor, `core/anchor_local.py`
+
+The ledger's hash chain is checked by Lifeline's own code against Lifeline's own file, so on its own it proves only that the file agrees with itself. Someone who rewrote every entry from an edited one onward would leave a chain that verifies. An anchor writes the ledger head, the hash of the latest entry and its sequence number, somewhere outside the ledger and signs it, so anyone holding a copy of the ledger can recompute the head and compare it with the anchored value. This file is the first anchor, a signed line in a local file. A FISCO BCOS anchor follows in a later change.
+
+```python
+ANCHOR_SECRET_VAR = "LIFELINE_ANCHOR_SECRET"
+DEVELOPMENT_ANCHOR_SECRET = "lifeline-development-anchor-secret-not-for-production"
+LOCAL = "local"
+FISCO = "fisco"
+# Source: .env.example. ANCHOR names where the ledger head is anchored; empty means local.
+ANCHOR_KINDS = (LOCAL, FISCO)
+# A head hash and a user hash are both SHA 256 digests as the ledger writes them, lowercase hex.
+DIGEST = re.compile(r"[0-9a-f]{64}")
+LINE_FIELDS = ("head_hash", "seq", "user_hash", "anchored_at", "signature")
+
+
+class AnchorNotConfigured(RuntimeError):
+    """The anchor that ANCHOR names cannot be built in this version."""
+
+
+def _anchor_secret() -> bytes:
+    """The signing key, read on every call and never kept, logged, or put in a message."""
+    secret = os.environ.get(ANCHOR_SECRET_VAR) or None
+    if secret is None:
+        if os.environ.get("LIFELINE_ENV") == "production":
+            raise RuntimeError(f"{ANCHOR_SECRET_VAR} must be set when LIFELINE_ENV is production.")
+        secret = DEVELOPMENT_ANCHOR_SECRET
+    return secret.encode("utf-8")
+
+
+def _signed(head_hash: str, seq: int, user_hash: str, anchored_at: str) -> bytes:
+    return json.dumps([head_hash, seq, user_hash, anchored_at], separators=(",", ":")).encode("utf-8")
+
+
+def _signature(head_hash: str, seq: int, user_hash: str, anchored_at: str) -> str:
+    return hmac.new(_anchor_secret(), _signed(head_hash, seq, user_hash, anchored_at), hashlib.sha256).hexdigest()
+
+
+def _is_seq(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+```
+
+`ANCHOR_SECRET_VAR` names the environment variable that holds the signing key. `_anchor_secret` reads it on every call, never at import, and keeps it nowhere: an empty value counts as unset, the development fallback applies only outside production, and production without a secret raises an error that names the variable and never a value, the same rule `core/mandate.py` follows for the confirmation secret. `DIGEST` is the one shape both hashes an anchor takes must have, 64 lowercase hexadecimal characters, which is what `_hash_of` in `core/ledger.py` and `hashlib.sha256(...).hexdigest()` produce. `_signed` writes the four signed values as one compact JSON list, so the bytes signed are fixed by their order and never by a dictionary's. `_signature` is an HMAC with SHA 256 over those bytes. `_is_seq` accepts a whole number from zero and refuses `True`, which Python counts as an integer.
+
+```python
+class LocalSignedAnchor(Anchor):
+    """Anchors a ledger head by appending a signed line to a file outside the ledger.
+
+    A line holds only the head hash, its sequence number, a hash of the user id, a UTC time, and an
+    HMAC over those four under LIFELINE_ANCHOR_SECRET, so nothing about money is ever written.
+    """
+
+    kind = LOCAL
+
+    def __init__(self, path: Path, clock: Callable[[], datetime] = _now) -> None:
+        self.path = path
+        self._clock = clock
+
+    def anchor(self, head_hash: str, seq: int, user_hash: str) -> str:
+        if not isinstance(head_hash, str) or not DIGEST.fullmatch(head_hash):
+            raise ValueError("An anchor takes a ledger head hash, 64 lowercase hexadecimal characters.")
+        if not _is_seq(seq):
+            raise ValueError("An anchor takes the head's sequence number, a whole number from zero.")
+        if not isinstance(user_hash, str) or not DIGEST.fullmatch(user_hash):
+            raise ValueError("An anchor takes a SHA 256 hash of the user id, never the id itself.")
+        anchored_at = self._clock().astimezone(timezone.utc).isoformat()
+        signature = _signature(head_hash, seq, user_hash, anchored_at)
+        line = {"head_hash": head_hash, "seq": seq, "user_hash": user_hash, "anchored_at": anchored_at, "signature": signature}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(line) + "\n")
+        return f"{LOCAL}:{signature[:32]}"
+
+    def verify(self, head_hash: str) -> bool:
+        return self._record(head_hash) is not None
+
+    def signed_heads(self) -> list[tuple[str, int]]:
+        """Every head and sequence number the store holds in a line whose signature checks."""
+        return [(record["head_hash"], record["seq"]) for record in self._records() if self._signed_by_us(record)]
+
+    @staticmethod
+    def uses_development_secret() -> bool:
+        """Whether lines are signed with the public development secret, which anyone can sign with."""
+        return not os.environ.get(ANCHOR_SECRET_VAR) and os.environ.get("LIFELINE_ENV") != "production"
+
+    def anchored_at(self, head_hash: str) -> datetime | None:
+        """The time recorded for the latest signed line of this head, or None when none checks."""
+        record = self._record(head_hash)
+        return None if record is None else datetime.fromisoformat(record["anchored_at"])
+
+    def _record(self, head_hash: str) -> dict[str, Any] | None:
+        found = None
+        for record in self._records():
+            if record["head_hash"] == head_hash and self._signed_by_us(record):
+                found = record
+        return found
+
+    def _records(self) -> list[dict[str, Any]]:
+        if not self.path.exists():
+            return []
+        records = []
+        with self.path.open(encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:  # anti-pattern: SILENT-EXCEPT ok, a line that is not JSON anchors nothing
+                    continue
+                if isinstance(record, dict) and set(record) == set(LINE_FIELDS):
+                    records.append(record)
+        return records
+
+    @staticmethod
+    def _signed_by_us(record: dict[str, Any]) -> bool:
+        head_hash, seq, user_hash = record["head_hash"], record["seq"], record["user_hash"]
+        anchored_at, signature = record["anchored_at"], record["signature"]
+        if not all(isinstance(value, str) for value in (head_hash, user_hash, anchored_at, signature)) or not _is_seq(seq):
+            return False
+        expected = _signature(head_hash, seq, user_hash, anchored_at)
+        return hmac.compare_digest(expected.encode("utf-8"), signature.encode("utf-8"))
+```
+
+`anchor` refuses anything that is not a head hash, a sequence number, and a user hash before it writes a byte, so an amount, a payee, a balance, or a user id cannot reach the file through it: each would fail the digest check or the sequence check. It records the time in UTC, signs the four values, appends one line, and returns an id made of the kind and the first 32 characters of the signature, so the id names that one line. `verify` is True only when a line for that head exists whose signature checks under the current secret. `anchored_at` is not part of the `Anchor` interface; it gives the API the time the store recorded for that head. `signed_heads` lists every head and sequence number held in a line that checks, so the loop can compare the whole store with the ledger, and `uses_development_secret` says whether the public development secret is signing. `_records` passes over a line that is not JSON, not an object, or not exactly the five fields, so a damaged line anchors nothing and stops nothing. `_signed_by_us` recomputes the signature from the line's own values and compares it with `hmac.compare_digest`, which takes the same time whether the first or the last character differs. Changing any of the five fields of a line makes it fail.
+
+```python
+def anchor_for(env: Mapping[str, str] | None, path: Path) -> Anchor:
+    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty.
+
+    FISCO BCOS arrives in a later change, so until then it is refused rather than quietly replaced.
+    """
+    kind = environment(env).get("ANCHOR", "").strip().casefold() or LOCAL
+    if kind == LOCAL:
+        return LocalSignedAnchor(path)
+    if kind == FISCO:
+        raise AnchorNotConfigured(
+            "ANCHOR is fisco, and the FISCO BCOS anchor is not configured in this version. Set ANCHOR to local."
+        )
+    raise ValueError(f"ANCHOR must be one of {', '.join(ANCHOR_KINDS)}, not {kind!r}.")
+```
+
+`anchor_for` reads `ANCHOR` through `environment` from `core/model_adapter.py`, which loads `.env` when no environment is given. Empty and `local` give the local anchor at the path the caller names. `fisco` raises `AnchorNotConfigured` until the FISCO BCOS anchor exists, rather than quietly falling back to the local one, and any other value raises a `ValueError` naming the values allowed.
 
 ## The conversation store, `core/conversation_store.py`
 
@@ -3038,15 +3185,16 @@ This module is the agent loop. It connects the model adapter, the mandate engine
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Concatenate
 
 from pydantic import ValidationError
 
 from contracts.errors import RailError
-from contracts.interfaces import Council, Ledger, MandateEngine, ModelAdapter, Rail, Router
+from contracts.interfaces import Anchor, Council, Ledger, MandateEngine, ModelAdapter, Rail, Router
 from contracts.schemas import (
     Action,
     ActionType,
@@ -3077,7 +3225,9 @@ from contracts.schemas import (
     Tier,
     ToolCall,
 )
+from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.ledger import GENESIS_PREV_HASH
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
@@ -3113,6 +3263,10 @@ MAX_MODEL_CALLS_PER_TURN = 8
 MAX_IDENTITY_ATTEMPTS = 3
 # Source: docs/decisions.md, 18 September 2026. The model sees at most this many earlier messages.
 MAX_HISTORY_MESSAGES = 20
+# Source: docs/decisions.md, 8 October 2026. A product choice, not a sourced figure: the ledger head is
+# anchored after every T2 execution, and at least once in each hour of activity after the last anchor.
+ANCHOR_INTERVAL = timedelta(hours=1)
+ANCHOR_KIND = "anchor"
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -3210,6 +3364,12 @@ TOOLS = [
         {"limit": TEXT, "amount": TEXT},
         [],
     ),
+    _tool(
+        "verify_ledger",
+        "Show today's ledger entries for the student, check the ledger's hash chain, and report its latest anchor.",
+        {},
+        [],
+    ),
 ]
 
 TOOL_ACTIONS = {
@@ -3225,6 +3385,7 @@ TOOL_ACTIONS = {
     "create_standing_mandate": ActionType.CREATE_STANDING_MANDATE,
     "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
     "deactivate_standing_mandate": ActionType.DEACTIVATE_STANDING_MANDATE,
+    "verify_ledger": ActionType.VERIFY_LEDGER,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -3239,7 +3400,7 @@ REQUIRED_ARGUMENTS = {
 }
 ```
 
-`ACTION_FIELDS` lists the tool arguments that become fields of an `Action`. `_tool` builds one tool definition in the shape the model adapter expects: a name, a description, and a JSON schema of the arguments. Every argument is typed as text, and pydantic converts text such as `"1200"` into a `Decimal` when the `Action` is built. `ACTION_ARGUMENTS` adds `instrument_id`, the one argument that becomes an `Action` field without being a transfer field. There are nine tools. The first eight are the ones the student uses, and `change_limit` exists so that a limit change becomes an action the mandate engine can refuse, instead of text the model makes up. `{name: TEXT for name in ACTION_FIELDS}` is a dictionary comprehension that gives each transfer field the text type. `TOOL_ACTIONS` maps each tool name to its action type, which is also how the tool's tier is found. `DIRECT_TOOLS` names the two tools an app may run without the model, through `act` below; both only read, so both are tier T0. `REQUIRED_ARGUMENTS` names the arguments a call cannot run without. A transfer needs all five fields, a quote needs a corridor and an amount, adding a payee needs the payee id, and freezing a card needs the card. The two new tools describe themselves to the model honestly: nothing changes until the student confirms, and a new payee waits out a cooling period. `ACTION_ARGUMENTS` also takes `standing_mandate_id`, and `STANDING_TERMS` names the four arguments that become a standing mandate's terms. `propose_transfer` takes an optional `standing_mandate_id`, `create_standing_mandate` sets up a standing mandate, and `cancel_standing_run` skips the next run of one, so there are now eleven tools. `deactivate_standing_mandate` makes twelve tools; it stops a standing mandate by its id.
+`ACTION_FIELDS` lists the tool arguments that become fields of an `Action`. `_tool` builds one tool definition in the shape the model adapter expects: a name, a description, and a JSON schema of the arguments. Every argument is typed as text, and pydantic converts text such as `"1200"` into a `Decimal` when the `Action` is built. `ACTION_ARGUMENTS` adds `instrument_id`, the one argument that becomes an `Action` field without being a transfer field. There are nine tools. The first eight are the ones the student uses, and `change_limit` exists so that a limit change becomes an action the mandate engine can refuse, instead of text the model makes up. `{name: TEXT for name in ACTION_FIELDS}` is a dictionary comprehension that gives each transfer field the text type. `TOOL_ACTIONS` maps each tool name to its action type, which is also how the tool's tier is found. `DIRECT_TOOLS` names the two tools an app may run without the model, through `act` below; both only read, so both are tier T0. `REQUIRED_ARGUMENTS` names the arguments a call cannot run without. A transfer needs all five fields, a quote needs a corridor and an amount, adding a payee needs the payee id, and freezing a card needs the card. The two new tools describe themselves to the model honestly: nothing changes until the student confirms, and a new payee waits out a cooling period. `ACTION_ARGUMENTS` also takes `standing_mandate_id`, and `STANDING_TERMS` names the four arguments that become a standing mandate's terms. `verify_ledger` takes no arguments and runs at T0: it shows the student today's ledger entries, the first broken entry of the chain, and the latest anchor, as described under anchoring below. `propose_transfer` takes an optional `standing_mandate_id`, `create_standing_mandate` sets up a standing mandate, and `cancel_standing_run` skips the next run of one, so there are now eleven tools. `deactivate_standing_mandate` makes twelve tools; it stops a standing mandate by its id.
 
 ```python
 TEXTS = {
@@ -3745,8 +3906,18 @@ class AgentLoop:
         council: Council | None = None,
         plans: dict[str, Plan] | None = None,
         inbound_receipts: dict[str, dict[str, str]] | None = None,
+        anchor: Anchor | None = None,
+        clock: Callable[[], datetime] = _now,
     ) -> None:
         self._adapter = adapter
+        # Where the ledger head is anchored, or nothing, and the clock that times the hourly anchor.
+        self._anchor = anchor
+        self._clock = clock
+        self._anchor_due = False
+        self._last_anchor_at: datetime | None = None
+        self._first_entry_at: datetime | None = None
+        self._head_seq = 0
+        self._anchored_seq = 0
         self._plans = dict(plans or {})
         self._machine = RescueMachine()
         self._rescues: dict[str, _Rescue] = {}
@@ -3787,6 +3958,7 @@ class AgentLoop:
         version = self._versions.get(mandate_id)
         return None if version is None else version.model_copy(deep=True)
 
+    @_anchored
     def act(
         self, user_id: str, tool: str, arguments: dict[str, Any]
     ) -> tuple[Decision | None, dict[str, Any]]:
@@ -3802,6 +3974,7 @@ class AgentLoop:
             raise RuntimeError(f"{tool} ended the turn, which a read only tool never does.")
         return outcome
 
+    @_anchored
     def handle(
         self,
         user_id: str,
@@ -4025,6 +4198,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
                 {"user_id": user_id},
             )
             return {"precheck": result.model_dump(mode="json")}
+        if action.type is ActionType.VERIFY_LEDGER:
+            return self._ledger_report(user_id, action.requested_at)
         return {"error": f"No runner for {action.type.value}."}
 ```
 
@@ -4525,6 +4700,7 @@ When no confirmation waits under the token for this student, and when a waiting 
                     events.append(StandingEvent(kind="notice", cancel_until=cancel_until, **event))
                 if now >= noticed + timedelta(hours=standing.cancel_window_hours):
                     events.append(self._run_standing(user_id, standing, period, now, event))
+            self._anchor_if_due(user_id)
         return events
 
     def _run_standing(
@@ -4772,7 +4948,16 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
             body["model"] = trail.model
         if trail.mandate_id is not None:
             body["mandate_id"] = trail.mandate_id
-        trail.seqs.append(self._ledger.append(ACTOR, kind, body).seq)
+        entry = self._ledger.append(ACTOR, kind, body)
+        self._wrote(entry)
+        trail.seqs.append(entry.seq)
+        if kind == "execution" and TIERS[ActionType(payload["action"]["type"])] is Tier.T2:
+            self._anchor_due = True
+
+    def _wrote(self, entry: LedgerEntry) -> None:
+        self._head_seq = entry.seq
+        if self._first_entry_at is None:
+            self._first_entry_at = entry.ts
 
     def _reply(
         self,
@@ -4805,6 +4990,14 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         proposals: dict[str, dict[str, Any]] = {}
         waiting: dict[str, _Waiting] = {}
         for entry in self._ledger.entries():
+            self._wrote(entry)
+            if entry.kind == ANCHOR_KIND:
+                try:
+                    self._last_anchor_at = datetime.fromisoformat(entry.payload["anchored_at"])
+                except (KeyError, TypeError, ValueError):  # anti-pattern: SILENT-EXCEPT ok, an edited anchor entry breaks the chain, which verify names
+                    continue
+                self._anchored_seq = entry.seq
+                continue
             user_id = entry.payload.get("user_id")
             if not isinstance(user_id, str):
                 continue
@@ -4975,6 +5168,174 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
 
 `_maybe_waiting` opens a waiting confirmation only for a decision that allowed the action and asked for confirmation with a warning. It skips a payee who was already allowed at that point in the ledger, because at the time the loop answered that nothing changed and created nothing to confirm. `_restore_pending` drops anything older than `CONFIRMATION_TTL`, recording its token as expired, as `_confirm` would. For a transfer it quotes again and restores the rail the student was asked to confirm, which is the one the council chose when one was convened, read from the `council` entry during the rebuild and kept on the `_Waiting` record. It falls back to `_choose` only when that rail is no longer usable, for example after it failed, and drops the confirmation when no route is left, recording its token as out of routes, as `_offer_next_route` did. Before the council both sides used `_choose` and always agreed; an attacker brief showed that with the council they did not, so a student could confirm the bank wire and, after a restart, the same token would pay Wise. The token is computed again by the engine from the action, which is why the ledger never needs to hold it. `setdefault` leaves any confirmation already waiting under that token untouched. `_rebuild_standing` adds a standing mandate from its note to a new version with the recorded id, computing its token again from the recorded action, and skips one the mandate already holds. Every entry also passes through `_rebuild_rescue`, described with the rescue below.
 
+### Anchoring the ledger head, `core/agent.py`
+
+The loop anchors the ledger head after every T2 execution, and at least once in each hour of activity. Both are checked at one place, after a public call of the loop has finished writing, so an anchor covers every entry of the call that caused it.
+
+```python
+def _anchored[**P, R](
+    method: Callable[Concatenate["AgentLoop", str, P], R],
+) -> Callable[Concatenate["AgentLoop", str, P], R]:
+    """A public call of the loop, after which the ledger head is anchored when an anchor is due."""
+
+    @functools.wraps(method)
+    def call(self: "AgentLoop", user_id: str, *args: P.args, **kwargs: P.kwargs) -> R:
+        result = method(self, user_id, *args, **kwargs)
+        self._anchor_if_due(user_id)
+        return result
+
+    return call
+
+
+def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
+    """What the student is shown of one ledger entry: where it sits, when, what kind, and what it was about."""
+    view: dict[str, Any] = {"seq": entry.seq, "ts": entry.ts.isoformat(), "kind": entry.kind}
+    payload = entry.payload
+    if isinstance(payload.get("action"), dict):
+        view["action"] = payload["action"].get("type")
+    if entry.kind == "note" and payload.get("kind"):
+        view["note"] = payload["kind"]
+    if entry.kind == "receipt":
+        receipt = payload.get("receipt", {})
+        view["receipt"] = {name: receipt.get(name) for name in ("receipt_id", "rail", "amount", "currency", "status")}
+    return view
+```
+
+`_anchored` wraps `handle`, `act`, `rescue_start`, and `rescue_step`. It runs the call and then `_anchor_if_due` for the student, and returns the call's own result untouched. `run_due_standing_mandates` takes no student, so it calls `_anchor_if_due` itself after each student's standing runs. `_entry_view` is what `verify_ledger` shows of an entry: its sequence number, time, and kind, the action type for an entry that holds an action, the note kind for a note, and the receipt's id, rail, amount, currency, and status for a receipt.
+
+```python
+    def _write(self, trail: _Trail, kind: str, payload: dict[str, Any]) -> None:
+        body: dict[str, Any] = {"user_id": trail.user_id, "turn": trail.turn, **payload}
+        if trail.provider is not None:
+            body["provider"] = trail.provider
+        if trail.model is not None:
+            body["model"] = trail.model
+        if trail.mandate_id is not None:
+            body["mandate_id"] = trail.mandate_id
+        entry = self._ledger.append(ACTOR, kind, body)
+        self._wrote(entry)
+        trail.seqs.append(entry.seq)
+        if kind == "execution" and TIERS[ActionType(payload["action"]["type"])] is Tier.T2:
+            self._anchor_due = True
+
+    def _wrote(self, entry: LedgerEntry) -> None:
+        self._head_seq = entry.seq
+        if self._first_entry_at is None:
+            self._first_entry_at = entry.ts
+```
+
+`_write` now keeps the entry it appended. `_wrote` records the newest sequence number and the time of the first entry. An `execution` whose action type is T2 in `core/tiers.py` marks an anchor as due; that is the static tier of the type, so a standing run, which the engine decides at T1, still anchors, because it moves money.
+
+```python
+    def _anchor_if_due(self, user_id: str) -> None:
+        """Anchor the ledger head after a T2 execution, or when an hour has passed since the last anchor
+        and something has been written since. Without an anchor yet, the hour runs from the first entry.
+
+        The anchor entry extends the chain, so the head it records is the head before it. A failing
+        anchor store leaves a note naming the error and nothing else: an anchor never blocks a payment.
+        """
+        if self._anchor is None:
+            return
+        now = self._clock()
+        since = self._last_anchor_at or self._first_entry_at
+        hourly = since is not None and now - since > ANCHOR_INTERVAL and self._head_seq > self._anchored_seq
+        if not (self._anchor_due or hourly):
+            return
+        self._anchor_due = False
+        # A broken chain, or one the anchor store disagrees with, is never anchored, so a later
+        # anchor cannot sign a tampered head and launder it. Source: the anchor attacker brief of 8 October.
+        mandate = self._mandates.get(user_id)
+        trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
+        head, seq = self._ledger.head(), self._head_seq
+        # Only a hash of the student's id leaves the ledger, never the id.
+        user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+        try:
+            broken = self._ledger.verify()
+            if broken is not None:
+                reason: str | None = f"The ledger chain breaks at entry {broken}, so its head is not anchored."
+            else:
+                reason = self._store_mismatch(self._ledger.entries())
+            if reason is not None:
+                self._write(trail, "note", {"kind": "anchor_skipped", "reason": reason})
+                return
+            anchor_id = self._anchor.anchor(head, seq, user_hash)
+        except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an anchor never blocks a payment and the note names the error
+            self._write(trail, "note", {"kind": "anchor_failed", "error": f"{type(error).__name__}: {error}"})
+            return
+        # The entry carries the student like every entry, so it is listed in their ledger; the line in
+        # the anchor store holds only the hash of their id. Source: docs/decisions.md, 8 October 2026.
+        self._write(
+            trail,
+            ANCHOR_KIND,
+            {"head_hash": head, "head_seq": seq, "anchor_id": anchor_id, "anchored_at": now.isoformat()},
+        )
+        self._last_anchor_at, self._anchored_seq = now, self._head_seq
+```
+
+`_anchor_if_due` does nothing without an anchor. The hour is measured on the loop's clock, which a test injects, from the last anchor, or from the first entry when there has been none, and it fires only when something was written after the last anchor, so an idle hour anchors nothing again. The head is read just before the anchor entry is appended, so the anchored head is the head before that entry and its sequence is one less than the entry's own. The anchor is given a SHA 256 of the student's id, never the id. When the anchor store raises, a `note` of kind `anchor_failed` names the error and the call returns as it was; the payment that caused it has already happened and is never undone. The anchor entry is written through `_write`, so it carries the student's id, the turn and the mandate like every entry and is listed in the student's ledger, beside the head hash, its sequence, the anchor id, and the time. The line in the anchor store holds only the hash of the id.
+
+```python
+    def _store_mismatch(self, entries: list[LedgerEntry]) -> str | None:
+        """Why the ledger disagrees with a head the anchor store signed, or None when every one matches.
+
+        Every signed line must name an entry this ledger still holds, with that entry's hash, so an
+        edited and rechained ledger, a truncated one, and a line copied from another ledger all fail.
+        """
+        if not isinstance(self._anchor, LocalSignedAnchor):
+            return None
+        hashes = {0: GENESIS_PREV_HASH, **{entry.seq: entry.hash for entry in entries}}
+        for head, seq in self._anchor.signed_heads():
+            if hashes.get(seq) != head:
+                return f"The anchor store signed a head for entry {seq} that does not match the ledger."
+        return None
+
+    def anchor_status(self) -> dict[str, Any]:
+        """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
+        naming the entry just before it with that entry's hash, and every other signed head matching too."""
+        local = isinstance(self._anchor, LocalSignedAnchor)
+        kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
+        entries = self._ledger.entries()
+        latest = next((entry for entry in reversed(entries) if entry.kind == ANCHOR_KIND), None)
+        status: dict[str, Any] = {"anchored": False}
+        if self._anchor is not None and latest is not None:
+            head, head_seq = str(latest.payload.get("head_hash", "")), latest.payload.get("head_seq")
+            status = {"anchored": True, "head_hash": head, "head_seq": head_seq}
+            hashes = {entry.seq: entry.hash for entry in entries}
+            try:
+                signed = self._anchor.verify(head)
+                at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+                matches = head_seq == latest.seq - 1 and hashes.get(head_seq) == head and self._store_mismatch(entries) is None
+            except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
+                signed, matches, at = False, False, None
+                status["error"] = f"{type(error).__name__}: {error}"
+            status["verified"] = signed and matches
+            status["matches_ledger"] = matches
+            status["anchored_at"] = at.isoformat() if at is not None else None
+        status["kind"] = kind
+        if local and LocalSignedAnchor.uses_development_secret():
+            status["development_secret"] = True
+        return status
+
+    def _ledger_report(self, user_id: str, at: datetime) -> dict[str, Any]:
+        """Today's entries for the student, in UTC days, the first broken entry of the chain, and the anchor."""
+        day = at.astimezone(timezone.utc).date()
+        entries = [
+            _entry_view(entry)
+            for entry in self._ledger.entries()
+            if entry.payload.get("user_id") == user_id and entry.ts.astimezone(timezone.utc).date() == day
+        ]
+        return {
+            "ledger": {
+                "date": day.isoformat(),
+                "entries": entries,
+                "first_broken_seq": self._ledger.verify(),
+                "anchor": self.anchor_status(),
+            }
+        }
+```
+
+`_store_mismatch` compares every head the anchor store holds signed with the ledger: each must name an entry the ledger still holds, with that entry's hash, so a ledger edited and rechained, a ledger cut short, and a line copied from another ledger all disagree with the store. `_anchor_if_due` refuses to anchor a chain that breaks or that the store disagrees with, writing a `note` of kind `anchor_skipped` with the reason, so a later anchor can never sign a tampered head. `anchor_status` reads the latest `anchor` entry in the ledger and asks the anchor store whether that head is signed there, with the time the store recorded. `verified` is true only when the head is signed, the entry names the entry just before it with that entry's hash, and the store agrees with the ledger everywhere; `matches_ledger` says whether the ledger side holds. Under the public development secret the status adds `development_secret` true, because anyone can sign with it. With no anchor entry it says `anchored` false and names the kind. A store that cannot be read is reported as not verified, with its error. `_ledger_report` is what the T0 tool `verify_ledger` returns: the student's entries of the current UTC day, the first broken entry of the whole chain, and the anchor status. The API's verify endpoint returns the same anchor status. The rebuild reads every `anchor` entry first, before the check for a user id, so a restart knows when the last anchor was made and which entry it was.
+
 ### The rescue, `core/agent.py`
 
 The rescue's methods sit in `AgentLoop` beside everything else, because every effect of a rescue is an ordinary action of the loop. Its state lives in three places set up in `__init__`: `self._machine`, the `RescueMachine`; `self._rescues`, a `_Rescue` per student holding what the rescue knows beyond its state, its language, the ledger entry it began at, the card, the freeze result, how many identity answers were wrong, and whether it is locked; and `self._live`, the backup card a rescue moved the student onto. `_Outcome` gathers what one call writes to its reply, and `RESTING` names the three states where the machine waits for the student.
@@ -4999,6 +5360,7 @@ MAX_IDENTITY_ATTEMPTS = 3
         """The backup card a rescue moved the student onto, or nothing if no rescue has."""
         return self._live.get(user_id)
 
+    @_anchored
     def rescue_start(self, user_id: str, trigger: str, message: Message) -> RescueReply:
         plan = self._plan(user_id)
         trigger = RescueTrigger(trigger)
@@ -5031,6 +5393,7 @@ MAX_IDENTITY_ATTEMPTS = 3
             out.say(_text(lang, "rescue_started", question=plan.identity_check.question))
         return self._rescue_reply(trail, user_id, lang, before, out)
 
+    @_anchored
     def rescue_step(
         self, user_id: str, message: Message, confirmation_token: str | None = None
     ) -> RescueReply:
@@ -5600,6 +5963,7 @@ The harness turns the task and attack suites into evidence. For every entry it l
 import json
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -5610,7 +5974,8 @@ from typing import Any
 import yaml
 
 from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
-from core.agent import AgentLoop
+from core.agent import ANCHOR_KIND, AgentLoop
+from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
@@ -5627,15 +5992,19 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "suites"
 SCENARIOS_DIR = SUITES_DIR / "scenarios"
 REPORT_PATH = ROOT / "evidence" / "report.md"
+# Each run anchors into a directory of its own under this one, removed when the run ends, so no
+# scenario writes into data/. Git ignores it, and it stays inside the repository, as CLAUDE.md rule 9 asks.
+RUNS_TMP = ROOT / ".harness_tmp"
 SUITES = (("tasks", "tasks.yaml"), ("attacks", "attacks.yaml"))
 PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
 TEXT_CHECKS = ("must_contain", "must_not_contain")
-# The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
+# The ledger expectation lists the action trail; turn entries only count a turn's messages and anchor
+# entries only record the head, so neither is part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
-RUN_CHECKS = ("ledger", "notes", "family_notice", "must_not_contain", "verify")
+RUN_CHECKS = ("ledger", "anchors", "notes", "family_notice", "must_not_contain", "verify")
 # A turn whose language is this one is built without a language, so the loop detects it.
 DETECT = "detect"
 # The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
@@ -5851,7 +6220,7 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
     return failures
 ```
 
-`TURN_KIND` is the entry kind the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and is not part of the action trail. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09. `rescue_state` and `do_now` are read from a rescue reply's `rescue` field; any other reply has none, so the expectation fails rather than passing on a missing field.
+`TURN_KIND` and `ANCHOR_KIND` are the entry kinds the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and an `anchor` entry only records the head, and neither is part of the action trail. The `anchors` expectation counts the anchor entries of the run instead, so a scenario can assert that an anchor happened, or that none did. `run_scenario_run` gives every run a `LocalSignedAnchor` in a temporary directory of its own under `.harness_tmp/`, which is removed when the run ends, so no scenario writes into `data/`. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09. `rescue_state` and `do_now` are read from a rescue reply's `rescue` field; any other reply has none, so the expectation fails rather than passing on a missing field.
 
 ```python
 def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]]], expect: dict[str, Any]) -> list[str]:
@@ -5940,6 +6309,12 @@ def _message(turn: dict[str, Any], run: dict[str, Any]) -> Message:
 
 ```python
 def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult:
+    RUNS_TMP.mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=RUNS_TMP) as anchors_dir:
+        return _run_scenario_run(scenario, run, Path(anchors_dir) / "anchors.jsonl")
+
+
+def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_path: Path) -> RunResult:
     result = RunResult(langs=list(dict.fromkeys(_turn_lang(turn, run) for turn in run["turns"])))
     shared, own = scenario.get("expected", {}), run.get("expected", {})
     expected = {**shared, **own}
@@ -5973,6 +6348,7 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
             council=_council(fixtures),
             plans={USER: _plan(fixtures)},
             inbound_receipts={USER: inbound},
+            anchor=LocalSignedAnchor(anchors_path),
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
@@ -6014,9 +6390,13 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     result.failures += _judge("final reply", replies[-1], final)
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(f"turn {number}", reply, {"must_not_contain": expected.get("must_not_contain", [])})
-    kinds = [entry.kind for entry in ledger.entries() if entry.kind != TURN_KIND]
+    kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
+    # Anchor entries are left out of the trail, so a scenario asserts them by their count.
+    anchors = sum(entry.kind == ANCHOR_KIND for entry in ledger.entries())
+    if "anchors" in expected and anchors != expected["anchors"]:
+        result.failures.append(f"anchor entries were {anchors}, expected {expected['anchors']}")
     notes = [entry.payload.get("kind") for entry in ledger.entries() if entry.kind == "note"]
     if "notes" in expected and notes != expected["notes"]:
         result.failures.append(f"notes were {notes}, expected {expected['notes']}")
@@ -6196,7 +6576,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel, Field
 
-from contracts.interfaces import Council, Ledger, ModelAdapter
+from contracts.interfaces import Anchor, Council, Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
@@ -6216,6 +6596,7 @@ from contracts.schemas import (
     TraceResult,
 )
 from core.agent import AgentLoop
+from core.anchor_local import anchor_for
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
@@ -6232,6 +6613,8 @@ ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
 CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
+# The anchors are kept beside the ledger they anchor, so data/anchors.jsonl for data/ledger.jsonl.
+ANCHORS_FILE = "anchors.jsonl"
 # Source: this module. The Next.js app runs on localhost; any port is allowed, no other host is.
 LOCAL_ORIGINS = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
 # Source: this module. A guard against oversized requests to the model, not a money rule.
@@ -6300,6 +6683,9 @@ class RunDueRequest(BaseModel):
 
 class VerifyResult(BaseModel):
     first_broken_seq: int | None
+    # AgentLoop.anchor_status: anchored false and the kind when there is no anchor, else the latest
+    # anchored head, its sequence, whether the anchor store verifies it, its time, and the kind.
+    anchor: dict[str, Any]
 
 
 class Health(BaseModel):
@@ -6400,10 +6786,14 @@ def create_app(
     tick_seconds: float | None = TICK_SECONDS,
     council: Council | None = None,
     sim_rails: bool | None = None,
+    anchor: Anchor | None = None,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
     user_id = fixture["user_id"]
-    ledger = JsonlLedger(ledger_path or LEDGER_PATH)
+    ledger_path = ledger_path or LEDGER_PATH
+    ledger = JsonlLedger(ledger_path)
+    if anchor is None:
+        anchor = anchor_for(None, ledger_path.parent / ANCHORS_FILE)
     if rails is None:
         rails = demo_rails(
             fixture.get("traces"),
@@ -6432,6 +6822,7 @@ def create_app(
         council=council if council is not None else council_for(),
         plans={user_id: Plan.model_validate(fixture["plan"])},
         inbound_receipts={user_id: inbound},
+        anchor=anchor,
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
@@ -6554,7 +6945,7 @@ def create_app(
     def verify(user: str) -> VerifyResult:
         known(user)
         with lock:
-            return VerifyResult(first_broken_seq=ledger.verify())
+            return VerifyResult(first_broken_seq=ledger.verify(), anchor=loop.anchor_status())
 
     @app.post("/trace")
     def trace(request: TraceRequest) -> TraceResult:
@@ -7267,8 +7658,55 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_sim_upi_paynow.py` | `test_the_cap_day_is_the_senders_day_in_india` | The cap day is the senders day in india |
 | `test_sim_upi_paynow.py` | `test_a_payment_the_next_day_in_india_has_its_own_cap` | A payment the next day in india has its own cap |
 | `test_sim_upi_paynow.py` | `test_the_cap_sum_is_exact_whatever_the_decimal_precision` | The cap sum is exact whatever the decimal precision |
+| `test_agent_anchor.py` | `test_a_t2_execution_is_anchored_once_after_its_trail` | A t2 execution is anchored once after its trail |
+| `test_agent_anchor.py` | `test_a_t0_read_writes_no_anchor` | A t0 read writes no anchor |
+| `test_agent_anchor.py` | `test_the_anchored_head_is_the_head_before_the_anchor_entry` | The anchored head is the head before the anchor entry |
+| `test_agent_anchor.py` | `test_the_anchor_entry_holds_the_student_the_head_the_sequence_the_id_and_the_time` | The anchor entry holds the student the head the sequence the id and the time |
+| `test_agent_anchor.py` | `test_nothing_about_money_reaches_an_anchor_line_or_entry_and_the_student_only_the_entry` | Nothing about money reaches an anchor line or entry and the student only the entry |
+| `test_agent_anchor.py` | `test_an_hourly_anchor_fires_when_the_last_anchor_is_older_than_an_hour_and_not_before` | An hourly anchor fires when the last anchor is older than an hour and not before |
+| `test_agent_anchor.py` | `test_with_no_anchor_yet_the_hour_is_measured_from_the_first_entry` | With no anchor yet the hour is measured from the first entry |
+| `test_agent_anchor.py` | `test_a_restart_rebuilds_the_last_anchor_time_from_the_ledger` | A restart rebuilds the last anchor time from the ledger |
+| `test_agent_anchor.py` | `test_a_failing_anchor_store_writes_a_note_and_the_payment_still_goes_through` | A failing anchor store writes a note and the payment still goes through |
+| `test_agent_anchor.py` | `test_a_loop_without_an_anchor_writes_no_anchor` | A loop without an anchor writes no anchor |
+| `test_agent_anchor.py` | `test_verify_ledger_is_a_t0_tool_written_as_proposal_decision_execution` | Verify ledger is a t0 tool written as proposal decision execution |
+| `test_agent_anchor.py` | `test_verify_ledger_reports_the_latest_anchor_and_that_it_verifies` | Verify ledger reports the latest anchor and that it verifies |
+| `test_agent_anchor.py` | `test_verify_ledger_lists_only_today_and_only_this_student` | Verify ledger lists only today and only this student |
+| `test_anchor_local.py` | `test_the_local_anchor_implements_the_anchor_interface` | The local anchor implements the anchor interface |
+| `test_anchor_local.py` | `test_an_anchored_head_verifies_and_another_head_does_not` | An anchored head verifies and another head does not |
+| `test_anchor_local.py` | `test_an_anchor_line_holds_the_head_the_sequence_the_user_hash_a_time_and_a_signature` | An anchor line holds the head the sequence the user hash a time and a signature |
+| `test_anchor_local.py` | `test_each_anchor_appends_one_line` | Each anchor appends one line |
+| `test_anchor_local.py` | `test_a_line_with_any_field_changed_verifies_false` | A line with any field changed verifies false |
+| `test_anchor_local.py` | `test_a_missing_file_verifies_false` | A missing file verifies false |
+| `test_anchor_local.py` | `test_a_line_that_is_not_an_anchor_is_passed_over` | A line that is not an anchor is passed over |
+| `test_anchor_local.py` | `test_the_secret_is_read_at_call_time_so_another_secret_verifies_nothing` | The secret is read at call time so another secret verifies nothing |
+| `test_anchor_local.py` | `test_the_secret_never_appears_in_a_line_or_an_id` | The secret never appears in a line or an id |
+| `test_anchor_local.py` | `test_production_without_a_secret_raises_at_call_time_without_naming_a_secret` | Production without a secret raises at call time without naming a secret |
+| `test_anchor_local.py` | `test_an_empty_secret_counts_as_no_secret` | An empty secret counts as no secret |
+| `test_anchor_local.py` | `test_an_anchor_takes_only_a_hash_a_sequence_and_a_user_hash` | An anchor takes only a hash a sequence and a user hash |
+| `test_anchor_local.py` | `test_the_factory_gives_the_local_anchor_by_default_and_for_local` | The factory gives the local anchor by default and for local |
+| `test_anchor_local.py` | `test_the_factory_says_fisco_is_not_configured_yet` | The factory says fisco is not configured yet |
+| `test_anchor_local.py` | `test_the_factory_names_the_values_it_takes_for_an_unknown_anchor` | The factory names the values it takes for an unknown anchor |
+| `test_api_anchor.py` | `test_verify_says_when_no_anchor_exists` | Verify says when no anchor exists |
+| `test_api_anchor.py` | `test_verify_shows_the_latest_anchor_and_that_it_verifies` | Verify shows the latest anchor and that it verifies |
+| `test_api_anchor.py` | `test_a_tampered_anchor_line_verifies_false` | A tampered anchor line verifies false |
+| `test_api_anchor.py` | `test_the_secret_never_appears_in_a_response_an_entry_or_an_anchor_line` | The secret never appears in a response an entry or an anchor line |
+| `test_api_anchor.py` | `test_an_anchor_store_that_fails_names_its_error_without_the_secret_and_the_payment_goes_through` | An anchor store that fails names its error without the secret and the payment goes through |
+| `test_api_anchor.py` | `test_anchor_fisco_is_not_configured_yet` | Anchor fisco is not configured yet |
+| `test_harness_anchor.py` | `test_the_harness_gives_the_loop_a_local_anchor_outside_data_and_keeps_anchor_entries_out_of_the_trail` | The harness gives the loop a local anchor outside data and keeps anchor entries out of the trail |
+| `test_anchor_attacks.py` | `test_an_edited_and_rechained_ledger_does_not_verify_against_its_anchor` | An edited and rechained ledger does not verify against its anchor |
+| `test_anchor_attacks.py` | `test_an_anchor_entry_pointed_at_an_older_signed_head_does_not_verify` | An anchor entry pointed at an older signed head does not verify |
+| `test_anchor_attacks.py` | `test_a_line_replayed_from_another_ledger_does_not_verify` | A line replayed from another ledger does not verify |
+| `test_anchor_attacks.py` | `test_a_ledger_truncated_after_its_first_anchor_does_not_verify` | A ledger truncated after its first anchor does not verify |
+| `test_anchor_attacks.py` | `test_a_tampered_ledger_is_never_anchored_so_a_later_payment_cannot_launder_it` | A tampered ledger is never anchored so a later payment cannot launder it |
+| `test_anchor_attacks.py` | `test_a_broken_chain_is_never_anchored` | A broken chain is never anchored |
+| `test_anchor_attacks.py` | `test_an_honest_ledger_with_several_anchors_still_verifies` | An honest ledger with several anchors still verifies |
+| `test_anchor_attacks.py` | `test_the_status_says_when_the_public_development_secret_signs` | The status says when the public development secret signs |
+| `test_api_anchor.py` | `test_the_students_ledger_lists_the_anchor_entry_after_a_t2_execution_and_the_anchors_file_holds_no_user_id` | The students ledger lists the anchor entry after a t2 execution and the anchors file holds no user id |
+| `test_harness_anchor.py` | `test_an_anchors_expectation_passes_on_the_count_of_anchor_entries` | An anchors expectation passes on the count of anchor entries |
+| `test_harness_anchor.py` | `test_an_anchors_expectation_fails_with_the_count_when_it_differs` | An anchors expectation fails with the count when it differs |
+| `test_harness_anchor.py` | `test_a_read_only_run_can_assert_that_no_anchor_happened` | A read only run can assert that no anchor happened |
 
-In all, 63 parametrized tests add 162 extra runs, which is how 586 test functions become 748 tests.
+In all, 64 parametrized tests add 171 extra runs, which is how 633 test functions become 804 tests.
 
 ## The suites and their scenarios
 
@@ -7298,7 +7736,7 @@ def load(path):
 
 `with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, numbers, and dates, and never creates arbitrary Python objects from the file.
 
-A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Forty eight entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
+A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Forty nine entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
 
 ```yaml
 id: X17
@@ -7416,7 +7854,7 @@ addopts = --basetemp=.pytest_tmp
 `addopts` adds options to every run. `--basetemp=.pytest_tmp` makes pytest keep the files tests write through `tmp_path` in `.pytest_tmp/` inside the repository, instead of the system's temporary folder, because rule 9 of `CLAUDE.md` forbids writing files outside the repository. pytest empties that folder at the start of every run.
 ### .gitignore and .env.example
 
-`.gitignore` lists `.venv/`, `.env`, `__pycache__/`, `.pytest_cache/`, `evidence/`, `data/`, and `.pytest_tmp/`, so the virtual environment, the secrets file, generated caches, the generated evidence report, the API's ledger and conversation files, and pytest's temporary files are never committed. A committed report would always name the commit before the one that holds it, so the report is built fresh by `make evidence` and by CI instead. `.env.example` lists every variable the code reads, with no values: `LIFELINE_CONFIRM_SECRET`, `LIFELINE_ENV`, `MODEL_PROVIDER`, `FALLBACK_MODEL_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_BASE_URL`, `ANTHROPIC_COUNCIL_MODEL`, `DASHSCOPE_COUNCIL_MODEL`, and `COUNCIL`. `DASHSCOPE_BASE_URL` left empty keeps the SDK's own endpoint; a Model Studio key from another region, such as Singapore, needs that region's endpoint, which the technical reference cites. The two council model names are the models the council runs on, and each one left empty means the council runs on the ordinary model for its provider. `COUNCIL` is the switch: `on`, `true`, `1` or `yes` makes the API build a council, and anything else, including the empty value it ships with, leaves the API behaving as it did before the council existed. Copy it to `.env` and fill in the values to run against real providers.
+`.gitignore` lists `.venv/`, `.env`, `__pycache__/`, `.pytest_cache/`, `evidence/`, `data/`, `.pytest_tmp/`, and `.harness_tmp/`, so the virtual environment, the secrets file, generated caches, the generated evidence report, the API's ledger and conversation files, and pytest's and the harness's temporary files are never committed. A committed report would always name the commit before the one that holds it, so the report is built fresh by `make evidence` and by CI instead. `.env.example` lists every variable the code reads, with no values: `LIFELINE_CONFIRM_SECRET`, `LIFELINE_ANCHOR_SECRET`, `LIFELINE_ENV`, `MODEL_PROVIDER`, `FALLBACK_MODEL_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_BASE_URL`, `ANTHROPIC_COUNCIL_MODEL`, `DASHSCOPE_COUNCIL_MODEL`, `COUNCIL`, `SIM_RAILS`, and `ANCHOR`. `ANCHOR` is `local`, the default when empty, or `fisco`, which is refused as not configured until the FISCO BCOS anchor exists; `LIFELINE_ANCHOR_SECRET` is the key the local anchor signs with. `DASHSCOPE_BASE_URL` left empty keeps the SDK's own endpoint; a Model Studio key from another region, such as Singapore, needs that region's endpoint, which the technical reference cites. The two council model names are the models the council runs on, and each one left empty means the council runs on the ordinary model for its provider. `COUNCIL` is the switch: `on`, `true`, `1` or `yes` makes the API build a council, and anything else, including the empty value it ships with, leaves the API behaving as it did before the council existed. Copy it to `.env` and fill in the values to run against real providers.
 
 ### .github/workflows/ci.yml
 

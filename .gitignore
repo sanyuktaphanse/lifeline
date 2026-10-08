@@ -5,3 +5,4 @@ __pycache__/
 evidence/
 data/
 .pytest_tmp/
+.harness_tmp/

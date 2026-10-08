@@ -1,0 +1,62 @@
+id: T20
+note: The student pays this month's rent, which the loop anchors after its execution, then asks for today's ledger and its verification. The scripted model calls verify_ledger, which passes the engine at T0 and is written as proposal, decision, execution, and on the next turn the model is seen to have received today's entries, an intact chain, and the latest anchor, signed in the run's own local anchor file and verified there. The anchor entry is not part of the action trail, so the ledger expectation leaves it out. The scripted model supplies the calls and the replies; the scenario asserts what the tool gave the model.
+expected:
+  reply: answer
+  ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, execution]
+  # One anchor, after the transfer's execution; the T0 read that follows within the hour adds none.
+  anchors: 1
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation, warning_key: warn.transfer.irreversible}
+      - user: Yes, send it
+        confirm: latest
+        expect: {reply: receipt, must_contain: [Done.]}
+      - user: Show me today's ledger and verify it, including the anchor.
+        model:
+          - calls:
+              - name: verify_ledger
+                arguments: {}
+          - text: Today's ledger holds your rent payment, the chain is intact, and its latest head is anchored and verified.
+        expect: {reply: answer, lang: en}
+      - user: Is the anchor really verified?
+        model:
+          - text: Yes. The anchor store holds the head signed, and it checks.
+        expect:
+          reply: answer
+          model_saw: &report
+            - '"first_broken_seq": null'
+            - '"anchored": true'
+            - '"verified": true'
+            - '"kind": "local"'
+            - '"action": "transfer"'
+            - '"receipt_id": "wise-0001"'
+  - lang: zh
+    turns:
+      - user: 给 landlord_sp 转 1200 新元房租
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation, warning_key: warn.transfer.irreversible, lang: zh}
+      - user: 好的，发送
+        confirm: latest
+        expect: {reply: receipt, must_contain: [已完成]}
+      - user: 请显示今天的账本并验证它，包括锚定状态。
+        model:
+          - calls:
+              - name: verify_ledger
+                arguments: {}
+          - text: 今天的账本包含你的房租付款，哈希链完整，最新的账本头已锚定并通过验证。
+        expect: {reply: answer, lang: zh}
+      - user: 锚定真的通过验证了吗？
+        model:
+          - text: 是的。锚定存储中的账本头签名有效。
+        expect:
+          reply: answer
+          model_saw: *report
