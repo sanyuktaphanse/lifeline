@@ -27,6 +27,7 @@ TEXTS = {
         "cancelled": "cancelled",
         "failed": "failed",
         "returned": "returned",
+        "refused_by_rail": "refused",
     },
     "pt": {
         "note": "Nota do Lifeline para {month}, a partir do seu registro. Transferências: {transfers}. Ordens permanentes executadas: {standing}. Falhas, devoluções ou cancelamentos: {problems}. Pedidos recusados: {refusals}.",
@@ -36,6 +37,7 @@ TEXTS = {
         "cancelled": "cancelada",
         "failed": "falhou",
         "returned": "devolvida",
+        "refused_by_rail": "recusou",
     },
     "zh": {
         "note": "Lifeline 的 {month} 月度记录，来自你的账本。转账：{transfers}。已执行的定期付款：{standing}。失败、退回或取消：{problems}。被拒绝的请求：{refusals}。",
@@ -45,6 +47,7 @@ TEXTS = {
         "cancelled": "已取消",
         "failed": "失败",
         "returned": "已退回",
+        "refused_by_rail": "拒绝",
     },
 }
 
@@ -92,6 +95,9 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         and entry.payload.get("kind") == "cancel_result"
         and entry.payload.get("status") == "done"
     }
+    # A transfer every rail refused at execution leaves a rail error note and no receipt; one that failed on
+    # one rail and was then paid on another has a receipt, and is not a problem. Source: the attacker brief.
+    receipted = {key for key in keys.values()}
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     standing: list[dict[str, Any]] = []
     problems: list[dict[str, Any]] = []
@@ -122,6 +128,13 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
             problems.append({"receipt_id": receipt.get("receipt_id"), "outcome": receipt["status"], "seq": entry.seq})
         elif entry.kind == "note" and payload.get("kind") == "cancel_result" and payload.get("status") == "done":
             problems.append({"receipt_id": payload.get("receipt_id"), "outcome": "cancelled", "seq": entry.seq})
+        elif (
+            entry.kind == "note"
+            and "rail_error" in payload
+            and payload.get("executed") is False
+            and payload.get("idempotency_key") not in receipted
+        ):
+            problems.append({"receipt_id": None, "rail": payload.get("rail"), "outcome": "refused_by_rail", "seq": entry.seq})
         elif entry.kind == "decision" and not payload.get("decision", {}).get("allowed", True):
             refusals.append(entry.seq)
     transfers = [
@@ -140,7 +153,9 @@ def render(summary: dict[str, Any], lang: str) -> str:
     """The note in the student's language, from the summary's figures and nothing else."""
     texts = TEXTS.get(lang, TEXTS["en"])
     transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
-    problems = ", ".join(f"{item['receipt_id']} {texts[item['outcome']]}" for item in summary["problems"]) or texts["none"]
+    problems = ", ".join(
+        f"{item['receipt_id'] or item.get('rail')} {texts[item['outcome']]}" for item in summary["problems"]
+    ) or texts["none"]
     return texts["note"].format(
         month=summary["month"],
         transfers=transfers,

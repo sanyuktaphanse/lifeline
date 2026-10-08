@@ -6976,6 +6976,9 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         and entry.payload.get("kind") == "cancel_result"
         and entry.payload.get("status") == "done"
     }
+    # A transfer every rail refused at execution leaves a rail error note and no receipt; one that failed on
+    # one rail and was then paid on another has a receipt, and is not a problem. Source: the attacker brief.
+    receipted = {key for key in keys.values()}
     groups: dict[tuple[str, str], dict[str, Any]] = {}
     standing: list[dict[str, Any]] = []
     problems: list[dict[str, Any]] = []
@@ -7006,6 +7009,13 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
             problems.append({"receipt_id": receipt.get("receipt_id"), "outcome": receipt["status"], "seq": entry.seq})
         elif entry.kind == "note" and payload.get("kind") == "cancel_result" and payload.get("status") == "done":
             problems.append({"receipt_id": payload.get("receipt_id"), "outcome": "cancelled", "seq": entry.seq})
+        elif (
+            entry.kind == "note"
+            and "rail_error" in payload
+            and payload.get("executed") is False
+            and payload.get("idempotency_key") not in receipted
+        ):
+            problems.append({"receipt_id": None, "rail": payload.get("rail"), "outcome": "refused_by_rail", "seq": entry.seq})
         elif entry.kind == "decision" and not payload.get("decision", {}).get("allowed", True):
             refusals.append(entry.seq)
     transfers = [
@@ -7020,14 +7030,16 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
     }
 ```
 
-`summarize` walks the entries once and keeps only the student's, in the month. It first gathers the idempotency keys of every transfer the student's ledger shows cancelled, failed or returned, in any month, because a note says a transfer was sent only when it was. Every other transfer execution, one with a route, adds to the group for its currency and corridor, with its amount and the fee its route recorded, and its sequence goes into the group's `seqs`, so every figure can be checked against the entry it came from. `setdefault` creates a group the first time a key is seen. A receipt that failed or was returned, a cancel the rail carried out, and a refused decision are listed with their sequences too. Totals are kept as `Decimal` and written with `format(..., "f")`, so no amount is rounded through a float.
+`summarize` walks the entries once and keeps only the student's, in the month. It first gathers the idempotency keys of every transfer the student's ledger shows cancelled, failed or returned, in any month, because a note says a transfer was sent only when it was. Every other transfer execution, one with a route, adds to the group for its currency and corridor, with its amount and the fee its route recorded, and its sequence goes into the group's `seqs`, so every figure can be checked against the entry it came from. `setdefault` creates a group the first time a key is seen. A receipt that failed or was returned, a cancel the rail carried out, a transfer every rail refused at execution, which left a rail error note and no receipt, and a refused decision are listed with their sequences too. Totals are kept as `Decimal` and written with `format(..., "f")`, so no amount is rounded through a float.
 
 ```python
 def render(summary: dict[str, Any], lang: str) -> str:
     """The note in the student's language, from the summary's figures and nothing else."""
     texts = TEXTS.get(lang, TEXTS["en"])
     transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
-    problems = ", ".join(f"{item['receipt_id']} {texts[item['outcome']]}" for item in summary["problems"]) or texts["none"]
+    problems = ", ".join(
+        f"{item['receipt_id'] or item.get('rail')} {texts[item['outcome']]}" for item in summary["problems"]
+    ) or texts["none"]
     return texts["note"].format(
         month=summary["month"],
         transfers=transfers,
@@ -9064,8 +9076,16 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_parent.py` | `test_without_fixtures_user_the_demo_student_is_still_the_user` | Without fixtures user the demo student is still the user |
 | `test_parent.py` | `test_every_existing_scenario_still_passes` | Every existing scenario still passes |
 | `test_parent.py` | `test_the_ledger_shows_the_whole_truth_of_the_refused_second_transfer` | The ledger shows the whole truth of the refused second transfer |
+| `test_attack_four.py` | `test_a_transfer_the_rail_refused_at_the_cap_appears_in_the_monthly_note` | A transfer the rail refused at the cap appears in the monthly note |
+| `test_attack_four.py` | `test_a_rail_failure_followed_by_a_payment_on_another_route_is_not_listed` | A rail failure followed by a payment on another route is not listed |
+| `test_attack_four.py` | `test_the_note_names_the_rail_that_refused` | The note names the rail that refused |
+| `test_attack_three.py` | `test_control_a_plain_receipt_id_in_a_paste_is_refused_under_r01` | Control a plain receipt id in a paste is refused under r01 |
+| `test_attack_three.py` | `test_a_receipt_id_only_a_paste_names_is_refused_under_r01_whatever_its_hyphen_or_suffix` | A receipt id only a paste names is refused under r01 whatever its hyphen or suffix |
+| `test_attack_three.py` | `test_the_monthly_summary_never_reports_an_empty_month_for_a_month_spelled_in_other_digits` | The monthly summary never reports an empty month for a month spelled in other digits |
+| `test_attack_three.py` | `test_a_cancelled_transfer_is_not_reported_as_sent_in_the_monthly_note` | A cancelled transfer is not reported as sent in the monthly note |
+| `test_attack_three.py` | `test_a_standing_run_that_was_cancelled_is_not_counted_as_run_or_sent` | A standing run that was cancelled is not counted as run or sent |
 
-In all, 93 parametrized tests add 251 extra runs, which is how 800 test functions become 1051 tests.
+In all, 95 parametrized tests add 255 extra runs, which is how 808 test functions become 1063 tests.
 
 ## The Stage 8a tests
 
