@@ -3119,6 +3119,9 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 NUMBER = re.compile(r"\d(?:[\d.,]*\d)?")
 DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
+# A thousands grouping written with a space, a no break space, a narrow no break space, or an
+# apostrophe, between a digit and exactly three more.
+DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
@@ -3493,15 +3496,20 @@ class _Details:
     amounts: dict[Decimal, Source] = field(default_factory=dict)
 
     def add(self, text: str, source: Source) -> None:
+        # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
+        # detail on one side of the comparison only.
+        text = _visible(text)
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
-        for amount in _amounts_in(text):
+        # An amount may be grouped with a space or an apostrophe, such as 1 400 or 1'400, so both the
+        # text as written and the text with that grouping closed are read.
+        for amount in _amounts_in(text) | _amounts_in(DIGIT_GROUPING.sub("", text)):
             self.amounts.setdefault(amount, source)
 ```
 
-`_amounts_in` reads every figure in a text as a set of `Decimal` amounts. Each figure is first read the English way, with commas as thousands separators, so `1,400` becomes 1400. A figure written the Portuguese way, with dots between thousands or a comma before cents, is also read that way, so `1.400` counts as 1400 as well as 1.4. Reading both ways only adds candidates; it never removes one. `Decimal` raises `InvalidOperation` on text it cannot read, such as `1.2.3`, and that reading is skipped. Amounts that are equal as numbers are equal in a set, so `1400` and `1400.00` match.
+`_amounts_in` reads every figure in a text as a set of `Decimal` amounts. Each figure is first read the English way, with commas as thousands separators, so `1,400` becomes 1400. A figure written the Portuguese way, with dots between thousands or a comma before cents, is also read that way, so `1.400` counts as 1400 as well as 1.4. Reading both ways only adds candidates; it never removes one. `Decimal` raises `InvalidOperation` on text it cannot read, such as `1.2.3`, and that reading is skipped. Amounts that are equal as numbers are equal in a set, so `1400` and `1400.00` match. `_visible` folds compatibility forms, such as fullwidth letters, with `unicodedata.normalize("NFKC", ...)` and drops every character in the Unicode category `Cf`, the invisible format characters such as a zero width space or a soft hyphen; `_skeleton` uses it for a proposed payee id and `_Details.add` for the text it reads, so both sides of the comparison are read alike. `DIGIT_GROUPING` matches a space, a no break space, a narrow no break space, or an apostrophe between a digit and exactly three more, so `1 400` and `1'400` are read as 1400 as well as in pieces.
 
-`_Details` holds the payee ids and amounts that appeared in some text, each with the source of the text where it first appeared. `add` reads one text into it. `setdefault` stores a value only when the key is not there yet, so a detail keeps the source where it was first seen and a later repeat does not overwrite it. Every word that could be an identifier is kept in `casefold` form, which is a lower case made for comparisons, so `Landlord_SP` and `landlord_sp` match. Keeping every identifier, instead of guessing which ones are payees, means the check below needs no list of known payees.
+`_Details` holds the payee ids and amounts that appeared in some text, each with the source of the text where it first appeared. `add` reads one text into it. `setdefault` stores a value only when the key is not there yet, so a detail keeps the source where it was first seen and a later repeat does not overwrite it. Every word that could be an identifier is kept in `casefold` form, which is a lower case made for comparisons, so `Landlord_SP` and `landlord_sp` match. Keeping every identifier, instead of guessing which ones are payees, means the check below needs no list of known payees. Since 8 October it reads each text through `_visible` first, and reads the amounts both as written and with `DIGIT_GROUPING` closed up. `_converse` also adds the model's own earlier replies to the data, labelled `tool_result`, so a payee or an amount only the model has named stays untrusted after the tool result that named it has left the memory; the scam text attacker brief showed why.
 
 ```python
 def detect_lang(text: str) -> str:
@@ -3705,9 +3713,7 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
 def _skeleton(payee: str) -> str:
     """A payee id as the provenance check compares it: compatibility forms folded, invisible
     characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
-    folded = unicodedata.normalize("NFKC", payee)
-    visible = "".join(char for char in folded if unicodedata.category(char) != "Cf")
-    return visible.strip().casefold()
+    return _visible(payee).strip().casefold()
 
 
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
@@ -3844,6 +3850,11 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 trail.from_user.add(earlier.text, Source.USER_TURN)
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
+            elif earlier.role is Role.ASSISTANT:
+                # The model's own words come from what it was given, so a detail only the model
+                # named counts as data, labelled as tool output, even after its source has left the
+                # memory. Source: docs/decisions.md, 8 October 2026.
+                trail.from_data.add(earlier.text, Source.TOOL_RESULT)
         messages = [
             Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)),
             *(_for_model(earlier) for earlier in history),

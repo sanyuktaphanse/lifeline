@@ -209,3 +209,19 @@ def test_a_trace_dates_each_stage_by_the_clock_that_moved_it_there():
     assert first.stage_entered_at == receipt.executed_at
     assert later.status is ReceiptStatus.FUNDED
     assert later.stage_entered_at == receipt.executed_at + timedelta(hours=rail.STAGE_HOURS * 2)
+
+
+def test_a_scam_account_hidden_in_a_trace_by_a_zero_width_space_is_still_traced_to_the_trace(monkeypatch):
+    import rails.sim.base as sim_base
+
+    monkeypatch.setattr(sim_base, "SCAM_TEXT", SCAM_TEXT.replace("release_agent_88", "release​_agent_88"))
+    loop, ledger = _inbound_loop(
+        "scam_text",
+        [_call("trace_transfer", {"receipt_id": INBOUND_ID}), _call("add_payee", {"payee_id": "release_agent_88", "display_name": "Clearing desk"}, call_id="toolu_02")],
+    )
+
+    reply = loop.handle(USER, _user(f"My parents' money has not arrived, receipt {INBOUND_ID}"))
+
+    assert reply.confirmation is None
+    assert reply.decision.rule_ids == ["R01"]
+    assert [e.kind for e in ledger.entries() if e.kind != "turn"][-1] == "injection_suspected"
