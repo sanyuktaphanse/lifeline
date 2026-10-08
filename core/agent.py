@@ -144,6 +144,48 @@ LATEST = "latest"
 # when the student's own words this turn say it; when only data says it, it is data. Source: docs/decisions.md.
 LATEST_WORDS = re.compile(r"\b(?:latest|last|most recent|newest|[úu]ltim[oa]|recente)\b|最近|最后|上一笔|刚才")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
+# An amount written with an exponent, such as 1.4e3 or 1E+3, which Decimal reads as the whole figure.
+# Source: the Stage 10 review, 9 October 2026.
+EXPONENT_NUMBER = re.compile(r"(?<![\d.])\d+(?:\.\d+)?[eE][+-]?\d{1,3}(?!\d)")
+# Amounts written in words in the three languages Lifeline replies in, and in Chinese numerals, so an amount
+# a paste spells out is traced to it as the same amount in digits is. Source: the Stage 10 review, 9 October 2026.
+NUMBER_WORDS: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "thirty": 30, "forty": 40,
+    "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+    "um": 1, "uma": 1, "dois": 2, "duas": 2, "três": 3, "tres": 3, "quatro": 4, "cinco": 5, "seis": 6,
+    "sete": 7, "oito": 8, "nove": 9, "dez": 10, "onze": 11, "doze": 12, "treze": 13, "catorze": 14,
+    "quatorze": 14, "quinze": 15, "dezesseis": 16, "dezasseis": 16, "dezessete": 17, "dezassete": 17,
+    "dezoito": 18, "dezenove": 19, "dezanove": 19, "vinte": 20, "trinta": 30, "quarenta": 40,
+    "cinquenta": 50, "sessenta": 60, "setenta": 70, "oitenta": 80, "noventa": 90,
+    "cem": 100, "cento": 100, "duzentos": 200, "duzentas": 200, "trezentos": 300, "trezentas": 300,
+    "quatrocentos": 400, "quatrocentas": 400, "quinhentos": 500, "quinhentas": 500, "seiscentos": 600,
+    "seiscentas": 600, "setecentos": 700, "setecentas": 700, "oitocentos": 800, "oitocentas": 800,
+    "novecentos": 900, "novecentas": 900,
+}
+# A word that multiplies what comes before it in place: "fourteen hundred" is 1400.
+HUNDRED_WORDS = frozenset({"hundred"})
+# A word that closes a group of three digits: "two thousand", "dois mil".
+SCALE_WORDS: dict[str, int] = {
+    "thousand": 1000, "million": 1_000_000, "mil": 1000, "milhão": 1_000_000, "milhao": 1_000_000,
+    "milhões": 1_000_000, "milhoes": 1_000_000,
+}
+# A word that joins the parts of one amount: "one hundred and five", "mil e quatrocentos".
+NUMBER_JOINERS = frozenset({"and", "e"})
+CHINESE_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+CHINESE_UNITS = {"十": 10, "百": 100, "千": 1000}
+CHINESE_SCALES = {"万": 10_000, "亿": 100_000_000}
+CHINESE_NUMERAL = re.compile("[" + "".join([*CHINESE_DIGITS, *CHINESE_UNITS, *CHINESE_SCALES]) + "]+")
+# The student's own words asking to stop a standing mandate or skip its run, in the three languages. A stop
+# or a skip whose standing mandate only data names, while the student's words this turn ask for neither, is
+# data. Source: the Stage 10 review, 9 October 2026.
+STOP_WORDS = re.compile(
+    r"\b(?:stop|cancel|skip|pause|halt|interromp|suspend|encerr)\w*|\b(?:parar|pare|pular|pule)\b"
+    r"|停止|取消|暂停|跳过|停掉|终止"
+)
+# A date or a time inside a reminder's text, which is not an amount. Source: the Stage 10 review.
+DATE_OR_TIME = re.compile(r"\d{4}-\d{2}-\d{2}(?:[t ]\d{2}:\d{2}(?::\d{2})?)?|\d{1,2}:\d{2}")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
 PORTUGUESE_WORDS = frozenset(
@@ -675,7 +717,61 @@ def _amounts_in(text: str) -> set[Decimal]:
                 amounts.add(Decimal(reading))
             except InvalidOperation:
                 continue
+    # Written with an exponent, in words, or in Chinese numerals, an amount is the same amount, so it is
+    # traced to where it was written. Source: the Stage 10 review, 9 October 2026.
+    amounts.update(Decimal(number) for number in EXPONENT_NUMBER.findall(text))
+    amounts.update(Decimal(number) for number in _worded_amounts(text))
+    amounts.update(Decimal(_chinese_amount(numeral)) for numeral in CHINESE_NUMERAL.findall(text))
     return amounts
+
+
+def _worded_amounts(text: str) -> list[int]:
+    """Every amount written in English or Portuguese words, such as "fourteen hundred" or "mil e quatrocentos"."""
+    amounts: list[int] = []
+    total = current = 0
+    started = False
+    for word in WORD.findall(text.casefold()):
+        if word in NUMBER_WORDS:
+            current += NUMBER_WORDS[word]
+        elif word in HUNDRED_WORDS and started:
+            current = (current or 1) * 100
+        elif word in SCALE_WORDS:
+            total += (current or 1) * SCALE_WORDS[word]
+            current = 0
+        elif word in NUMBER_JOINERS and started:
+            continue
+        else:
+            if started:
+                amounts.append(total + current)
+            total = current = 0
+            started = False
+            continue
+        started = True
+    if started:
+        amounts.append(total + current)
+    return amounts
+
+
+def _chinese_amount(numeral: str) -> int:
+    """A run of Chinese numerals as a number. A digit straight after a unit, as in 一千四, is read as the
+    next place down, 1400, as Chinese says it."""
+    total = section = number = 0
+    unit_before = 0
+    for char in numeral:
+        if char in CHINESE_DIGITS:
+            number = CHINESE_DIGITS[char]
+            continue
+        if char in CHINESE_UNITS:
+            section += (number or 1) * CHINESE_UNITS[char]
+            unit_before = CHINESE_UNITS[char]
+        else:
+            total += ((section + number) or 1) * CHINESE_SCALES[char]
+            section = 0
+            unit_before = CHINESE_SCALES[char]
+        number = 0
+    if number and unit_before >= 100 and len(numeral) > 1 and numeral[-2] in {**CHINESE_UNITS, **CHINESE_SCALES}:
+        number *= unit_before // 10
+    return total + section + number
 
 
 @dataclass
@@ -746,6 +842,9 @@ class _Trail:
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+    # Data from outside the loop only, pastes, translations and tool results, without the model's own words,
+    # which repeat the terms of standing mandates the student already confirmed. Source: the Stage 10 review.
+    from_outside: _Details = field(default_factory=_Details)
     # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
     notices: list[str] = field(default_factory=list)
     # What the student typed in this turn, read as the provenance check reads it.
@@ -906,11 +1005,33 @@ def _skeleton(payee: str) -> str:
     return DASHES.sub("-", _visible(payee)).strip().casefold()
 
 
+def _named_in(wanted: str, texts: list[tuple[str, Source]]) -> Source | None:
+    """The source of the first text that holds an id as a whole word, so an id glued to more text, such as
+    maria.santos in maria.santos@nubank, is still found. Source: the Stage 10 review, 9 October 2026."""
+    word = re.compile(rf"(?<![a-z0-9_]){re.escape(wanted)}(?![a-z0-9_])")
+    return next((source for text, source in texts if word.search(text)), None)
+
+
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     untrusted: dict[str, Source] = {}
     payee = _skeleton(action.payee_id or "")
-    if payee and payee not in trail.from_user.payee_ids and payee in trail.from_data.payee_ids:
-        untrusted["payee_id"] = trail.from_data.payee_ids[payee]
+    if payee and payee not in trail.from_user.payee_ids and _named_in(payee, trail.from_user.texts) is None:
+        source = trail.from_data.payee_ids.get(payee) or _named_in(payee, trail.from_data.texts)
+        if source is not None:
+            untrusted["payee_id"] = source
+    card = _skeleton(action.instrument_id or "")
+    if action.type is ActionType.FREEZE_CARD and card and _named_in(card, trail.from_user.texts) is None:
+        # A card only data names is not one the student asked to freeze. Source: the Stage 10 review.
+        source = _named_in(card, trail.from_data.texts)
+        if source is not None:
+            untrusted["instrument_id"] = source
+    if action.standing_terms is not None:
+        terms = action.standing_terms
+        day = Decimal(terms.schedule.partition(":")[2] or 0)
+        for value in (terms.tolerance_pct, Decimal(terms.notice_hours), Decimal(terms.cancel_window_hours), day):
+            if value not in trail.from_user.amounts and value in trail.from_outside.amounts:
+                untrusted["standing_terms"] = trail.from_outside.amounts[value]
+                break
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
@@ -1073,6 +1194,47 @@ def _withdrawals_of(entries: list[LedgerEntry], user_id: str) -> list[dict[str, 
         and entry.payload.get("action", {}).get("type") == ActionType.RECORD_CASH_WITHDRAWAL.value
         and isinstance(entry.payload.get("result", {}).get("withdrawal_recorded"), dict)
     ]
+
+
+def _untrusted_standing_stop(trail: _Trail, action: Action) -> dict[str, Source]:
+    """Where a stop or a skip of a standing mandate came from. Both are T1 and need no confirmation, so the
+    student's own words this turn must ask for it, or name the standing mandate; when only data does, it is
+    data. Source: docs/decisions.md and the Stage 10 review, 9 October 2026.
+    """
+    standing = _skeleton(action.standing_mandate_id or "")
+    if STOP_WORDS.search(trail.said) or (standing and _named_in(standing, [(trail.said, Source.USER_TURN)])):
+        return {}
+    asking = [(text, source) for text, source in trail.from_data.texts if STOP_WORDS.search(text)]
+    # The data that asks for a stop and names this standing mandate is the likeliest source, then any that
+    # names it, then any that asks.
+    source = (
+        (_named_in(standing, asking) if standing else None)
+        or (_named_in(standing, trail.from_data.texts) if standing else None)
+        or next((source for _, source in asking), None)
+    )
+    return {} if source is None else {"standing_mandate_id": source}
+
+
+def _untrusted_reminder(trail: _Trail, arguments: dict[str, Any]) -> dict[str, Source]:
+    """Where a reminder's text came from. A reminder is shown to the student as their own, so its text, or an
+    amount or an account in it, that first appears in data and not in the student's words is data. Dates and
+    times are left out, because the model writes the due day. Source: the Stage 10 review, 9 October 2026.
+    """
+    wanted = _skeleton(str(arguments.get("text", "")))
+    if not wanted or any(wanted in text for text, _ in trail.from_user.texts):
+        return {}
+    source = next((source for text, source in trail.from_data.texts if wanted in text), None)
+    plain = DATE_OR_TIME.sub(" ", wanted)
+    for amount in _amounts_in(plain) | _amounts_in(DIGIT_GROUPING.sub("", plain)):
+        if source is None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
+            source = trail.from_data.amounts[amount]
+    for token in IDENTIFIER.findall(plain):
+        if source is not None or not re.search(r"[\d_@.]", token):
+            continue
+        if token in trail.from_user.payee_ids or _named_in(token, trail.from_user.texts) is not None:
+            continue
+        source = trail.from_data.payee_ids.get(token) or _named_in(token, trail.from_data.texts)
+    return {} if source is None else {"text": source}
 
 
 def _untrusted_latest(trail: _Trail) -> dict[str, Source]:
@@ -1254,6 +1416,7 @@ class AgentLoop:
                 trail.from_user.add(earlier.text, Source.USER_TURN)
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
+                trail.from_outside.add(earlier.text, earlier.source)
             elif earlier.role is Role.ASSISTANT:
                 # The model's own words come from what it was given, so a detail only the model
                 # named counts as data, labelled as tool output, even after its source has left the
@@ -1293,6 +1456,7 @@ class AgentLoop:
                 decision, result = outcome
                 text = json.dumps(result, ensure_ascii=False, default=str)
                 trail.from_data.add(text, Source.TOOL_RESULT)
+                trail.from_outside.add(text, Source.TOOL_RESULT)
                 tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
                 messages.append(tool_message)
                 turn_messages.append(tool_message)
@@ -1377,6 +1541,7 @@ class AgentLoop:
             ActionType.ADD_PAYEE,
             ActionType.CREATE_STANDING_MANDATE,
             ActionType.CANCEL_TRANSFER,
+            ActionType.FREEZE_CARD,
         )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
@@ -1384,6 +1549,10 @@ class AgentLoop:
             untrusted = _untrusted_withdrawal(trail, action, self._chinese_cards.get(user_id, []))
         elif latest:
             untrusted = _untrusted_latest(trail)
+        elif action.type in (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE):
+            untrusted = _untrusted_standing_stop(trail, action)
+        elif action.type is ActionType.SET_REMINDER:
+            untrusted = _untrusted_reminder(trail, call.arguments)
         else:
             untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
