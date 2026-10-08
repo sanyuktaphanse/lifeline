@@ -1,5 +1,5 @@
 id: T19
-note: A parent's allowance of 70,000 rupees over UPI to PayNow is above the daily cap the RBI gives, 60,000 rupees, which the router reads from in_upi_paynow_cap_002. The scripted model asks for a quote in rupees, the quote passes the engine at T0, and on the next turn the model is seen to have received the route marked blocked, with limit_ok false, the blocked reason naming the cap, and the entry id as its rule. The scripted model supplies the get_quote call and both replies; what the scenario asserts is what the router gave the model. The entry is checked once, by Claude Code, and waits for a person's check.
+note: A parent's allowance of 70,000 rupees over UPI to PayNow is above the daily cap the RBI gives, 60,000 rupees, which the router reads from in_upi_paynow_cap_002. The scripted model asks for a quote in rupees, the quote passes the engine at T0, and on the next turn the model is seen to have received the route marked blocked, with limit_ok false, the blocked reason naming the cap, and the entry id as its rule. The scripted model supplies the get_quote call and both replies; what the scenario asserts is what the router gave the model. The entry is checked by SP and waits for a second check.
 expected:
   reply: answer
   ledger: [proposal, decision, execution]

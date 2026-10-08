@@ -95,7 +95,7 @@
   source_url: "https://www.boc.cn/en/pbservice/pb4/201005/t20100520_1323963.html"
   source_type: bank
   date_checked: 2026-10-08
-  checked_by: "CC"
+  checked_by: "SP"
   second_check_by: ""
   used_by: [T31, T36, cn_bank_remit_sim, precheck.remit_from_china]
   values:

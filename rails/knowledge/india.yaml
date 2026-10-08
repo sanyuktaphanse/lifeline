@@ -6,7 +6,7 @@
   source_url: "https://www.rbi.org.in/commonman/english/scripts/FAQs.aspx?Id=3415"
   source_type: regulator
   date_checked: 2026-10-08
-  checked_by: "CC"
+  checked_by: "SP"
   second_check_by: ""
   used_by: [T18, X15, upi_paynow_sim]
   values:
@@ -20,7 +20,7 @@
   source_url: "https://www.rbi.org.in/commonman/english/scripts/FAQs.aspx?Id=3415"
   source_type: regulator
   date_checked: 2026-10-08
-  checked_by: "CC"
+  checked_by: "SP"
   second_check_by: ""
   used_by: [T18, T19, upi_paynow_sim]
   values:

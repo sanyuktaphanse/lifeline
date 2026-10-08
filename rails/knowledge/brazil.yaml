@@ -6,7 +6,7 @@
   source_url: "https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Pix_Regulation/Resolution_BCB_1.pdf"
   source_type: regulator
   date_checked: 2026-10-08
-  checked_by: "CC"
+  checked_by: "SP"
   second_check_by: ""
   used_by: [T29, sim_pix]
   values:
@@ -20,7 +20,7 @@
   source_url: "https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Pix_Regulation/Resolution_BCB_1.pdf"
   source_type: regulator
   date_checked: 2026-10-08
-  checked_by: "CC"
+  checked_by: "SP"
   second_check_by: ""
   used_by: [T29, sim_pix]
   values:
