@@ -20,6 +20,9 @@ TRANSITIONS: dict[tuple[S | None, str], S] = {
     (S.S3, "has_backup"): S.S4,
     (S.S3, "no_backup"): S.S6,
     (S.S4, "rerouted"): S.S5,
+    # The integrity hold keeps payments off the backup, and the rescue goes on to the allowance, which it
+    # also holds. Source: docs/decisions.md, 9 October 2026.
+    (S.S4, "reroute_held"): S.S5,
     (S.S5, "money_settled"): S.S7,
     (S.S6, "cash_listed"): S.S7,
     (S.S7, "replacement_given"): S.S8,

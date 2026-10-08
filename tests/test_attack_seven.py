@@ -650,7 +650,7 @@ def test_a_payment_is_held_when_the_anchor_store_disagrees_with_the_ledger(tmp_p
     assert hold["first_broken_seq"] is None and "anchor store" in hold["reason"]
 
 
-def test_a_freeze_in_a_rescue_on_a_tampered_ledger_is_held_and_the_rescue_waits(tmp_path, monkeypatch):
+def test_a_freeze_goes_through_on_a_tampered_ledger_while_the_reroute_and_the_allowance_are_held(tmp_path, monkeypatch):
     import json
 
     monkeypatch.setenv("COUNCIL", "")
@@ -661,13 +661,34 @@ def test_a_freeze_in_a_rescue_on_a_tampered_ledger_is_held_and_the_rescue_waits(
     first = json.loads(lines[0])
     first["payload"]["edited"] = True
     _write(tmp_path, [json.dumps(first), *lines[1:]])
+    restarted = _app(tmp_path)
 
-    step = _app(tmp_path).post("/rescue/step", json={"user_id": USER, "confirmation_token": token}).json()
+    frozen = restarted.post("/rescue/step", json={"user_id": USER, "confirmation_token": token}).json()
 
-    assert step["freeze"] is None
-    assert step["rescue"]["state_after"] == "S2"
-    assert "paused" in step["text"]
+    assert frozen["freeze"]["status"] == "done"
+    assert frozen["rescue"]["state_after"] == "S5"
+    assert frozen["rescue"]["live_instrument"] is None
+    assert "paused" in frozen["text"]
+    entries = restarted.get(f"/ledger/{USER}").json()
+    executed = [e["payload"]["action"]["type"] for e in entries if e["kind"] == "execution"]
+    assert "freeze_card" in executed and "reroute_to_backup" not in executed
+    held = [e["payload"]["idempotency_key"] for e in entries if e["payload"].get("kind") == "ledger_integrity_hold"]
+    freeze_key = next(
+        e["payload"]["action"]["idempotency_key"]
+        for e in entries
+        if e["kind"] == "execution" and e["payload"]["action"]["type"] == "freeze_card"
+    )
+    assert freeze_key in held
+    assert any(":reroute_to_backup:" in key for key in held)
 
+    allowance = restarted.post(
+        "/rescue/step", json={"user_id": USER, "confirmation_token": frozen["confirmation"]["confirmation_token"]}
+    ).json()
+
+    assert allowance["receipt"] is None
+    assert allowance["rescue"]["state_after"] == "S5"
+    assert "paused" in allowance["text"]
+    assert not [e for e in restarted.get(f"/ledger/{USER}").json() if e["kind"] == "receipt"]
 
 def test_a_standing_run_on_a_tampered_ledger_is_held(tmp_path, monkeypatch):
     import json

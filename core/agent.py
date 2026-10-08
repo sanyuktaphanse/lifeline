@@ -2146,9 +2146,11 @@ class AgentLoop:
             return self._reject(user_id, mandate, lang, "expired", pending.action.idempotency_key)
         trail = _Trail(user_id, pending.turn, pending.provider, pending.model, mandate.id)
         # The one gate every T2 execution passes: on a ledger that cannot be trusted nothing is executed, and
-        # the confirmation keeps waiting for a clean one.
+        # the confirmation keeps waiting for a clean one. A freeze is exempt, because it protects money rather
+        # than moving it; the note is still written, so the trail shows it happened under the hold.
+        # Source: docs/decisions.md, 9 October 2026.
         hold = self._held(trail, pending.action.idempotency_key)
-        if hold is not None:
+        if hold is not None and pending.action.type is not ActionType.FREEZE_CARD:
             return self._reply(trail, lang, _held_text(lang, hold))
         action = pending.action.model_copy(update={"confirmation_token": token})
         decision = self._engine.check(action, mandate, self._history.get(user_id, []))
@@ -3374,6 +3376,12 @@ class AgentLoop:
         action, decision = self._rescue_action(
             user_id, lang, trail, out, ActionType.REROUTE_TO_BACKUP, instrument_id=backup
         )
+        # Payments are not moved to the backup on a ledger that cannot be trusted; the rescue goes on to the
+        # allowance, which the hold also keeps waiting. Source: docs/decisions.md, 9 October 2026.
+        hold = self._held(trail, action.idempotency_key) if decision.allowed else None
+        if hold is not None:
+            out.say(_held_text(lang, hold))
+            return "reroute_held"
         if decision.allowed and backup is not None:
             result = {"frozen_instrument": rescue.instrument, "backup_instrument": backup, "backup_route": plan.backup_route}
             self._rescue_executed(user_id, trail, action, result)
