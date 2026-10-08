@@ -398,7 +398,7 @@ def test_at_exactly_one_daily_cap_left_it_warns():
 
 
 def test_over_the_cap_nothing_is_left_and_never_less_than_zero():
-    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "120000", "withdrawn_today": "12000"}]
+    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "120000", "withdrawn_today": "10000"}]
 
     status = cash_cap_status(cards)
 
@@ -412,6 +412,12 @@ def test_over_the_cap_nothing_is_left_and_never_less_than_zero():
         [{"instrument_id": "icbc card", "withdrawn_this_year": "1", "withdrawn_today": "0"}],
         [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "-5", "withdrawn_today": "0"}],
         [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "1"}],
+        [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "0", "withdrawn_today": "25000"}],
+        [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "500", "withdrawn_today": "900"}],
+        [
+            {"instrument_id": "icbc:card_a", "withdrawn_this_year": "1", "withdrawn_today": "0"},
+            {"instrument_id": "icbc:card_a", "withdrawn_this_year": "1", "withdrawn_today": "0"},
+        ],
     ],
 )
 def test_a_malformed_card_fixture_is_refused(bad):
@@ -510,7 +516,7 @@ def test_every_yuan_figure_in_the_warning_comes_from_the_fixture_and_the_entry()
 
     status = cash_cap_status(DEMO_CARDS)
     allowed = {status["remaining_year"], Decimal(str(CAP["per_card_daily_cap"])), Decimal(str(CAP["annual_cap"]))}
-    allowed |= {card["remaining_today"] for card in status["cards"]}
+    allowed |= {card["remaining_today"] for card in status["cards"]} | {status["cards_today_total"]}
     figures = _figures(reply.text.replace(ATM_CAP_ENTRY, ""))
     assert figures and figures <= allowed
 

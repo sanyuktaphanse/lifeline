@@ -127,9 +127,25 @@ def cn_documents() -> list[str]:
     return list(entry(CN_FUNDING_ENTRY)["values"]["documents"])
 
 
+# Letters from other scripts that look like Latin ones, as scam messages use them, such as a Cyrillic i in
+# Wise. A short list for the letters of the provider names on file, not the whole Unicode table.
+# Source: the attacker brief of 8 October.
+LOOKALIKES = str.maketrans(
+    {
+        "\u0430": "a", "\u0435": "e", "\u0456": "i", "\u0131": "i", "\u03b9": "i", "\u043e": "o",
+        "\u03bf": "o", "\u0440": "p", "\u0441": "c", "\u0455": "s", "\u0443": "y", "\u0445": "x",
+        "\u051d": "w", "\u0461": "w", "\u03c9": "w", "\u0457": "i", "\u0410": "a", "\u0415": "e",
+        "\u0406": "i", "\u041e": "o", "\u0420": "p", "\u0421": "c", "\u0405": "s", "\u051c": "w",
+    }
+)
+
+
 def is_wise(provider: str) -> bool:
-    """Whether a provider name is Wise, however it is written: any case, fullwidth, or inside a domain."""
-    words = re.findall(r"[a-z]+", unicodedata.normalize("NFKC", provider).casefold())
+    """Whether a provider name is Wise, however it is written: any case, fullwidth, with accents, with
+    lookalike letters from another script, with invisible characters, or inside a domain."""
+    folded = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", provider).translate(LOOKALIKES))
+    plain = "".join(char for char in folded if unicodedata.category(char) not in ("Mn", "Cf"))
+    words = re.findall(r"[a-z]+", plain.casefold().translate(LOOKALIKES))
     return any(word in WISE_NAMES for word in words)
 
 
@@ -173,7 +189,8 @@ def cash_cap_status(cards: list[dict[str, Any]]) -> dict[str, Any]:
 
     The annual cap counts every card of the individual together, so the year's remainder is shared by
     every card; a card's remainder today is the smaller of its own daily remainder and that. It warns
-    when the year's remainder is at or below one card's daily cap. No figure is written here.
+    when the year's remainder is at or below one card's daily cap or what all the cards together may
+    still take today. A fixture that cannot be true is refused. No figure is written here.
     """
     try:
         held = [ChineseCard.model_validate(card) for card in cards]
@@ -181,12 +198,23 @@ def cash_cap_status(cards: list[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError(f"A Chinese card in the fixture is malformed: {error}") from error
     values = entry(ATM_CAP_ENTRY)["values"]
     annual, daily = Decimal(str(values["annual_cap"])), Decimal(str(values["per_card_daily_cap"]))
+    ids = [card.instrument_id for card in held]
+    if len(set(ids)) != len(ids):
+        raise ValueError("A Chinese card appears twice in the fixture.")
+    for card in held:
+        # Today's withdrawals are part of the year's and within the daily cap, or the fixture cannot be true.
+        if card.withdrawn_today > card.withdrawn_this_year or card.withdrawn_today > daily:
+            raise ValueError(f"Card {card.instrument_id} in the fixture has withdrawals today that cannot be true.")
     remaining_year = max(annual - sum((card.withdrawn_this_year for card in held), Decimal(0)), Decimal(0))
+    # What all the cards together may still take today, each within its own daily cap. Source: the
+    # attacker brief of 8 October: two cards can reach the cap in one day while each is under it.
+    cards_today_total = sum((daily - card.withdrawn_today for card in held), Decimal(0))
     return {
         "remaining_year": remaining_year,
         "per_card_daily_cap": daily,
+        "cards_today_total": cards_today_total,
         "currency": values["currency"],
-        "warn": bool(held) and remaining_year <= daily,
+        "warn": bool(held) and remaining_year <= max(daily, cards_today_total),
         "cards": [
             {
                 "instrument_id": card.instrument_id,

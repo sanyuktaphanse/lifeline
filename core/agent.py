@@ -115,7 +115,12 @@ MIN_SECRET_CHARS = 8
 # A card number: thirteen or more digits, any of them fullwidth, with an optional space, no break
 # space, hyphen or invisible character between two digits, and no ASCII letter, digit or underscore
 # touching either end, so ids such as wise:card_01 and hashes are left alone.
-CARD_SEPARATOR = r"[ \u00a0\u202f\-\u2010\u2011\u2012\u2013\u200b\u200c\u200d\u2060\ufeff]?"
+# The attacker brief of 8 October widened it to up to three separators between two digits: any space,
+# a newline, a dot, any hyphen or dash, fullwidth ones included, and any invisible character.
+CARD_SEPARATOR = r"[\s.\-\u00ad\u2010-\u2015\u2212\uff0d\uff0e\u200b-\u200f\u2060-\u2064\ufeff]{0,3}"
+# A run of hexadecimal digits this long that is part of an issued token is redacted, so a token cut in
+# two still never shows. Source: the attacker brief of 8 October. Tokens are 64 hexadecimal digits.
+TOKEN_PIECE = re.compile(r"[0-9a-fA-F]{16,}")
 CARD_NUMBER = re.compile(rf"(?<![\dA-Za-z_])\d(?:{CARD_SEPARATOR}\d){{12,}}(?![\dA-Za-z_])")
 
 HAN = re.compile(r"[一-鿿]")
@@ -157,15 +162,29 @@ TEXT = {"type": "string"}
 PRECHECK_CHANNELS = DOCUMENT_CHANNELS
 # What a provider becomes when the model gives an address in its place, so no address is written.
 UNKNOWN_PROVIDER = "unknown"
+# The only precheck arguments the ledger may hold; any other key is dropped before the proposal.
+PRECHECK_KEYS = ("action_kind", "provider", "channel", "multiple_people_quota", "senders")
+# The precheck kinds the router answers; any other is written as unknown, so no free text is kept.
+PRECHECK_KINDS = ("enable_pix", "remit_from_china", "document_request", "overseas_cash", "arrive_in_china")
+# A provider is kept only as a plain lower case identifier, such as nubank or cn_bank_remit_sim; a
+# domain, a phone number or a name with spaces becomes unknown.
+PLAIN_PROVIDER = re.compile(r"[a-z][a-z0-9_]{0,39}")
 # The people whose quota a plan may name, by role and never by name. Source: docs/decisions.md, 8 October 2026.
 SENDER_ROLES = ("self", "parent", "grandparent", "aunt_or_uncle", "sibling", "cousin", "friend", "other_relative", "other")
 # Common words for a role, read as that role; any other word, a name included, is read as other.
-ROLE_WORDS = {
-    "mother": "parent", "father": "parent", "mum": "parent", "mom": "parent", "dad": "parent", "parents": "parent",
-    "aunt": "aunt_or_uncle", "uncle": "aunt_or_uncle", "grandmother": "grandparent", "grandfather": "grandparent",
-    "brother": "sibling", "sister": "sibling", "me": "self", "myself": "self",
+ROLE_WORDS: dict[str, list[str]] = {
+    "mother": ["parent"], "father": ["parent"], "mum": ["parent"], "mom": ["parent"], "dad": ["parent"],
+    "parents": ["parent", "parent"], "grandparents": ["grandparent", "grandparent"],
+    "aunt": ["aunt_or_uncle"], "uncle": ["aunt_or_uncle"], "grandmother": ["grandparent"],
+    "grandfather": ["grandparent"], "brother": ["sibling"], "sister": ["sibling"], "me": ["self"],
+    "myself": ["self"], "父母": ["parent", "parent"], "妈妈": ["parent"], "母亲": ["parent"], "爸爸": ["parent"],
+    "父亲": ["parent"], "阿姨": ["aunt_or_uncle"], "姑姑": ["aunt_or_uncle"], "舅舅": ["aunt_or_uncle"],
+    "叔叔": ["aunt_or_uncle"], "朋友": ["friend"],
 }
-TRUE_WORDS = frozenset({"true", "yes", "1"})
+# Words read as a yes for the flag, in the three languages. Source: the attacker brief of 8 October.
+TRUE_WORDS = frozenset({"true", "yes", "y", "on", "1", "sim", "是", "对"})
+# How a list of senders written as one string is split.
+SENDER_SPLIT = re.compile(r"\s*(?:,|;|/|、|，|和|&|\band\b|\be\b)\s*")
 # What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
 CASH_CAP_ARGUMENTS = {"action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
 # What a precheck's user context carries beside the student, from the tool's arguments.
@@ -325,7 +344,7 @@ TEXTS = {
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
         "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
         "plan_updated": "Your plan now has: {fields}.",
-        "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together, which is no more than the {daily} {currency} one card may withdraw in a day. {consequence} Source: {entry_id}.",
+        "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} {currency} a day and your cards together may still withdraw {today} {currency} today, so you can reach the cap. {consequence} Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
@@ -364,7 +383,7 @@ TEXTS = {
         "money_skipped": "Lifeline sent no emergency money.",
         "cash_intro": "Ways to get cash:",
         "cash_none": "Lifeline has no sourced cash pickup option on file.",
-        "cash_missing": "Lifeline has no sourced option on file for {ids}.",
+        "cash_missing": "Lifeline has no sourced option on file for {count} more items of your cash plan.",
         "contact": "Message for {person} on {channel}: I lost my card and need help getting cash. Please call me as soon as you can.",
         "replacement_link": "Order a replacement card in the issuer's app: {link}",
         "replacement_no_link": "Lifeline has no sourced link to the issuer's app. Order a replacement card in the issuer's app.",
@@ -402,7 +421,7 @@ TEXTS = {
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
         "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
         "plan_updated": "Seu plano agora tem: {fields}.",
-        "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que não passa dos {daily} {currency} que um cartão pode sacar em um dia. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} {currency} por dia e seus cartões juntos ainda podem sacar {today} {currency} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
@@ -441,7 +460,7 @@ TEXTS = {
         "money_skipped": "O Lifeline não enviou dinheiro de emergência.",
         "cash_intro": "Formas de conseguir dinheiro em espécie:",
         "cash_none": "O Lifeline não tem nenhuma opção de saque com fonte registrada.",
-        "cash_missing": "O Lifeline não tem nenhuma opção com fonte registrada para {ids}.",
+        "cash_missing": "O Lifeline não tem nenhuma opção com fonte registrada para mais {count} itens do seu plano de dinheiro.",
         "contact": "Mensagem para {person} pelo {channel}: perdi meu cartão e preciso de ajuda para conseguir dinheiro. Por favor me ligue assim que puder.",
         "replacement_link": "Peça um cartão novo no app do emissor: {link}",
         "replacement_no_link": "O Lifeline não tem um link com fonte para o app do emissor. Peça um cartão novo no app do emissor.",
@@ -479,7 +498,7 @@ TEXTS = {
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
         "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
         "plan_updated": "你的计划现在为：{fields}。",
-        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计），不超过单张卡一天可取的 {daily} {currency}。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计）。单张卡每天可取 {daily} {currency}，你的卡今天合计还能取 {today} {currency}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
@@ -518,7 +537,7 @@ TEXTS = {
         "money_skipped": "Lifeline 没有发送紧急资金。",
         "cash_intro": "获取现金的方式：",
         "cash_none": "Lifeline 没有记录任何有来源的现金提取方式。",
-        "cash_missing": "Lifeline 没有记录 {ids} 的有来源方式。",
+        "cash_missing": "你的现金计划中还有 {count} 项，Lifeline 没有记录有来源的方式。",
         "contact": "发给 {person}（{channel}）的消息：我的卡丢了，需要帮助获取现金。请尽快给我打电话。",
         "replacement_link": "请在发卡机构的应用中申请补办新卡：{link}",
         "replacement_no_link": "Lifeline 没有发卡机构应用的有来源链接。请在发卡机构的应用中申请补办新卡。",
@@ -584,11 +603,14 @@ def _amounts_in(text: str) -> set[Decimal]:
 class _Details:
     payee_ids: dict[str, Source] = field(default_factory=dict)
     amounts: dict[Decimal, Source] = field(default_factory=dict)
+    # Each text as the provenance check reads it, so a plan update's values can be traced to it.
+    texts: list[tuple[str, Source]] = field(default_factory=list)
 
     def add(self, text: str, source: Source) -> None:
         # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
         # detail on one side of the comparison only.
         text = _visible(text)
+        self.texts.append((text.casefold(), source))
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
         # An amount may be grouped with a space or an apostrophe, such as 1 400 or 1'400, so both the
@@ -831,9 +853,13 @@ def _canonical_provider(value: Any) -> str:
     text = _visible(str(value)).strip()
     if is_wise(text):
         return "wise"
-    if "@" in text or "://" in text:
-        return UNKNOWN_PROVIDER
-    return text
+    key = text.casefold()
+    return key if PLAIN_PROVIDER.fullmatch(key) else UNKNOWN_PROVIDER
+
+
+def _canonical_kind(value: Any) -> str:
+    kind = re.sub(r"[\s\-]+", "_", _visible(str(value)).strip().casefold())
+    return kind if kind in PRECHECK_KINDS else UNKNOWN_PROVIDER
 
 
 def _plan_value(value: Any) -> str:
@@ -850,11 +876,29 @@ def _plan_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
     return {name: value if name in PLAN_UPDATE_FIELDS else REDACTION_MARKER for name, value in arguments.items()}
 
 
-def _canonical_role(value: Any) -> str:
+def _canonical_roles(value: Any) -> list[str]:
+    """One sender as one or more roles: a plural such as parents counts as two people."""
     word = re.sub(r"[\s\-]+", "_", _visible(str(value)).strip().casefold())
     if word in SENDER_ROLES:
-        return word
-    return ROLE_WORDS.get(word, "other")
+        return [word]
+    return list(ROLE_WORDS.get(word, ["other"]))
+
+
+def _sender_items(value: Any) -> list[Any]:
+    """Senders as a list, whether given as a list, a mapping, a JSON array in a string, or words in a string."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
+        return [part for part in SENDER_SPLIT.split(value.strip()) if part]
+    return [value]
 
 
 def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -862,18 +906,40 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
 
     Source: docs/decisions.md, 8 October 2026. They are rewritten before the proposal is written.
     """
-    canonical = dict(arguments)
+    canonical = {name: arguments[name] for name in PRECHECK_KEYS if name in arguments}
+    if "action_kind" in canonical:
+        canonical["action_kind"] = _canonical_kind(canonical["action_kind"])
     if "provider" in canonical:
         canonical["provider"] = _canonical_provider(canonical["provider"])
     if canonical.get("channel") not in (None, ""):
         canonical["channel"] = _canonical_channel(canonical["channel"])
     if "senders" in canonical:
         senders = canonical["senders"]
-        canonical["senders"] = [_canonical_role(sender) for sender in (senders if isinstance(senders, list) else [senders])]
+        canonical["senders"] = [role for sender in _sender_items(senders) for role in _canonical_roles(sender)]
     if "multiple_people_quota" in canonical:
         flag = canonical["multiple_people_quota"]
         canonical["multiple_people_quota"] = flag is True or str(flag).strip().casefold() in TRUE_WORDS
     return canonical
+
+
+def _untrusted_plan_update(trail: _Trail, action: Action) -> dict[str, Source]:
+    """The plan fields whose values first appear in data, never in the student's own words.
+
+    Source: the attacker brief of 8 October. A paste that tells the model to change the backup or the
+    cash plan must reach the engine as data, so it refuses the update under R01.
+    """
+    untrusted: dict[str, Source] = {}
+    for name, value in (action.plan_update or {}).items():
+        for item in value if isinstance(value, list) else [value]:
+            if not isinstance(item, str) or not _skeleton(item):
+                continue
+            wanted = _skeleton(item)
+            if any(wanted in text for text, _ in trail.from_user.texts):
+                continue
+            source = next((source for text, source in trail.from_data.texts if wanted in text), None)
+            if source is not None:
+                untrusted[name] = source
+    return untrusted
 
 
 def _anchored[**P, R](
@@ -1062,7 +1128,9 @@ class AgentLoop:
                 outcome = self._run_tool(user_id, mandate, lang, trail, call, calls)
                 if isinstance(outcome, AgentReply):
                     if trail.notices:
-                        outcome = outcome.model_copy(update={"text": " ".join([outcome.text, *trail.notices])})
+                        # The reply was guarded when it was built, so the sentences joined to it are guarded too.
+                        notices = self._guarded(trail, " ".join(trail.notices))
+                        outcome = outcome.model_copy(update={"text": " ".join([outcome.text, notices])})
                     turn_messages += _closing_results(answer.tool_calls[index:], outcome)
                     turn_messages.append(Message(role=Role.ASSISTANT, text=outcome.text, lang=lang))
                     return self._finish(trail, turn_messages, outcome)
@@ -1130,7 +1198,10 @@ class AgentLoop:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
         checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
-        untrusted = _untrusted_fields(trail, action) if checked else {}
+        if action.type is ActionType.UPDATE_PLAN:
+            untrusted = _untrusted_plan_update(trail, action)
+        else:
+            untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
@@ -1215,10 +1286,14 @@ class AgentLoop:
             cards = self._chinese_cards.get(user_id, [])
             if kind == CASH_CAP_ARGUMENTS["action_kind"]:
                 context["cards"] = cards
+                try:
+                    status = cash_cap_status(cards)
+                except ValueError as error:
+                    # A fixture that cannot be true is refused, never stated as fact.
+                    return {"error": str(error)}
             result = self._router.precheck(kind, str(arguments.get("provider", "")), context)
             outcome: dict[str, Any] = {"precheck": result.model_dump(mode="json")}
             if kind == CASH_CAP_ARGUMENTS["action_kind"]:
-                status = cash_cap_status(cards)
                 outcome["cards"] = [
                     {name: str(value) for name, value in card.items()} for card in status["cards"]
                 ]
@@ -1236,6 +1311,11 @@ class AgentLoop:
         if plan is None:
             return {"error": f"No resilience plan for {user_id}, so nothing was changed."}
         changes = dict(action.plan_update or {})
+        entries = load_knowledge()
+        cash_plan = changes.get("cash_plan")
+        if isinstance(cash_plan, list) and any(not isinstance(item, str) or item not in entries for item in cash_plan):
+            # The rescue reads the cash plan in a crisis, so it holds knowledge entry ids and nothing else.
+            return {"error": "The plan was not changed: every cash plan item must be a knowledge entry id."}
         try:
             updated = Plan.model_validate({**plan.model_dump(), **changes})
         except ValidationError as error:
@@ -1253,8 +1333,10 @@ class AgentLoop:
         if kind == "arrive_in_china":
             facts, ids = arrival_facts()
             trail.notices.append(_text(lang, "arrival", facts=" ".join(facts), ids=", ".join(ids)))
-        if kind == CASH_CAP_ARGUMENTS["action_kind"] and precheck.get("ready") is False:
+        if kind == CASH_CAP_ARGUMENTS["action_kind"] and "cards" in result:
             status = cash_cap_status(self._chinese_cards.get(trail.user_id, []))
+            if not status["warn"]:
+                return
             consequence = load_knowledge()[ATM_CAP_ENTRY]["values"]["consequence"]
             self._write(
                 trail,
@@ -1264,6 +1346,7 @@ class AgentLoop:
                     "idempotency_key": action.idempotency_key,
                     "remaining_year": str(status["remaining_year"]),
                     "per_card_daily_cap": str(status["per_card_daily_cap"]),
+                    "cards_today_total": str(status["cards_today_total"]),
                     "entry_id": ATM_CAP_ENTRY,
                 },
             )
@@ -1273,6 +1356,7 @@ class AgentLoop:
                     "cash_cap_warning",
                     remaining=f"{status['remaining_year']:,}",
                     daily=f"{status['per_card_daily_cap']:,}",
+                    today=f"{status['cards_today_total']:,}",
                     currency=status["currency"],
                     consequence=consequence,
                     entry_id=ATM_CAP_ENTRY,
@@ -2074,6 +2158,15 @@ class AgentLoop:
                 text, count = re.subn(re.escape(value), REDACTION_MARKER, text, flags=re.IGNORECASE)
                 if count and name not in classes:
                     classes.append(name)
+        tokens = [token.lower() for token in self._issued_tokens()]
+
+        def piece(match: re.Match[str]) -> str:
+            return REDACTION_MARKER if any(match.group().lower() in token for token in tokens) else match.group()
+
+        pieced = TOKEN_PIECE.sub(piece, text)
+        if pieced != text and "confirmation_token" not in classes:
+            classes.append("confirmation_token")
+        text = pieced
         text, count = CARD_NUMBER.subn(REDACTION_MARKER, text)
         if count:
             classes.append("card_number")
@@ -2600,7 +2693,8 @@ class AgentLoop:
         else:
             out.say(_text(lang, "cash_none"))
         if found and missing:
-            out.say(_text(lang, "cash_missing", ids=", ".join(missing)))
+            # A missing id is counted, never printed, because a plan could hold any text.
+            out.say(_text(lang, "cash_missing", count=len(missing)))
         contact = plan.trusted_contact
         out.say(_text(lang, "contact", person=contact.name, channel=contact.channel))
         return "cash_listed"
@@ -2810,7 +2904,17 @@ class AgentLoop:
                 and user_id in self._plans
             ):
                 plan = self._plans[user_id]
-                self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **entry.payload["result"]["plan_updated"]})
+                # Only the four fields, whatever the entry names, and an update the current plan can no
+                # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
+                changes = {
+                    name: value
+                    for name, value in entry.payload["result"]["plan_updated"].items()
+                    if name in PLAN_UPDATE_FIELDS
+                }
+                try:
+                    self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
+                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as the fixture gives it and open item 111 records it
+                    pass
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))

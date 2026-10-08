@@ -1,5 +1,5 @@
 id: T37
-note: The student asks how much cash they can still take out abroad on their Chinese cards. The scripted model calls cash_cap_status, a T0 tool mapped to the precheck with action kind overseas_cash, which runs as proposal, decision and execution. The cards and the yuan withdrawn on each come from the chinese_cards fixture in fixtures/demo_user.yaml, and the caps and the consequence from the values of cn_atm_cap_005, read by id. The entry counts every card of an individual together, so the 94,500 yuan withdrawn across the two cards leaves 5,500 for the year, at or below one card's daily cap of 10,000, and the loop writes a cash_cap_warning note and its own warning in the student's language with the remaining amount, that exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year, and the entry id. The second turn checks the model was given each card's figures for the year and for today. The withdrawals are a fixture, not a record of real ones, and the entry was checked once by S and waits for a second check.
+note: The student asks how much cash they can still take out abroad on their Chinese cards. The scripted model calls cash_cap_status, a T0 tool mapped to the precheck with action kind overseas_cash, which runs as proposal, decision and execution. The cards and the yuan withdrawn on each come from the chinese_cards fixture in fixtures/demo_user.yaml, and the caps and the consequence from the values of cn_atm_cap_005, read by id. The entry counts every card of an individual together, so the 94,500 yuan withdrawn across the two cards leaves 5,500 for the year, at or below one card's daily cap of 10,000 and below the 18,500 the two cards together may still take today, and the loop writes a cash_cap_warning note and its own warning in the student's language with the remaining amount, that exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year, and the entry id. The second turn checks the model was given each card's figures for the year and for today. The withdrawals are a fixture, not a record of real ones, and the entry was checked once by S and waits for a second check.
 expected:
   ledger: [proposal, decision, execution, note]
   notes: [cash_cap_warning]
@@ -16,7 +16,7 @@ runs:
           lang: zh
           must_contain:
             - "还剩 5,500 CNY"
-            - "单张卡一天可取的 10,000 CNY"
+            - "单张卡每天可取 10,000 CNY，你的卡今天合计还能取 18,500 CNY，因此可能达到上限。"
             - "超过年度额度后，当年余下时间和下一年都不能在境外取现。"
             - "来源：cn_atm_cap_005。"
       - user: 今天用哪张卡取？
@@ -39,7 +39,7 @@ runs:
           lang: en
           must_contain:
             - "Warning: 5,500 CNY is left of the overseas cash withdrawal cap for this calendar year"
-            - "the 10,000 CNY one card may withdraw in a day"
+            - "One card may withdraw 10,000 CNY a day and your cards together may still withdraw 18,500 CNY today, so you can reach the cap."
             - "Exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year."
             - "Source: cn_atm_cap_005."
       - user: Which card should I use today?

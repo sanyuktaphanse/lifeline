@@ -848,7 +848,7 @@ Response `200`:
 }
 ```
 
-For the overseas cash withdrawal cap on Chinese cards, `action_kind` `overseas_cash` reads the student's Chinese cards from the fixture, never from the request, and the caps and the consequence from `cn_atm_cap_005`. The annual cap counts every card together, so each card reports the same year's remainder. `ready` is false when the year's remainder is at or below one card's daily cap; with no cards on file it is null and the one trigger says Lifeline has no record. Request:
+For the overseas cash withdrawal cap on Chinese cards, `action_kind` `overseas_cash` reads the student's Chinese cards from the fixture, never from the request, and the caps and the consequence from `cn_atm_cap_005`. The annual cap counts every card together, so each card reports the same year's remainder. `ready` is false when the year's remainder is at or below one card's daily cap or what all the cards together may still take today; with no cards on file it is null and the one trigger says Lifeline has no record. Request:
 
 ```json
 {"user_id": "student_001", "action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
@@ -904,7 +904,7 @@ Response `200`:
 
 ### Ledger notes from Stage 8
 
-`GET /ledger/{user_id}` can now hold four more note kinds: `redaction`, with `classes`, when a reply was cleaned of a card number, a confirmation token or a secret; `document_request_flagged`, with `claimed_provider`, `channel` and `entry_ids`; `structuring_refused`, with `senders` by role and `entry_ids`; and `cash_cap_warning`, with `remaining_year`, `per_card_daily_cap` and `entry_id`. A plan update is a `proposal`, a `decision` at T1 and an `execution` whose `result.plan_updated` holds the fields changed.
+`GET /ledger/{user_id}` can now hold four more note kinds: `redaction`, with `classes`, when a reply was cleaned of a card number, a confirmation token or a secret; `document_request_flagged`, with `claimed_provider`, `channel` and `entry_ids`; `structuring_refused`, with `senders` by role and `entry_ids`; and `cash_cap_warning`, with `remaining_year`, `per_card_daily_cap`, `cards_today_total` and `entry_id`. A plan update is a `proposal`, a `decision` at T1 and an `execution` whose `result.plan_updated` holds the fields changed.
 
 ## Standing mandates
 

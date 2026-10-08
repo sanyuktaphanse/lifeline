@@ -372,7 +372,9 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             inbound_receipts={USER: inbound},
             anchor=LocalSignedAnchor(anchors_path),
             # A scenario's own Chinese cards replace the demo fixture's, which are a fixture too.
-            chinese_cards={USER: fixtures.get("chinese_cards", load_suite(DEMO_FIXTURE).get("chinese_cards") or [])},
+            chinese_cards={
+                USER: (fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")) or []
+            },
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
