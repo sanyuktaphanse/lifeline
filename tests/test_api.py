@@ -485,6 +485,8 @@ def test_standing_run_due_needs_an_aware_timestamp():
 def test_standing_run_due_is_refused_in_production(monkeypatch):
     monkeypatch.setenv("LIFELINE_ENV", "production")
     monkeypatch.setenv("LIFELINE_CONFIRM_SECRET", "test-secret-for-this-test")
+    # In production the API starts only with both secrets set. Source: docs/decisions.md, 9 October 2026.
+    monkeypatch.setenv("LIFELINE_ANCHOR_SECRET", "test-anchor-secret-for-this-test")
 
     response = _client().post("/standing/run_due", json={"now": "2026-10-01T00:00:00+00:00"})
 
