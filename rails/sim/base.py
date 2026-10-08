@@ -114,6 +114,7 @@ class SimRail(Rail):
             raise RailError(f"No receipt {receipt_id} on {self.NAME}.")
         now = now or datetime.now(timezone.utc)
         warnings: list[str] = []
+        entered = receipt.stage_entered_at
         if self._script in ("held_for_review", "returned"):
             # The script pins the status: a held or returned transfer never moves on by the clock.
             status = receipt.status
@@ -124,6 +125,10 @@ class SimRail(Rail):
                 index = min(index, len(self.STAGES) - 2)
                 warnings.append(f"This simulated transfer is delayed: it has stopped at {self.STAGES[index][0]}.")
             wording, status = self.STAGES[index]
+            # A stage the clock moved the transfer into began when the clock reached it.
+            start = next((i for i, (_, s) in enumerate(self.STAGES) if s is receipt.status), 0)
+            if index > start:
+                entered = receipt.executed_at + timedelta(hours=self.STAGE_HOURS * (index - start))
         duration = entry(self.DURATION_ENTRY).get("values", {}).get("typical_duration_hours")
         steps = [f"{self.NAME} stage: {wording}.", SIMULATED_STEP]
         if duration is None:
@@ -133,7 +138,7 @@ class SimRail(Rail):
         return TraceResult(
             receipt_id=receipt_id,
             status=status,
-            stage_entered_at=receipt.stage_entered_at,
+            stage_entered_at=entered,
             typical_duration_hours=duration,
             typical_duration_source=self.DURATION_ENTRY
             if duration is not None

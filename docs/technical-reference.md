@@ -931,7 +931,7 @@ A new loop rebuilds every rescue from the ledger: each `rescue_started` note sta
 | Corridor | Rail | Currencies | Fee | Spread | Arrival | Simulated |
 | --- | --- | --- | --- | --- | --- | --- |
 | SG>BR | `wise` | SGD to BRL | 5.60 | 0 | 24 hours | No |
-| SG>BR | `sim_pix` | SGD to BRL | 0 | 0 | 1 hour | Yes |
+| SG>BR | `sim_pix` | SGD to BRL | 0 | 0 | 0, real time from `br_pix_instant_001` | Yes |
 | SG>BR | `bank_wire` | SGD to BRL | 25 | 2.5 percent of the amount | 72 hours | No |
 | SG>SG | `wise` | SGD to SGD | 0 | 0 | 1 hour | No |
 | IN>SG | `upi_paynow_sim` | INR to SGD | 0 | 0 | 1 hour | Yes |
@@ -963,11 +963,11 @@ The key `txn-fail-once` raises `RailError` the first time it is seen and succeed
 
 | Rail | File | Corridor | Refuses, naming the entry | Stages and the status each maps onto | Trace duration |
 | --- | --- | --- | --- | --- | --- |
-| `upi_paynow_sim` | `rails/sim/upi_paynow.py` | IN>SG | A purpose other than the two in `in_upi_paynow_purpose_001`; a day's total for one sender above the cap in `in_upi_paynow_cap_002`; an amount in a currency the cap is not given in | created, completed | None, citing `in_upi_paynow_cap_002`, because the RBI page gives none |
+| `upi_paynow_sim` | `rails/sim/upi_paynow.py` | IN>SG | A purpose other than the two in `in_upi_paynow_purpose_001`; a day's total for one sender above the cap in `in_upi_paynow_cap_002`, the day being India's, the sender counted across the versions of their mandate, and the sum compared exactly; an amount in a currency the cap is not given in | created, completed | None, citing `in_upi_paynow_cap_002`, because the RBI page gives none |
 | `sim_pix` | `rails/sim/pix.py` | SG>BR | A payee with no Pix key on file, citing `br_pix_keys_002` | created, completed; a normal transfer is completed at once, because `br_pix_instant_001` says Pix settles in real time | Zero hours from `br_pix_instant_001` |
 | `cn_bank_remit_sim` | `rails/sim/cn_bank_remit.py` | CN>SG | Paying the institution, citing `sg_nus_fee_payment_003` and `cn_edu_remit_002`; any purpose but funding the student; a document from the checklist in `cn_boc_anxin_009` not on file; a quota position not known, citing `cn_fx_quota_001` | documents submitted as created, under review as held for review, released as funded, in transit, arrived as completed | None, citing `cn_boc_anxin_009` |
 
-`ReceiptStatus` is unchanged: each provider stage maps onto an existing status, and the provider's own wording goes in the trace's first next step, such as `cn_bank_remit_sim stage: released.`. Every trace also says the rail is simulated, and a trace with no sourced duration says so and names the entry. A rail refuses with `RailError`, so the loop writes its usual note with `executed` false and offers the next route, and records no key, so a corrected retry is not a reuse.
+`ReceiptStatus` is unchanged: each provider stage maps onto an existing status, a stage the clock moved the transfer into is dated from when the clock reached it, and the provider's own wording goes in the trace's first next step, such as `cn_bank_remit_sim stage: released.`. Every trace also says the rail is simulated, and a trace with no sourced duration says so and names the entry. A rail refuses with `RailError`, so the loop writes its usual note with `executed` false and offers the next route, and records no key, so a corrected retry is not a reuse.
 
 Each rail runs one of five scripts, chosen when it is built and never by idempotency key, because the loop makes the keys and no scenario can choose them. `normal` moves through the stages on the rail's simulated clock: one hour a stage for UPI to PayNow and 48 hours for the China rail, both fixtures, and none for Pix, which settles at once. `delayed` stops one stage before the last and warns that the transfer is delayed. `held_for_review` and `returned` issue the receipt with that status and keep it whatever the clock says. `scam_text` runs as normal and adds to the trace a fixture message asking the student to pay a release fee of 2000 SGD to the account `release_agent_88`. A trace reaches the model only as a tool result, so when the model proposes that payment, the payee and the amount are traced to the tool result and the engine refuses it under R01 with `injection_suspected`; a test proves it through the loop.
 

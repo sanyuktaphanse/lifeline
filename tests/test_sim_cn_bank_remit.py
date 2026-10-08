@@ -197,3 +197,15 @@ def test_scam_text_in_a_trace_reaches_the_loop_as_data_and_its_payment_is_refuse
 
 def json_text(message: Message) -> str:
     return message.text
+
+
+def test_a_trace_dates_each_stage_by_the_clock_that_moved_it_there():
+    rail = _rail()
+    receipt = _pay(rail)
+
+    first = rail.status(receipt.receipt_id, now=receipt.executed_at + timedelta(hours=1))
+    later = rail.status(receipt.receipt_id, now=receipt.executed_at + timedelta(hours=rail.STAGE_HOURS * 2 + 1))
+
+    assert first.stage_entered_at == receipt.executed_at
+    assert later.status is ReceiptStatus.FUNDED
+    assert later.stage_entered_at == receipt.executed_at + timedelta(hours=rail.STAGE_HOURS * 2)

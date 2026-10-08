@@ -155,3 +155,69 @@ def test_an_unknown_receipt_raises():
 
 def test_the_rail_freezes_no_card():
     assert UpiPayNowSimRail().freeze("wise:card_01").status.value == "failed"
+
+
+# What the second number audit found, each now a test.
+
+import rails.sim.upi_paynow as upi_module
+from contracts.schemas import Receipt
+
+
+def _freeze_clock(monkeypatch, frozen):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz else frozen
+
+    monkeypatch.setattr(upi_module, "datetime", Frozen)
+
+
+def _restore(rail, amount, executed_at, mandate_ref):
+    receipt = Receipt(
+        receipt_id="upi_paynow_sim-0001",
+        rail="upi_paynow_sim",
+        amount=Decimal(amount),
+        currency="INR",
+        status=ReceiptStatus.COMPLETED,
+        stage_entered_at=executed_at,
+        mandate_ref=mandate_ref,
+        idempotency_key="restored-key-0001",
+        simulated=True,
+        executed_at=executed_at,
+    )
+    rail.restore(receipt, _route(str(amount)), mandate_ref)
+
+
+def test_the_cap_counts_the_sender_across_mandate_versions():
+    rail = UpiPayNowSimRail()
+    _pay(rail, amount=str(CAP), mandate_ref="mandate-parent-v1", key="upi-key-0001")
+
+    with pytest.raises(RailError, match="in_upi_paynow_cap_002"):
+        _pay(rail, amount=str(CAP), mandate_ref="mandate-parent-v2", key="upi-key-0002")
+
+
+def test_the_cap_day_is_the_senders_day_in_india(monkeypatch):
+    rail = UpiPayNowSimRail()
+    first = datetime(2026, 10, 8, 23, 0, tzinfo=timezone.utc)
+    second = datetime(2026, 10, 9, 1, 0, tzinfo=timezone.utc)
+    _restore(rail, CAP, first, "mandate-parent-v1")
+    _freeze_clock(monkeypatch, second)
+
+    with pytest.raises(RailError, match="in_upi_paynow_cap_002"):
+        _pay(rail, amount=str(CAP), key="upi-key-0002")
+
+
+def test_a_payment_the_next_day_in_india_has_its_own_cap(monkeypatch):
+    rail = UpiPayNowSimRail()
+    _restore(rail, CAP, datetime(2026, 10, 8, 17, 0, tzinfo=timezone.utc), "mandate-parent-v1")
+    _freeze_clock(monkeypatch, datetime(2026, 10, 8, 19, 0, tzinfo=timezone.utc))
+
+    assert _pay(rail, amount=str(CAP), key="upi-key-0002").receipt_id == "upi_paynow_sim-0002"
+
+
+def test_the_cap_sum_is_exact_whatever_the_decimal_precision():
+    rail = UpiPayNowSimRail()
+    _pay(rail, amount=str(CAP), key="upi-key-0001")
+
+    with pytest.raises(RailError, match="in_upi_paynow_cap_002"):
+        _pay(rail, amount="1E-24", key="upi-key-0002")

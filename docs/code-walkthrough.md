@@ -1887,7 +1887,8 @@ class FakeRouter(Router):
                     "SGD",
                     "BRL",
                     quoted_at,
-                    arrival_hours=1,
+                    # Read from the entry the route cites, which says Pix settles in real time.
+                    arrival_hours=entry(PIX_SCHEME_ENTRY)["values"]["typical_duration_hours"],
                     simulated=True,
                     rule_id=PIX_SCHEME_ENTRY,
                     purpose=purpose,
@@ -2234,6 +2235,7 @@ and every refusal names the entry it rests on. Source: docs/decisions.md, 8 Octo
 """
 
 from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 from rails.knowledge.loader import load_knowledge
@@ -2279,7 +2281,8 @@ def upi_refusals(amount: Decimal, currency: str, purpose: str | None, earlier_to
         refusals.append(
             (UPI_CAP_ENTRY, f"Lifeline has no sourced UPI to PayNow limit in {currency}. Source: {UPI_CAP_ENTRY}.")
         )
-    elif earlier_today + amount > Decimal(str(cap["daily_cap"])):
+    # Compared as exact fractions, so no decimal precision can round a sum back under the cap.
+    elif Fraction(earlier_today) + Fraction(amount) > Fraction(str(cap["daily_cap"])):
         refusals.append(
             (
                 UPI_CAP_ENTRY,
@@ -2450,6 +2453,7 @@ class SimRail(Rail):
             raise RailError(f"No receipt {receipt_id} on {self.NAME}.")
         now = now or datetime.now(timezone.utc)
         warnings: list[str] = []
+        entered = receipt.stage_entered_at
         if self._script in ("held_for_review", "returned"):
             # The script pins the status: a held or returned transfer never moves on by the clock.
             status = receipt.status
@@ -2460,6 +2464,10 @@ class SimRail(Rail):
                 index = min(index, len(self.STAGES) - 2)
                 warnings.append(f"This simulated transfer is delayed: it has stopped at {self.STAGES[index][0]}.")
             wording, status = self.STAGES[index]
+            # A stage the clock moved the transfer into began when the clock reached it.
+            start = next((i for i, (_, s) in enumerate(self.STAGES) if s is receipt.status), 0)
+            if index > start:
+                entered = receipt.executed_at + timedelta(hours=self.STAGE_HOURS * (index - start))
         duration = entry(self.DURATION_ENTRY).get("values", {}).get("typical_duration_hours")
         steps = [f"{self.NAME} stage: {wording}.", SIMULATED_STEP]
         if duration is None:
@@ -2469,7 +2477,7 @@ class SimRail(Rail):
         return TraceResult(
             receipt_id=receipt_id,
             status=status,
-            stage_entered_at=receipt.stage_entered_at,
+            stage_entered_at=entered,
             typical_duration_hours=duration,
             typical_duration_source=self.DURATION_ENTRY
             if duration is not None
@@ -2482,7 +2490,7 @@ class SimRail(Rail):
         return FreezeResult(status=FreezeStatus.FAILED, reason=f"{self.NAME} is a simulated transfer rail and issues no cards.")
 ```
 
-`SimRail` is the shared shape of the three simulated rails. A subclass sets four class attributes: its `NAME`, its `STAGES` as pairs of the provider's wording and the `ReceiptStatus` it maps onto, its `STAGE_HOURS`, the fixture clock between stages, and the `DURATION_ENTRY` its traces cite. It overrides `refusals` to say what it will not carry. The constructor refuses a script that is not one of `SCRIPTS`. `execute` follows the `Rail.execute` docstring exactly as `FakeRail` does: a key already used returns the same receipt for the same request and raises for any other, and a refused payment records nothing, so a corrected retry under the same key is not a reuse. The receipt's status is the script's when the script is review or return, and otherwise `first_status`, the first stage, which a subclass may override. `self._issued` counts only this rail's own payments, so a seeded inbound receipt never moves the numbering; `restore` raises it to the number of a restored receipt of this rail's own, which is how a restart continues the numbering. `_stage` measures the hours since the receipt was issued in units of `STAGE_HOURS` and caps the result at the last stage; with no clock, as for Pix, it goes straight to the last. `status` pins a held or returned transfer to its status whatever the clock says, stops a delayed one a stage before the last with a warning, and otherwise follows the clock. Every trace's first next step is the provider's wording, the second says the rail is simulated, and when the duration entry gives no `typical_duration_hours` a third says no sourced duration is on file and names the entry, while `typical_duration_source` says the same. The scam script adds `SCAM_TEXT`, a fixture, to the next steps, which is how a test proves such text reaches the loop only as data. `freeze` answers `failed`, because a transfer rail issues no cards. `status` takes an optional `now` beyond the interface, so a test can move the clock.
+`SimRail` is the shared shape of the three simulated rails. A subclass sets four class attributes: its `NAME`, its `STAGES` as pairs of the provider's wording and the `ReceiptStatus` it maps onto, its `STAGE_HOURS`, the fixture clock between stages, and the `DURATION_ENTRY` its traces cite. It overrides `refusals` to say what it will not carry. The constructor refuses a script that is not one of `SCRIPTS`. `execute` follows the `Rail.execute` docstring exactly as `FakeRail` does: a key already used returns the same receipt for the same request and raises for any other, and a refused payment records nothing, so a corrected retry under the same key is not a reuse. The receipt's status is the script's when the script is review or return, and otherwise `first_status`, the first stage, which a subclass may override. `self._issued` counts only this rail's own payments, so a seeded inbound receipt never moves the numbering; `restore` raises it to the number of a restored receipt of this rail's own, which is how a restart continues the numbering. A stage the clock moved the transfer into is dated from when the clock reached it, so `stage_entered_at` never says a later stage began when the money was sent. `_stage` measures the hours since the receipt was issued in units of `STAGE_HOURS` and caps the result at the last stage; with no clock, as for Pix, it goes straight to the last. `status` pins a held or returned transfer to its status whatever the clock says, stops a delayed one a stage before the last with a warning, and otherwise follows the clock. Every trace's first next step is the provider's wording, the second says the rail is simulated, and when the duration entry gives no `typical_duration_hours` a third says no sourced duration is on file and names the entry, while `typical_duration_source` says the same. The scam script adds `SCAM_TEXT`, a fixture, to the next steps, which is how a test proves such text reaches the loop only as data. `freeze` answers `failed`, because a transfer rail issues no cards. `status` takes an optional `now` beyond the interface, so a test can move the clock.
 
 ## Simulated UPI to PayNow, `rails/sim/upi_paynow.py`
 
@@ -2493,12 +2501,25 @@ Its purposes come from in_upi_paynow_purpose_001 and its daily cap from in_upi_p
 Source: docs/decisions.md, 8 October 2026.
 """
 
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from contracts.schemas import ReceiptStatus, Route
 from rails.sim.base import SimRail
 from rails.sim.rules import UPI_CAP_ENTRY, upi_refusals
+
+
+# The remitter is in India, as in_upi_paynow_purpose_001 says, so the cap's "day" is India's day.
+# The zone comes from the time zone database, not a figure written here.
+SENDER_ZONE = ZoneInfo("Asia/Kolkata")
+# A mandate's versions share a sender: mandate-parent-v1 and mandate-parent-v2 are one parent.
+VERSION = re.compile(r"-v\d+$")
+
+
+def _sender(mandate_ref: str) -> str:
+    return VERSION.sub("", mandate_ref)
 
 
 class UpiPayNowSimRail(SimRail):
@@ -2509,19 +2530,19 @@ class UpiPayNowSimRail(SimRail):
     DURATION_ENTRY = UPI_CAP_ENTRY
 
     def refusals(self, route: Route, mandate_ref: str) -> list[str]:
-        day = datetime.now(timezone.utc).date()
+        day = datetime.now(timezone.utc).astimezone(SENDER_ZONE).date()
         today = [
             receipt.amount
             for receipt in self._receipts.values()
-            if receipt.mandate_ref == mandate_ref
-            and receipt.executed_at.astimezone(timezone.utc).date() == day
+            if _sender(receipt.mandate_ref) == _sender(mandate_ref)
+            and receipt.executed_at.astimezone(SENDER_ZONE).date() == day
             and receipt.status is not ReceiptStatus.RETURNED
         ]
         earlier = sum(today, Decimal(0))
         return [reason for _, reason in upi_refusals(route.amount, route.currency_from, route.purpose, earlier)]
 ```
 
-The rail has two stages, created and completed, one fixture hour apart, and cites the cap entry for its duration, which the RBI page does not give, so its traces carry none. `refusals` totals today's payments for the same `mandate_ref`, that is the same sender, in UTC, leaving out returned ones, and hands that total to `upi_refusals`, so the cap is a day's cap and not one transfer's.
+The rail has two stages, created and completed, one fixture hour apart, and cites the cap entry for its duration, which the RBI page does not give, so its traces carry none. `refusals` totals today's payments for the same sender, leaving out returned ones, and hands that total to `upi_refusals`, so the cap is a day's cap and not one transfer's. `_sender` strips the version suffix from a mandate reference, so `mandate-parent-v1` and `mandate-parent-v2` are one parent and a new mandate version gives no second cap. The day is India's, `SENDER_ZONE`, from the time zone database, because the RBI's "in a day" is said of remittances from India. `upi_refusals` compares the total with the cap as `Fraction` values, which are exact, so no decimal precision can round a sum back under it.
 
 ## Simulated Pix, `rails/sim/pix.py`
 

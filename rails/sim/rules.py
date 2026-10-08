@@ -5,6 +5,7 @@ and every refusal names the entry it rests on. Source: docs/decisions.md, 8 Octo
 """
 
 from decimal import Decimal
+from fractions import Fraction
 from typing import Any
 
 from rails.knowledge.loader import load_knowledge
@@ -50,7 +51,8 @@ def upi_refusals(amount: Decimal, currency: str, purpose: str | None, earlier_to
         refusals.append(
             (UPI_CAP_ENTRY, f"Lifeline has no sourced UPI to PayNow limit in {currency}. Source: {UPI_CAP_ENTRY}.")
         )
-    elif earlier_today + amount > Decimal(str(cap["daily_cap"])):
+    # Compared as exact fractions, so no decimal precision can round a sum back under the cap.
+    elif Fraction(earlier_today) + Fraction(amount) > Fraction(str(cap["daily_cap"])):
         refusals.append(
             (
                 UPI_CAP_ENTRY,

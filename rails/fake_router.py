@@ -64,7 +64,8 @@ class FakeRouter(Router):
                     "SGD",
                     "BRL",
                     quoted_at,
-                    arrival_hours=1,
+                    # Read from the entry the route cites, which says Pix settles in real time.
+                    arrival_hours=entry(PIX_SCHEME_ENTRY)["values"]["typical_duration_hours"],
                     simulated=True,
                     rule_id=PIX_SCHEME_ENTRY,
                     purpose=purpose,

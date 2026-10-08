@@ -51,11 +51,14 @@ def test_wise_route_has_its_fee_and_no_spread():
     assert wise.simulated is False
 
 
-def test_sim_pix_route_is_simulated_and_arrives_in_an_hour():
+def test_sim_pix_route_is_simulated_and_arrives_when_the_entry_it_cites_says():
+    from rails.knowledge.loader import load_knowledge
+
     sim_pix = _by_rail(_quote("SG>BR"))["sim_pix"]
 
     assert sim_pix.simulated is True
-    assert sim_pix.arrival_hours == 1
+    assert sim_pix.rule_id == "br_pix_instant_001"
+    assert sim_pix.arrival_hours == load_knowledge()["br_pix_instant_001"]["values"]["typical_duration_hours"]
 
 
 def test_bank_wire_route_has_its_fee_spread_and_arrival():

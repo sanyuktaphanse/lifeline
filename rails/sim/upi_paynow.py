@@ -4,12 +4,25 @@ Its purposes come from in_upi_paynow_purpose_001 and its daily cap from in_upi_p
 Source: docs/decisions.md, 8 October 2026.
 """
 
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from contracts.schemas import ReceiptStatus, Route
 from rails.sim.base import SimRail
 from rails.sim.rules import UPI_CAP_ENTRY, upi_refusals
+
+
+# The remitter is in India, as in_upi_paynow_purpose_001 says, so the cap's "day" is India's day.
+# The zone comes from the time zone database, not a figure written here.
+SENDER_ZONE = ZoneInfo("Asia/Kolkata")
+# A mandate's versions share a sender: mandate-parent-v1 and mandate-parent-v2 are one parent.
+VERSION = re.compile(r"-v\d+$")
+
+
+def _sender(mandate_ref: str) -> str:
+    return VERSION.sub("", mandate_ref)
 
 
 class UpiPayNowSimRail(SimRail):
@@ -20,12 +33,12 @@ class UpiPayNowSimRail(SimRail):
     DURATION_ENTRY = UPI_CAP_ENTRY
 
     def refusals(self, route: Route, mandate_ref: str) -> list[str]:
-        day = datetime.now(timezone.utc).date()
+        day = datetime.now(timezone.utc).astimezone(SENDER_ZONE).date()
         today = [
             receipt.amount
             for receipt in self._receipts.values()
-            if receipt.mandate_ref == mandate_ref
-            and receipt.executed_at.astimezone(timezone.utc).date() == day
+            if _sender(receipt.mandate_ref) == _sender(mandate_ref)
+            and receipt.executed_at.astimezone(SENDER_ZONE).date() == day
             and receipt.status is not ReceiptStatus.RETURNED
         ]
         earlier = sum(today, Decimal(0))
