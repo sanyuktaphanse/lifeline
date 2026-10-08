@@ -42,6 +42,7 @@ from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
+from core.monthly import is_month, render
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
@@ -135,6 +136,17 @@ class VerifyResult(BaseModel):
 
 class Health(BaseModel):
     status: str
+
+
+class MonthlyNote(BaseModel):
+    """The monthly note for the app: the text, the figures it was built from, and every entry behind them."""
+
+    user_id: str
+    month: str
+    lang: str
+    text: str
+    summary: dict[str, Any]
+    seqs: list[int]
 
 
 def demo_rails(
@@ -427,6 +439,26 @@ def create_app(
         if request.senders is not None:
             arguments["senders"] = request.senders
         return PrecheckResult.model_validate(direct(request.user_id, "precheck", arguments, "precheck"))
+
+    @app.get("/note/{user}/monthly")
+    def monthly_note(user: str, month: str | None = None) -> MonthlyNote:
+        known(user)
+        if month is not None and not is_month(month):
+            # The month is never echoed, so nothing a caller sends comes back in the error.
+            raise HTTPException(status_code=422, detail="month must be a four digit year, a hyphen and a two digit month.")
+        with lock:
+            chosen = month or loop.latest_month(user)
+            # The note runs as the T0 tool monthly_summary, through the engine, so the request leaves a
+            # proposal, a decision and an execution; the text is rendered as the tick renders it.
+            decision, result = loop.act(user, "monthly_summary", {"month": chosen})
+            refused(decision)
+            lang = loop.student_lang(user)
+        if "summary" not in result:
+            raise HTTPException(status_code=422, detail=result.get("error", "No note for that month."))
+        summary = result["summary"]
+        return MonthlyNote(
+            user_id=user, month=chosen, lang=lang, text=render(summary, lang), summary=summary, seqs=result["seqs"]
+        )
 
     @app.post("/standing/run_due")
     def standing_run_due(request: RunDueRequest) -> list[StandingEvent]:

@@ -3660,7 +3660,7 @@ from core.anchor_local import LocalSignedAnchor, user_hash_of
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
-from core.monthly import is_month, month_of, previous_month, render, summarize
+from core.monthly import is_month, month_of, previous_month, render, seqs_of, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
@@ -3953,7 +3953,7 @@ TOOL_ACTIONS = {
     "monthly_summary": ActionType.MONTHLY_SUMMARY,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
-DIRECT_TOOLS = ("trace_transfer", "precheck")
+DIRECT_TOOLS = ("trace_transfer", "precheck", "monthly_summary")
 REQUIRED_ARGUMENTS = {
     "propose_transfer": ACTION_FIELDS,
     "get_quote": ("corridor", "amount"),
@@ -4901,7 +4901,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
             month = str(arguments.get("month") or month_of(action.requested_at)).strip()
             if not is_month(month):
                 return {"error": f"A month is written YYYY-MM, such as {month_of(action.requested_at)}."}
-            return {"summary": summarize(self._ledger.entries(), user_id, month)}
+            summary = summarize(self._ledger.entries(), user_id, month)
+            return {"summary": summary, "seqs": seqs_of(summary)}
         return {"error": f"No runner for {action.type.value}."}
 ```
 
@@ -5420,6 +5421,32 @@ When no confirmation waits under the token for this student, and when a waiting 
                 return message.lang if message.lang in TEXTS else "en"
         return "en"
 
+    def student_lang(self, user_id: str) -> str:
+        """The language the monthly note is written in for the student: that of their latest turn."""
+        return self._student_lang(user_id)
+
+    def latest_month(self, user_id: str) -> str:
+        """The calendar month of the student's latest ledger entry, or of the clock when they have none."""
+        latest = next((e.ts for e in reversed(self._ledger.entries()) if e.payload.get("user_id") == user_id), None)
+        return month_of(latest or self._clock())
+
+    def monthly_note(self, user_id: str, month: str, lang: str | None = None) -> dict[str, Any]:
+        """The note for one student and month, as the tool, the tick and the endpoint give it.
+
+        Built from the ledger alone, with no model and no write: the text in the student's language, the
+        summary, and the sequences of every entry behind a figure.
+        """
+        lang = lang or self._student_lang(user_id)
+        summary = summarize(self._ledger.entries(), user_id, month)
+        return {
+            "user_id": user_id,
+            "month": month,
+            "lang": lang,
+            "text": render(summary, lang),
+            "summary": summary,
+            "seqs": seqs_of(summary),
+        }
+
     def write_monthly_notes(self, now: datetime) -> list[dict[str, Any]]:
         """On the first call in a new month, write each student's note for the month that ended.
 
@@ -5435,9 +5462,8 @@ When no confirmation waits under the token for this student, and when a waiting 
                 continue
             if not any(e.payload.get("user_id") == user_id and month_of(e.ts) <= month for e in entries):
                 continue
-            lang = self._student_lang(user_id)
-            summary = summarize(entries, user_id, month)
-            note = {"kind": MONTHLY_NOTE, "month": month, "lang": lang, "text": render(summary, lang), "summary": summary}
+            built = self.monthly_note(user_id, month)
+            note = {"kind": MONTHLY_NOTE, **{name: built[name] for name in ("month", "lang", "text", "summary", "seqs")}}
             self._write(self._attempt_trail(user_id, mandate), "note", note)
             self._monthly_noted.add((user_id, month))
             written.append(note)
@@ -7231,6 +7257,8 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
     standing: list[dict[str, Any]] = []
     problems: list[dict[str, Any]] = []
     refusals: list[int] = []
+    sent: list[LedgerEntry] = []
+    unusual: dict[str, list[int]] = {name: [] for name in (*UNUSUAL_NOTES.values(), INJECTION)}
     for entry in entries:
         payload = entry.payload
         if payload.get("user_id") != user_id or month_of(entry.ts) != month:
@@ -7239,17 +7267,21 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         if (
             entry.kind == "execution"
             and action.get("type") == "transfer"
-            and "route" in payload
+            and isinstance(payload.get("route"), dict)
             and action.get("idempotency_key") not in not_sent
         ):
             key = (str(action.get("currency")), str(action.get("corridor")))
             group = groups.setdefault(
-                key, {"currency": key[0], "corridor": key[1], "count": 0, "total": Decimal(0), "fees": Decimal(0), "seqs": []}
+                key,
+                {"currency": key[0], "corridor": key[1], "count": 0, "total": Decimal(0), "fees": Decimal(0),
+                 "spread": Decimal(0), "seqs": []},
             )
             group["count"] += 1
             group["total"] += _decimal(action.get("amount"))
             group["fees"] += _decimal(payload["route"].get("fee"))
+            group["spread"] += _decimal(payload["route"].get("spread_cost"))
             group["seqs"].append(entry.seq)
+            sent.append(entry)
             if payload.get("standing_mandate_id"):
                 standing.append({"standing_mandate_id": payload["standing_mandate_id"], "seq": entry.seq})
         elif entry.kind == "receipt" and payload.get("receipt", {}).get("status") in PROBLEM_STATUSES:
@@ -7266,15 +7298,31 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
             problems.append({"receipt_id": None, "rail": payload.get("rail"), "outcome": "refused_by_rail", "seq": entry.seq})
         elif entry.kind == "decision" and not payload.get("decision", {}).get("allowed", True):
             refusals.append(entry.seq)
+        elif entry.kind == "note" and payload.get("kind") in UNUSUAL_NOTES:
+            unusual[UNUSUAL_NOTES[payload["kind"]]].append(entry.seq)
+        elif entry.kind == INJECTION:
+            unusual[INJECTION].append(entry.seq)
     transfers = [
-        {**group, "total": format(group["total"], "f"), "fees": format(group["fees"], "f")} for group in groups.values()
+        {**group, **{name: format(group[name], "f") for name in ("total", "fees", "spread")}} for group in groups.values()
     ]
+    routes: dict[str, dict[str, Any]] = {}
+    for entry in sent:
+        rail = str(entry.payload["route"].get("rail"))
+        route = routes.setdefault(rail, {"rail": rail, "count": 0, "seqs": []})
+        route["count"] += 1
+        route["seqs"].append(entry.seq)
+    taxed = [entry.seq for entry in sent if entry.payload["route"].get("tax_lines")]
     return {
         "month": month,
         "transfers": transfers,
         "standing_runs": standing,
         "problems": problems,
         "refusals": {"count": len(refusals), "seqs": refusals},
+        "taxes": {"on_file": bool(taxed), "seqs": taxed},
+        "routes": list(routes.values()),
+        "comparisons": [_comparison(entries, user_id, entry) for entry in sent],
+        "unusual": {name: {"count": len(seqs), "seqs": seqs} for name, seqs in unusual.items()},
+        "coming": _coming(entries, user_id, next_month(month)),
     }
 ```
 
@@ -7282,18 +7330,44 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
 
 ```python
 def render(summary: dict[str, Any], lang: str) -> str:
-    """The note in the student's language, from the summary's figures and nothing else."""
+    """The note in the student's language, from the summary's figures and nothing else.
+
+    A reminder is named by its due date only: its text is the student's own words, which may hold figures
+    no entry backs as a figure, so the note never repeats it.
+    """
     texts = TEXTS.get(lang, TEXTS["en"])
     transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
+    spread = "; ".join(texts["spread"].format(**group) for group in summary["transfers"]) or texts["none"]
+    taxes = summary["taxes"]
+    taxed = texts["taxes"].format(seqs=", ".join(str(seq) for seq in taxes["seqs"])) if taxes["on_file"] else texts["no_taxes"]
+    routes = ", ".join(texts["route"].format(**route) for route in summary["routes"]) or texts["none"]
+    savings = "; ".join(_saving(texts, comparison) for comparison in summary["comparisons"]) or texts["none"]
     problems = ", ".join(
         f"{item['receipt_id'] or item.get('rail')} {texts[item['outcome']]}" for item in summary["problems"]
     ) or texts["none"]
+    unusual = summary["unusual"]
+    coming = summary["coming"]
+    upcoming = [
+        texts["standing_due"].format(amount=run["amount"], currency=run["currency"], payee=run["payee_id"], due=run["due"])
+        for run in coming["standing_runs"]
+    ] + [texts["reminder_due"].format(due=item["due"][:10]) for item in coming["reminders"]]
     return texts["note"].format(
         month=summary["month"],
         transfers=transfers,
+        spread=spread,
+        taxes=taxed,
+        routes=routes,
+        savings=savings,
         standing=len(summary["standing_runs"]),
         problems=problems,
-        refusals=summary["refusals"]["count"],
+        unusual=texts["unusual"].format(
+            refused=summary["refusals"]["count"],
+            payees=unusual["payees_added"]["count"],
+            rescues=unusual["rescues_started"]["count"],
+            injections=unusual[INJECTION]["count"],
+        ),
+        next_month=coming["month"],
+        coming=", ".join(upcoming) or texts["nothing"],
     )
 ```
 
@@ -8031,6 +8105,7 @@ from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
+from core.monthly import is_month, render
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
@@ -8408,6 +8483,26 @@ def create_app(
         if request.senders is not None:
             arguments["senders"] = request.senders
         return PrecheckResult.model_validate(direct(request.user_id, "precheck", arguments, "precheck"))
+
+    @app.get("/note/{user}/monthly")
+    def monthly_note(user: str, month: str | None = None) -> MonthlyNote:
+        known(user)
+        if month is not None and not is_month(month):
+            # The month is never echoed, so nothing a caller sends comes back in the error.
+            raise HTTPException(status_code=422, detail="month must be a four digit year, a hyphen and a two digit month.")
+        with lock:
+            chosen = month or loop.latest_month(user)
+            # The note runs as the T0 tool monthly_summary, through the engine, so the request leaves a
+            # proposal, a decision and an execution; the text is rendered as the tick renders it.
+            decision, result = loop.act(user, "monthly_summary", {"month": chosen})
+            refused(decision)
+            lang = loop.student_lang(user)
+        if "summary" not in result:
+            raise HTTPException(status_code=422, detail=result.get("error", "No note for that month."))
+        summary = result["summary"]
+        return MonthlyNote(
+            user_id=user, month=chosen, lang=lang, text=render(summary, lang), summary=summary, seqs=result["seqs"]
+        )
 
     @app.post("/standing/run_due")
     def standing_run_due(request: RunDueRequest) -> list[StandingEvent]:

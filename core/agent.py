@@ -52,7 +52,7 @@ from core.anchor_local import LocalSignedAnchor, user_hash_of
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
-from core.monthly import is_month, month_of, previous_month, render, summarize
+from core.monthly import is_month, month_of, previous_month, render, seqs_of, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
@@ -354,7 +354,7 @@ TOOL_ACTIONS = {
     "monthly_summary": ActionType.MONTHLY_SUMMARY,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
-DIRECT_TOOLS = ("trace_transfer", "precheck")
+DIRECT_TOOLS = ("trace_transfer", "precheck", "monthly_summary")
 REQUIRED_ARGUMENTS = {
     "propose_transfer": ACTION_FIELDS,
     "get_quote": ("corridor", "amount"),
@@ -1416,7 +1416,8 @@ class AgentLoop:
             month = str(arguments.get("month") or month_of(action.requested_at)).strip()
             if not is_month(month):
                 return {"error": f"A month is written YYYY-MM, such as {month_of(action.requested_at)}."}
-            return {"summary": summarize(self._ledger.entries(), user_id, month)}
+            summary = summarize(self._ledger.entries(), user_id, month)
+            return {"summary": summary, "seqs": seqs_of(summary)}
         return {"error": f"No runner for {action.type.value}."}
 
     def _skipped_fields(self, user_id: str) -> list[str]:
@@ -2011,6 +2012,32 @@ class AgentLoop:
                 return message.lang if message.lang in TEXTS else "en"
         return "en"
 
+    def student_lang(self, user_id: str) -> str:
+        """The language the monthly note is written in for the student: that of their latest turn."""
+        return self._student_lang(user_id)
+
+    def latest_month(self, user_id: str) -> str:
+        """The calendar month of the student's latest ledger entry, or of the clock when they have none."""
+        latest = next((e.ts for e in reversed(self._ledger.entries()) if e.payload.get("user_id") == user_id), None)
+        return month_of(latest or self._clock())
+
+    def monthly_note(self, user_id: str, month: str, lang: str | None = None) -> dict[str, Any]:
+        """The note for one student and month, as the tool, the tick and the endpoint give it.
+
+        Built from the ledger alone, with no model and no write: the text in the student's language, the
+        summary, and the sequences of every entry behind a figure.
+        """
+        lang = lang or self._student_lang(user_id)
+        summary = summarize(self._ledger.entries(), user_id, month)
+        return {
+            "user_id": user_id,
+            "month": month,
+            "lang": lang,
+            "text": render(summary, lang),
+            "summary": summary,
+            "seqs": seqs_of(summary),
+        }
+
     def write_monthly_notes(self, now: datetime) -> list[dict[str, Any]]:
         """On the first call in a new month, write each student's note for the month that ended.
 
@@ -2026,9 +2053,8 @@ class AgentLoop:
                 continue
             if not any(e.payload.get("user_id") == user_id and month_of(e.ts) <= month for e in entries):
                 continue
-            lang = self._student_lang(user_id)
-            summary = summarize(entries, user_id, month)
-            note = {"kind": MONTHLY_NOTE, "month": month, "lang": lang, "text": render(summary, lang), "summary": summary}
+            built = self.monthly_note(user_id, month)
+            note = {"kind": MONTHLY_NOTE, **{name: built[name] for name in ("month", "lang", "text", "summary", "seqs")}}
             self._write(self._attempt_trail(user_id, mandate), "note", note)
             self._monthly_noted.add((user_id, month))
             written.append(note)
