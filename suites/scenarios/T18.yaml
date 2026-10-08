@@ -1,0 +1,59 @@
+id: T18
+note: The run is the parent in India, named by fixtures.user from fixtures/demo_parent.yaml, a rupee mandate whose only payee is the student, on IN>SG, for the two purposes in_upi_paynow_purpose_001 states. In the first run the parent asks for a quote and then sends 40,000 rupees as a gift; the router quotes upi_paynow_sim with in_upi_paynow_purpose_001 as its rule id, which the model is shown, the engine allows the transfer at T2, and it moves only after the parent confirms; the receipt is simulated and the reply says so. In the second run a second transfer of 30,000 rupees the same day would take the day's total over the 60,000 rupee cap of in_upi_paynow_cap_002. The router knows no earlier transfer, so it quotes the route and the confirmation is offered; the rail refuses at execution, naming the cap entry, the ledger holds the rail error note and no receipt, and the reply gives the rail's reason. Today the cap is enforced at execution, after the confirmation, as open item 116 records; no money moved. The mandate's limits are fixtures, its daily limit above the cap on purpose so the cap is what refuses.
+fixtures:
+  user: {fixture: demo_parent}
+runs:
+  - lang: en
+    turns:
+      - user: What would it cost to send 40,000 rupees to student_001 as a gift?
+        model:
+          - calls:
+              - name: get_quote
+                arguments: {corridor: "IN>SG", amount: "40000", currency: INR, purpose: gift}
+          - text: There is one route.
+        expect: {reply: answer}
+      - user: Send 40,000 rupees to student_001 as a gift
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "40000", currency: INR, corridor: "IN>SG", payee_id: student_001, purpose: gift}
+        expect:
+          reply: confirmation
+          rule_ids: [R11]
+          warning_key: warn.transfer.irreversible
+          model_saw:
+            - '"rail": "upi_paynow_sim"'
+            - '"rule_id": "in_upi_paynow_purpose_001"'
+      - user: Yes, send it
+        confirm: latest
+        expect:
+          reply: receipt
+          must_contain: ["40000 INR over upi_paynow_sim", "This was a simulation. No real money moved."]
+    expected:
+      ledger: [proposal, decision, execution, proposal, decision, confirmation, execution, receipt]
+  - lang: en
+    turns:
+      - user: Send 40,000 rupees to student_001 as a gift
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "40000", currency: INR, corridor: "IN>SG", payee_id: student_001, purpose: gift}
+        expect: {reply: confirmation}
+      - user: Yes, send it
+        confirm: latest
+        expect: {reply: receipt}
+      - user: Send another 30,000 rupees to student_001 as a gift today
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "30000", currency: INR, corridor: "IN>SG", payee_id: student_001, purpose: gift}
+        expect: {reply: confirmation}
+      - user: Yes, send it
+        confirm: latest
+        expect:
+          reply: answer
+          must_contain:
+            - "No route is available for this transfer right now, so nothing was sent. The rail said:"
+            - "above the daily cap of 60000 INR. Source: in_upi_paynow_cap_002."
+    expected:
+      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, confirmation, note]

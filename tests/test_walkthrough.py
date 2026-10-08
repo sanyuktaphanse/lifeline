@@ -145,3 +145,19 @@ def test_every_yaml_excerpt_under_a_yaml_heading_is_copied_exactly():
     ]
 
     assert stale == []
+
+
+def test_the_walkthrough_covers_stage_8b():
+    files = {path for path, _, _ in excerpts()}
+    agent = [excerpt for path, _, excerpt in excerpts() if path == "core/agent.py"]
+
+    assert {"core/monthly.py", "tests/test_cancel.py", "tests/test_monthly.py", "tests/test_parent.py"} <= files
+    assert {
+        "fixtures/demo_parent.yaml",
+        "suites/scenarios/T26.yaml",
+        "suites/scenarios/T35.yaml",
+        "suites/scenarios/T18.yaml",
+        "suites/scenarios/T30.yaml",
+    } <= {path for path, _, _ in yaml_excerpts()}
+    for name in ("def _own_transfer", "def _cancel"):
+        assert any(name in excerpt for excerpt in agent), name

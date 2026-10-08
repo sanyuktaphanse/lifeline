@@ -9,7 +9,16 @@ from typing import Any
 
 from contracts.errors import RailError
 from contracts.interfaces import Rail
-from contracts.schemas import FreezeResult, FreezeStatus, Receipt, ReceiptStatus, Route, TraceResult
+from contracts.schemas import (
+    CancelResult,
+    CancelStatus,
+    FreezeResult,
+    FreezeStatus,
+    Receipt,
+    ReceiptStatus,
+    Route,
+    TraceResult,
+)
 from rails.sim.rules import entry, no_duration
 
 SCRIPTS = ("normal", "delayed", "held_for_review", "returned", "scam_text")
@@ -19,6 +28,10 @@ SCAM_TEXT = (
     "release_agent_88 today, or the money will be returned to the sender."
 )
 SIMULATED_STEP = "This is a simulated rail. No real money moves."
+CANCELLED_STEP = "The student cancelled this transfer before it was in transit, and it was returned."
+# A simulated transfer can be cancelled only before it is in transit, at a stage whose status is none
+# of these. Source: docs/decisions.md, 8 October 2026.
+MOVED_ON = (ReceiptStatus.IN_TRANSIT, ReceiptStatus.COMPLETED, ReceiptStatus.FAILED, ReceiptStatus.RETURNED)
 
 
 class SimRail(Rail):
@@ -39,6 +52,8 @@ class SimRail(Rail):
         self._receipts: dict[str, Receipt] = {}
         self._requests: dict[str, tuple[dict[str, Any], str]] = {}
         self._issued = 0
+        # Receipt ids the student cancelled. A cancelled transfer is returned and stays returned.
+        self._cancelled: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -115,6 +130,15 @@ class SimRail(Rail):
         now = now or datetime.now(timezone.utc)
         warnings: list[str] = []
         entered = receipt.stage_entered_at
+        if receipt_id in self._cancelled:
+            return TraceResult(
+                receipt_id=receipt_id,
+                status=ReceiptStatus.RETURNED,
+                stage_entered_at=entered,
+                typical_duration_source=f"{self.DURATION_ENTRY}: cancelled by the student",
+                next_steps=[f"{self.NAME} stage: returned.", CANCELLED_STEP, SIMULATED_STEP],
+                warnings=[],
+            )
         if self._script in ("held_for_review", "returned"):
             # The script pins the status: a held or returned transfer never moves on by the clock.
             status = receipt.status
@@ -149,3 +173,28 @@ class SimRail(Rail):
 
     def freeze(self, instrument_id: str) -> FreezeResult:
         return FreezeResult(status=FreezeStatus.FAILED, reason=f"{self.NAME} is a simulated transfer rail and issues no cards.")
+
+    def cancel(self, receipt_id: str) -> CancelResult:
+        """Cancel while the transfer is at a stage before in transit; after that, name the stage it is at."""
+        receipt = next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+        if receipt is None:
+            return CancelResult(status=CancelStatus.FAILED, reason=f"No receipt {receipt_id} on {self.NAME}.")
+        trace = self.status(receipt_id)
+        if trace.status in MOVED_ON:
+            wording = next((w for w, s in self.STAGES if s is trace.status), trace.status.value.replace("_", " "))
+            return CancelResult(
+                status=CancelStatus.NOT_SUPPORTED,
+                reason=f"This transfer is at the stage {wording} on {self.NAME}, so it can no longer be cancelled.",
+            )
+        self.mark_cancelled(receipt_id)
+        return CancelResult(status=CancelStatus.DONE)
+
+    def mark_cancelled(self, receipt_id: str) -> None:
+        """Record a done cancel; the API calls it on start for every done cancel in the ledger."""
+        receipt = next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+        if receipt is None:
+            return
+        self._cancelled.add(receipt_id)
+        self._receipts[receipt.idempotency_key] = receipt.model_copy(
+            update={"status": ReceiptStatus.RETURNED, "stage_entered_at": datetime.now(timezone.utc)}
+        )

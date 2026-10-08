@@ -29,16 +29,20 @@ Every Python excerpt below is copied exactly from the file it names, and `tests/
 21. The council, `core/council.py`
 22. The rescue machine, `core/rescue.py`
 23. The agent loop, `core/agent.py`, with the rescue
-24. The evaluation harness, `core/harness.py`
-25. The API, `api/main.py`
-26. The tests
-27. The Stage 8a tests
-28. The suites and their scenarios
-29. The Stage 8a scenarios
-30. The knowledge base, `rails/knowledge/`
-31. The provider entries, `rails/knowledge/providers.yaml`
-32. Configuration files
-33. Commands used to build and check the repo
+24. The monthly note, `core/monthly.py`
+25. The evaluation harness, `core/harness.py`
+26. The API, `api/main.py`
+27. The tests
+28. The Stage 8a tests
+29. The Stage 8b tests
+30. The suites and their scenarios
+31. The Stage 8a scenarios
+32. The Stage 8b scenarios
+33. The knowledge base, `rails/knowledge/`
+34. The provider entries, `rails/knowledge/providers.yaml`
+35. The demo parent, `fixtures/demo_parent.yaml`
+36. Configuration files
+37. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -188,6 +192,8 @@ class ActionType(str, Enum):
     NOTIFY_FAMILY = "notify_family"
     VERIFY_LEDGER = "verify_ledger"
     UPDATE_PLAN = "update_plan"
+    CANCEL_TRANSFER = "cancel_transfer"
+    MONTHLY_SUMMARY = "monthly_summary"
 
 
 class RouteStatus(str, Enum):
@@ -208,6 +214,14 @@ class ReceiptStatus(str, Enum):
 
 
 class FreezeStatus(str, Enum):
+    DONE = "done"
+    NOT_SUPPORTED = "not_supported"
+    FAILED = "failed"
+
+
+class CancelStatus(str, Enum):
+    """The three outcomes of a cancel, the same as a freeze's. Source: docs/decisions.md, 8 October 2026."""
+
     DONE = "done"
     NOT_SUPPORTED = "not_supported"
     FAILED = "failed"
@@ -484,6 +498,7 @@ class AgentReply(BaseModel):
     decision: Decision | None = None
     receipt: Receipt | None = None
     freeze: FreezeResult | None = None
+    cancel: CancelResult | None = None
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
@@ -640,6 +655,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.GET_QUOTE: Tier.T0,
     ActionType.CHECK_WALLET_TOKEN: Tier.T0,
     ActionType.VERIFY_LEDGER: Tier.T0,
+    ActionType.MONTHLY_SUMMARY: Tier.T0,
     ActionType.SET_REMINDER: Tier.T1,
     ActionType.CANCEL_STANDING_RUN: Tier.T1,
     ActionType.DEACTIVATE_STANDING_MANDATE: Tier.T1,
@@ -647,6 +663,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.REROUTE_TO_BACKUP: Tier.T1,
     ActionType.NOTIFY_FAMILY: Tier.T1,
     ActionType.UPDATE_PLAN: Tier.T1,
+    ActionType.CANCEL_TRANSFER: Tier.T2,
     ActionType.CREATE_STANDING_MANDATE: Tier.T2,
     ActionType.TRANSFER: Tier.T2,
     ActionType.ADD_PAYEE: Tier.T2,
@@ -746,6 +763,7 @@ WARNING_KEYS = {
     ActionType.ADD_PAYEE: "warn.payee.new",
     ActionType.FREEZE_CARD: "warn.freeze.card",
     ActionType.CREATE_STANDING_MANDATE: "warn.standing.new",
+    ActionType.CANCEL_TRANSFER: "warn.transfer.cancel",
 }
 # Source: the order of evaluation table in docs/technical-reference.md. An allowed
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
@@ -792,6 +810,8 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
             action.instrument_id or "",
             action.standing_mandate_id or "",
             action.standing_terms.model_dump_json() if action.standing_terms else "",
+            # Only a cancel names a receipt, so every token made before cancels existed is unchanged.
+            *([action.receipt_id] if action.receipt_id else []),
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -988,6 +1008,17 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
                     f"update_plan may change only {', '.join(PLAN_UPDATE_FIELDS)}, never {', '.join(protected)}."
                 )
 
+        if action.type is ActionType.CANCEL_TRANSFER:
+            sent = {past.idempotency_key for past in history if past.type is ActionType.TRANSFER}
+            if not action.receipt_id:
+                rule_ids.append("R04")
+                reasons.append("Cancelling a transfer needs its receipt id, and this one has none.")
+            elif action.cancel_of not in sent:
+                rule_ids.append("R04")
+                reasons.append(
+                    f"Receipt {action.receipt_id} is not one of this student's own transfers, so it cannot be cancelled here."
+                )
+
         standing_actions = (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE)
         if action.type in standing_actions and _standing_named(action, mandate) is None:
             rule_ids.append("R04")
@@ -1134,6 +1165,7 @@ from typing import Any
 
 from contracts.schemas import (
     Action,
+    CancelResult,
     Decision,
     FreezeResult,
     LedgerEntry,
@@ -2296,6 +2328,8 @@ from typing import Any
 from contracts.errors import RailError
 from contracts.interfaces import Rail
 from contracts.schemas import (
+    CancelResult,
+    CancelStatus,
     FreezeResult,
     FreezeStatus,
     Receipt,
@@ -2342,8 +2376,11 @@ class FakeRail(Rail):
         fail_once_keys: Iterable[str] = (FAIL_ONCE_KEY,),
         name: str = "fake",
         simulated: bool = True,
+        issue_status: ReceiptStatus = ReceiptStatus.COMPLETED,
     ) -> None:
         self._name = name
+        # Fixture: the status a receipt is issued at, completed unless a scenario chooses another.
+        self._issue_status = issue_status
         self._simulated = simulated
         self._traces = {
             receipt_id: trace.model_copy(deep=True)
@@ -2390,7 +2427,7 @@ The constructor copies any scripted traces, keyed by receipt id, so a test that 
             rail=self._name,
             amount=route.amount,
             currency=route.currency_from,
-            status=ReceiptStatus.COMPLETED,
+            status=self._issue_status,
             stage_entered_at=now,
             mandate_ref=mandate_ref,
             idempotency_key=idempotency_key,
@@ -2412,14 +2449,62 @@ The order of the checks matters. A key that has already paid is checked first. W
         self._receipts[key] = receipt.model_copy(deep=True)
         self._requests[key] = (route.model_dump(exclude={"quoted_at"}), mandate_ref)
 
+    def _issued(self, receipt_id: str) -> Receipt | None:
+        return next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+
     def status(self, receipt_id: str) -> TraceResult:
         trace = self._traces.get(receipt_id)
-        if trace is None:
+        issued = self._issued(receipt_id)
+        if trace is None and issued is None:
             raise RailError(f"No scripted trace for receipt {receipt_id}.")
-        issued = next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+        if trace is None:
+            # A receipt with no scripted trace is traced from itself; no entry gives a duration.
+            trace = TraceResult(
+                receipt_id=receipt_id,
+                status=issued.status,
+                stage_entered_at=issued.stage_entered_at,
+                typical_duration_source="fixture: no scripted trace and no sourced duration",
+                next_steps=[],
+                warnings=[],
+            )
         if issued is not None:
             trace = trace.model_copy(update={"stage_entered_at": issued.stage_entered_at})
         return trace.model_copy(deep=True)
+
+    def cancel(self, receipt_id: str) -> CancelResult:
+        issued = self._issued(receipt_id)
+        if issued is None:
+            return CancelResult(status=CancelStatus.FAILED, reason=f"{self._name} issued no receipt {receipt_id}.")
+        # What the student is shown is what the rail answers on: the scripted trace when there is one.
+        current = self._traces[receipt_id].status if receipt_id in self._traces else issued.status
+        if current not in CANCELLABLE:
+            return CancelResult(
+                status=CancelStatus.NOT_SUPPORTED,
+                reason=f"This transfer is {current.value.replace('_', ' ')}, so it can no longer be cancelled through Lifeline.",
+            )
+        self.mark_cancelled(receipt_id)
+        return CancelResult(status=CancelStatus.DONE)
+
+    def mark_cancelled(self, receipt_id: str) -> None:
+        """Record a done cancel: the receipt is returned and its trace says the student cancelled it.
+
+        The API calls it on start for every done cancel in the ledger, so a restart keeps it."""
+        issued = self._issued(receipt_id)
+        if issued is None:
+            return
+        now = datetime.now(timezone.utc)
+        returned = issued.model_copy(update={"status": ReceiptStatus.RETURNED, "stage_entered_at": now})
+        self._receipts[issued.idempotency_key] = returned
+        base = self._traces.get(receipt_id)
+        self._traces[receipt_id] = TraceResult(
+            receipt_id=receipt_id,
+            status=ReceiptStatus.RETURNED,
+            stage_entered_at=now,
+            typical_duration_hours=None,
+            typical_duration_source=base.typical_duration_source if base else "fixture: no sourced duration",
+            next_steps=[CANCELLED_STEP],
+            warnings=[],
+        )
 
     def freeze(self, instrument_id: str) -> FreezeResult:
         issuer, separator, _ = instrument_id.partition(":")
@@ -2615,7 +2700,16 @@ from typing import Any
 
 from contracts.errors import RailError
 from contracts.interfaces import Rail
-from contracts.schemas import FreezeResult, FreezeStatus, Receipt, ReceiptStatus, Route, TraceResult
+from contracts.schemas import (
+    CancelResult,
+    CancelStatus,
+    FreezeResult,
+    FreezeStatus,
+    Receipt,
+    ReceiptStatus,
+    Route,
+    TraceResult,
+)
 from rails.sim.rules import entry, no_duration
 
 SCRIPTS = ("normal", "delayed", "held_for_review", "returned", "scam_text")
@@ -2625,6 +2719,10 @@ SCAM_TEXT = (
     "release_agent_88 today, or the money will be returned to the sender."
 )
 SIMULATED_STEP = "This is a simulated rail. No real money moves."
+CANCELLED_STEP = "The student cancelled this transfer before it was in transit, and it was returned."
+# A simulated transfer can be cancelled only before it is in transit, at a stage whose status is none
+# of these. Source: docs/decisions.md, 8 October 2026.
+MOVED_ON = (ReceiptStatus.IN_TRANSIT, ReceiptStatus.COMPLETED, ReceiptStatus.FAILED, ReceiptStatus.RETURNED)
 
 
 class SimRail(Rail):
@@ -2645,6 +2743,8 @@ class SimRail(Rail):
         self._receipts: dict[str, Receipt] = {}
         self._requests: dict[str, tuple[dict[str, Any], str]] = {}
         self._issued = 0
+        # Receipt ids the student cancelled. A cancelled transfer is returned and stays returned.
+        self._cancelled: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -2721,6 +2821,15 @@ class SimRail(Rail):
         now = now or datetime.now(timezone.utc)
         warnings: list[str] = []
         entered = receipt.stage_entered_at
+        if receipt_id in self._cancelled:
+            return TraceResult(
+                receipt_id=receipt_id,
+                status=ReceiptStatus.RETURNED,
+                stage_entered_at=entered,
+                typical_duration_source=f"{self.DURATION_ENTRY}: cancelled by the student",
+                next_steps=[f"{self.NAME} stage: returned.", CANCELLED_STEP, SIMULATED_STEP],
+                warnings=[],
+            )
         if self._script in ("held_for_review", "returned"):
             # The script pins the status: a held or returned transfer never moves on by the clock.
             status = receipt.status
@@ -2803,7 +2912,9 @@ class UpiPayNowSimRail(SimRail):
             for receipt in self._receipts.values()
             if _sender(receipt.mandate_ref) == _sender(mandate_ref)
             and receipt.executed_at.astimezone(SENDER_ZONE).date() == day
-            and receipt.status is not ReceiptStatus.RETURNED
+            # A transfer the student cancelled keeps its share of the day, as it keeps its share of the
+            # mandate's daily limit; only one the provider returned frees it. Source: docs/decisions.md.
+            and (receipt.status is not ReceiptStatus.RETURNED or receipt.receipt_id in self._cancelled)
         ]
         earlier = sum(today, Decimal(0))
         return [reason for _, reason in upi_refusals(route.amount, route.currency_from, route.purpose, earlier)]
@@ -2823,7 +2934,7 @@ Source: docs/decisions.md, 8 October 2026.
 
 from collections.abc import Iterable
 
-from contracts.schemas import ReceiptStatus, Route
+from contracts.schemas import CancelResult, CancelStatus, ReceiptStatus, Route
 from rails.sim.base import SimRail
 from rails.sim.rules import PIX_SCHEME_ENTRY, pix_refusals
 
@@ -3320,6 +3431,8 @@ from contracts.schemas import (
     Action,
     ActionType,
     AgentReply,
+    CancelResult,
+    CancelStatus,
     ConfirmationRequest,
     CouncilAdvice,
     CouncilDeliberation,
@@ -3351,6 +3464,7 @@ from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
+from core.monthly import is_month, month_of, previous_month, render, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
@@ -3431,6 +3545,14 @@ DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # A thousands grouping written with a space, a no break space, a narrow no break space, or an
 # apostrophe, between a digit and exactly three more.
+# Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
+# a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
+DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+# The word a cancel may name in place of a receipt id: the student's most recent receipt, resolved in code.
+LATEST = "latest"
+# The words for that in the student's own turn, in the three languages. A cancel of "latest" is trusted only
+# when the student's own words this turn say it; when only data says it, it is data. Source: docs/decisions.md.
+LATEST_WORDS = re.compile(r"\b(?:latest|last|most recent|newest|[úu]ltim[oa]|recente)\b|最近|最后|上一笔|刚才")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -3447,7 +3569,7 @@ The imports come from the contracts and from nothing that belongs to a particula
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
-ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
 # The channel kinds a document request can name. Source: DOCUMENT_CHANNELS in rails/sim/rules.py.
@@ -3477,6 +3599,8 @@ ROLE_WORDS: dict[str, list[str]] = {
 TRUE_WORDS = frozenset({"true", "yes", "y", "on", "1", "sim", "是", "对"})
 # How a list of senders written as one string is split.
 SENDER_SPLIT = re.compile(r"\s*(?:,|;|/|、|，|和|&|\band\b|\be\b)\s*")
+# The note the tick writes once for each student and each month that has ended.
+MONTHLY_NOTE = "monthly_note"
 # The note a restart writes for a plan update the plan given on start can no longer hold.
 PLAN_UPDATE_SKIPPED = "plan_update_skipped"
 # What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
@@ -3564,6 +3688,21 @@ TOOLS = [
         [],
     ),
     _tool(
+        "monthly_summary",
+        "Summarise the student's ledger for a calendar month written YYYY-MM, or the current month: transfers "
+        "sent with their totals and fees, standing runs, anything failed, returned or cancelled, and refusals.",
+        {"month": TEXT},
+        [],
+    ),
+    _tool(
+        "cancel_transfer",
+        "Cancel one of the student's own transfers that is still pending, by receipt id, or by the word latest for "
+        "their most recent transfer. Nothing changes until the student confirms it, and a transfer that has moved "
+        "on cannot be cancelled.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
+    _tool(
         "cash_cap_status",
         "Report what is left of the overseas cash withdrawal cap on the student's Chinese bank cards, this "
         "calendar year and today, from the cards on file.",
@@ -3614,6 +3753,8 @@ TOOL_ACTIONS = {
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
     "cash_cap_status": ActionType.PRECHECK,
     "update_plan": ActionType.UPDATE_PLAN,
+    "cancel_transfer": ActionType.CANCEL_TRANSFER,
+    "monthly_summary": ActionType.MONTHLY_SUMMARY,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -3625,6 +3766,7 @@ REQUIRED_ARGUMENTS = {
     "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
+    "cancel_transfer": ("receipt_id",),
 }
 ```
 
@@ -3651,11 +3793,17 @@ TEXTS = {
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
+        "no_route_refused": "No route is available for this transfer right now, so nothing was sent. The rail said: {reason}",
         "too_many_steps": "I stopped before finishing. Please ask again.",
         "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
         "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
+        "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
+        "no_receipt_to_cancel": "You have no transfer of your own that Lifeline could cancel.",
+        "cancelled": "Done. Transfer {receipt_id} was cancelled and returned. It still counts toward today's limit.",
+        "cancel_not_supported": "Transfer {receipt_id} could not be cancelled: {reason}",
+        "cancel_failed": "Lifeline could not cancel transfer {receipt_id}: {reason}",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
         "payee_exists": "{payee} is already a payee, so nothing changed.",
         "frozen": "Done. Card {instrument} is frozen.",
@@ -3729,11 +3877,17 @@ TEXTS = {
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
+        "no_route_refused": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado. A via disse: {reason}",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
         "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
         "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
+        "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
+        "no_receipt_to_cancel": "Você não tem nenhuma transferência sua que o Lifeline possa cancelar.",
+        "cancelled": "Pronto. A transferência {receipt_id} foi cancelada e devolvida. Ela ainda conta para o limite de hoje.",
+        "cancel_not_supported": "A transferência {receipt_id} não pôde ser cancelada: {reason}",
+        "cancel_failed": "O Lifeline não conseguiu cancelar a transferência {receipt_id}: {reason}",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
         "payee_exists": "{payee} já é um destinatário, então nada mudou.",
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
@@ -3807,11 +3961,17 @@ TEXTS = {
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
+        "no_route_refused": "目前没有可用于这笔转账的路线，因此没有发送任何资金。支付通道的说明：{reason}",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
         "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
         "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
+        "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
+        "no_receipt_to_cancel": "你没有任何可以由 Lifeline 取消的本人转账。",
+        "cancelled": "已完成。转账 {receipt_id} 已取消并退回。它仍计入今天的限额。",
+        "cancel_not_supported": "转账 {receipt_id} 无法取消：{reason}",
+        "cancel_failed": "Lifeline 无法取消转账 {receipt_id}：{reason}",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
         "payee_exists": "{payee} 已经是收款人，因此没有任何更改。",
         "frozen": "已完成。卡片 {instrument} 已冻结。",
@@ -3910,7 +4070,7 @@ class _Details:
     def add(self, text: str, source: Source) -> None:
         # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
         # detail on one side of the comparison only.
-        text = _visible(text)
+        text = DASHES.sub("-", _visible(text))
         self.texts.append((text.casefold(), source))
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
@@ -3975,6 +4135,8 @@ class _Trail:
     from_data: _Details = field(default_factory=_Details)
     # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
     notices: list[str] = field(default_factory=list)
+    # What the student typed in this turn, read as the provenance check reads it.
+    said: str = ""
 
 
 @dataclass
@@ -4128,7 +4290,7 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
 def _skeleton(payee: str) -> str:
     """A payee id as the provenance check compares it: compatibility forms folded, invisible
     characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
-    return _visible(payee).strip().casefold()
+    return DASHES.sub("-", _visible(payee)).strip().casefold()
 
 
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
@@ -4139,6 +4301,16 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
+    receipt = _skeleton(action.receipt_id or "")
+    if receipt and receipt not in trail.from_user.payee_ids:
+        # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
+        # as a whole word anywhere in the data.
+        word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
+        source = trail.from_data.payee_ids.get(receipt) or next(
+            (source for text, source in trail.from_data.texts if word.search(text)), None
+        )
+        if source is not None:
+            untrusted["receipt_id"] = source
     return untrusted
 ```
 
@@ -4204,6 +4376,8 @@ class AgentLoop:
         self._standing_cancelled: set[tuple[str, str, str]] = set()
         self._standing_attempted: set[tuple[str, str, str]] = set()
         self._standing_skipped: set[tuple[str, str, str]] = set()
+        # The months a monthly note was already written for, per student, rebuilt from the ledger.
+        self._monthly_noted: set[tuple[str, str]] = set()
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -4274,6 +4448,11 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
         else:
             source = Source.PASTED_TEXT if message.source is Source.USER_TURN else message.source
             student = message.model_copy(update={"role": Role.USER, "source": source})
+        # The memory keeps the language the loop answered in, so a note written later, with no turn to
+        # detect it from, is in the student's language. Source: docs/decisions.md, 8 October 2026.
+        student = student.model_copy(update={"lang": lang})
+        if _from_student(student):
+            trail.said = DASHES.sub("-", _visible(student.text)).casefold()
         turn_messages = [_remembered(student)] + ([_remembered(pasted)] if pasted is not None else [])
         history = self._conversations.get(user_id, [])
         for earlier in [*history, *turn_messages]:
@@ -4370,6 +4549,17 @@ A conversation turn takes the next turn number and starts a trail. The student's
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
+        if latest:
+            # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
+            fields.pop("receipt_id", None)
+            resolved = self._latest_receipt(user_id)
+            if resolved is not None:
+                fields["receipt_id"] = resolved
+        if action_type is ActionType.CANCEL_TRANSFER:
+            # The loop names the student's own transfer behind the receipt, never the model; None when the
+            # student's ledger holds no such receipt, which the engine refuses.
+            fields["cancel_of"] = self._own_transfer(user_id, str(fields.get("receipt_id", "")))[0]
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -4384,9 +4574,16 @@ A conversation turn takes the next turn number and starts a trail. The student's
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
+        checked = action.type in (
+            ActionType.TRANSFER,
+            ActionType.ADD_PAYEE,
+            ActionType.CREATE_STANDING_MANDATE,
+            ActionType.CANCEL_TRANSFER,
+        )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
+        elif latest:
+            untrusted = _untrusted_latest(trail)
         else:
             untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
@@ -4425,6 +4622,9 @@ A conversation turn takes the next turn number and starts a trail. The student's
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
+        if "summary" in result:
+            # The figures the student hears are the code's, from the ledger, never the model's.
+            trail.notices.append(render(result["summary"], lang))
         if action.type is ActionType.VERIFY_LEDGER:
             skipped = self._skipped_fields(user_id)
             if skipped:
@@ -4499,6 +4699,11 @@ When the source was changed, the engine refuses the action under R01, exactly as
             return self._ledger_report(user_id, action.requested_at)
         if action.type is ActionType.UPDATE_PLAN:
             return self._update_plan(user_id, action)
+        if action.type is ActionType.MONTHLY_SUMMARY:
+            month = str(arguments.get("month") or month_of(action.requested_at)).strip()
+            if not is_month(month):
+                return {"error": f"A month is written YYYY-MM, such as {month_of(action.requested_at)}."}
+            return {"summary": summarize(self._ledger.entries(), user_id, month)}
         return {"error": f"No runner for {action.type.value}."}
 ```
 
@@ -4517,7 +4722,10 @@ When the source was changed, the engine refuses the action under R01, exactly as
         token = decision.confirmation_token
         warning_key = decision.warning_key
         if not decision.allowed or not decision.requires_confirmation or not token or not warning_key:
-            return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
+            text = self._refusal(lang, decision)
+            if action.type is ActionType.CANCEL_TRANSFER and not action.receipt_id:
+                text = f"{_text(lang, 'no_receipt_to_cancel')} {text}"
+            return self._reply(trail, lang, text, decision=decision)
         pending = PendingConfirmation(
             user_id=user_id,
             action=action,
@@ -4565,6 +4773,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
                 notice=terms.notice_hours,
                 cancel=terms.cancel_window_hours,
             )
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text = _text(lang, "confirm_cancel", receipt_id=action.receipt_id)
         else:
             text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
         self._pending[token] = pending
@@ -4770,7 +4980,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
         )
         receipt = self._pay_on_route(user_id, trail, action, route, mandate.id, token)
         if isinstance(receipt, RailError):
-            return self._offer_next_route(lang, trail, token, pending)
+            return self._offer_next_route(lang, trail, token, pending, receipt)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -4844,13 +5054,16 @@ When no confirmation waits under the token for this student, and when a waiting 
         )
         self._history.setdefault(user_id, []).append(action)
         freeze: FreezeResult | None = None
+        cancel: CancelResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
         elif action.type is ActionType.CREATE_STANDING_MANDATE:
             text = self._create_standing(user_id, lang, trail, action, token)
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text, cancel = self._cancel(user_id, lang, trail, action)
         else:
             text, freeze = self._freeze(lang, trail, action)
-        return self._reply(trail, lang, text, decision=decision, freeze=freeze)
+        return self._reply(trail, lang, text, decision=decision, freeze=freeze, cancel=cancel)
 
     def _add_payee(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
@@ -5002,6 +5215,37 @@ When no confirmation waits under the token for this student, and when a waiting 
             self._anchor_if_due(user_id)
         return events
 
+    def _student_lang(self, user_id: str) -> str:
+        """The language of the student's latest turn in memory, English when there is none."""
+        for message in reversed(self._conversations.get(user_id, [])):
+            if _from_student(message):
+                return message.lang if message.lang in TEXTS else "en"
+        return "en"
+
+    def write_monthly_notes(self, now: datetime) -> list[dict[str, Any]]:
+        """On the first call in a new month, write each student's note for the month that ended.
+
+        The month is read from the time given, never the clock, so the tick and a test choose it. A note is
+        written once per student and month, survives a restart through the ledger, and calls no model.
+        Nothing is sent; the app shows the note. A student with no entry by that month gets none.
+        """
+        month = previous_month(month_of(now))
+        written: list[dict[str, Any]] = []
+        entries = self._ledger.entries()
+        for user_id, mandate in list(self._mandates.items()):
+            if (user_id, month) in self._monthly_noted:
+                continue
+            if not any(e.payload.get("user_id") == user_id and month_of(e.ts) <= month for e in entries):
+                continue
+            lang = self._student_lang(user_id)
+            summary = summarize(entries, user_id, month)
+            note = {"kind": MONTHLY_NOTE, "month": month, "lang": lang, "text": render(summary, lang), "summary": summary}
+            self._write(self._attempt_trail(user_id, mandate), "note", note)
+            self._monthly_noted.add((user_id, month))
+            written.append(note)
+            self._anchor_if_due(user_id)
+        return written
+
     def _run_standing(
         self, user_id: str, standing: StandingMandate, period: str, now: datetime, event: dict[str, Any]
     ) -> StandingEvent:
@@ -5030,7 +5274,8 @@ When no confirmation waits under the token for this student, and when a waiting 
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
-        if receipt is None:
+        if not isinstance(receipt, Receipt):
+            # Each rail's reason is in its rail error note, as for a transfer the student confirmed.
             return StandingEvent(kind="rail_failed", decision=decision, **event)
         return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
 ```
@@ -5043,21 +5288,26 @@ When no confirmation waits under the token for this student, and when a waiting 
     ) -> AgentReply:
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
+        if isinstance(receipt, RailError):
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(receipt)), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 
     def _pay(
         self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
-    ) -> Receipt | None:
+    ) -> Receipt | RailError | None:
+        """Pay on the cheapest route, then the next; the receipt, the last rail's error, or None with no route."""
         routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
         failed: set[str] = set()
+        last: RailError | None = None
         while (route := self._choose(routes, failed)) is not None:
             receipt = self._pay_on_route(user_id, trail, action, route, mandate_ref, token)
             if not isinstance(receipt, RailError):
                 return receipt
             failed.add(route.rail)
-        return None
+            last = receipt
+        return last
 
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
@@ -5183,7 +5433,7 @@ When no confirmation waits under the token for this student, and when a waiting 
 
 ```python
     def _offer_next_route(
-        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation
+        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
     ) -> AgentReply:
         action = pending.action
         failed = pending.selected_route
@@ -5194,7 +5444,9 @@ When no confirmation waits under the token for this student, and when a waiting 
         if selected is None:
             del self._pending[token]
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
-            return self._reply(trail, lang, _text(lang, "no_route"))
+            # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
+            # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(error)))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -5268,6 +5520,7 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         confirmation: ConfirmationRequest | None = None,
         receipt: Receipt | None = None,
         freeze: FreezeResult | None = None,
+        cancel: CancelResult | None = None,
     ) -> AgentReply:
         text = self._guarded(trail, text)
         return AgentReply(
@@ -5277,6 +5530,7 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
             decision=decision,
             receipt=receipt,
             freeze=freeze,
+            cancel=cancel,
             ledger_seqs=list(trail.seqs),
             provider=trail.provider,
             model=trail.model,
@@ -5352,6 +5606,8 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
             elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
                 key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
                 self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+            elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
+                self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
             elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
                 self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
             if entry.kind == "proposal" and "standing_run" in entry.payload:
@@ -6037,6 +6293,55 @@ In `_rebuild_from_ledger` an execution of `update_plan` with a result of `plan_u
 
 After every entry has been read, the rebuild writes one `plan_update_skipped` note for each skipped update not already noted, naming the fields and never the values, so the student's ledger says the plan is not what they last set and a later restart writes nothing more.
 
+### Cancelling a transfer, `core/agent.py`
+
+A cancel is a T2 action like a freeze, with one difference: the engine has to know the receipt belongs to the student, and it cannot see receipts. The loop tells it, from the ledger.
+
+```python
+    def _own_transfer(self, user_id: str, receipt_id: str) -> tuple[str | None, str | None]:
+        """The idempotency key and the rail of the student's own transfer behind a receipt, from the
+        student's own ledger receipt entries, or (None, None). A receipt sent to the student, which is
+        never written to the ledger, and another student's receipt are never found."""
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.kind != "receipt" or payload.get("user_id") != user_id:
+                continue
+            receipt = payload.get("receipt", {})
+            if receipt.get("receipt_id") == receipt_id:
+                return receipt.get("idempotency_key"), payload.get("rail")
+        return None, None
+```
+
+```python
+    def _cancel(self, user_id: str, lang: str, trail: _Trail, action: Action) -> tuple[str, CancelResult]:
+        receipt_id = action.receipt_id or ""
+        _, rail_name = self._own_transfer(user_id, receipt_id)
+        rail = self._rails.get(rail_name or "")
+        if rail is None:
+            result = CancelResult(status=CancelStatus.FAILED, reason=f"No rail holds receipt {receipt_id}.")
+        else:
+            result = rail.cancel(receipt_id)
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"cancel": result.model_dump(mode="json")}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "cancel_result",
+                "idempotency_key": action.idempotency_key,
+                "receipt_id": receipt_id,
+                "rail": rail_name,
+                "status": result.status.value,
+                "reason": result.reason,
+            },
+        )
+        if result.status is CancelStatus.DONE:
+            return _text(lang, "cancelled", receipt_id=receipt_id), result
+        name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
+        return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
+```
+
+`_own_transfer` reads the student's own `receipt` entries and returns the idempotency key of the transfer behind the receipt and the rail that issued it. A receipt sent to the student is seeded into its rail on every start and never written to the ledger, so it is never found, and neither is another student's. When the model passes the word `latest`, `_latest_receipt` first resolves it to the student's most recent receipt, and `_untrusted_latest` reads its provenance from the word in the student's own turn. `_run_tool` puts the key in `Action.cancel_of` before the proposal is written, whatever the model passed, and the engine refuses under R04 a cancel whose `cancel_of` is not an executed transfer in this student's history. After the student confirms, `_carry_out` calls `_cancel`, which asks the rail, writes the whole `CancelResult` in the execution entry and a `cancel_result` note, and says the outcome: done, or the rail's own reason when it would not or could not cancel.
+
 ### The rescue, `core/agent.py`
 
 The rescue's methods sit in `AgentLoop` beside everything else, because every effect of a rescue is an ordinary action of the loop. Its state lives in three places set up in `__init__`: `self._machine`, the `RescueMachine`; `self._rescues`, a `_Rescue` per student holding what the rescue knows beyond its state, its language, the ledger entry it began at, the card, the freeze result, how many identity answers were wrong, and whether it is locked; and `self._live`, the backup card a rescue moved the student onto. `_Outcome` gathers what one call writes to its reply, and `RESTING` names the three states where the machine waits for the student.
@@ -6658,6 +6963,125 @@ MAX_IDENTITY_ATTEMPTS = 3
 
 `_rebuild_rescue` is called for every ledger entry during `_rebuild_from_ledger`. It replays `rescue_started` and every `rescue_transition` through the same machine and the same table, so a rebuilt rescue can only be in a state the live one could reach. It counts the wrong answers again and restores the lock, so three wrong answers before a restart stay three after it. It restores the chosen card, closes the allowances a skip closed, and restores the freeze result and the live card from their executions.
 
+## The monthly note, `core/monthly.py`
+
+The monthly note reads ledger entries and nothing else, and calls no model.
+
+```python
+def month_of(moment: datetime) -> str:
+    """The calendar month of a moment, in UTC, written YYYY-MM."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m")
+```
+
+```python
+def previous_month(month: str) -> str:
+    year, number = (int(part) for part in month.split("-"))
+    return f"{year - 1}-12" if number == 1 else f"{year}-{number - 1:02d}"
+```
+
+`astimezone(timezone.utc)` puts a moment in UTC before `strftime("%Y-%m")` writes its month, so a time given in another zone is read as UTC. `previous_month` wraps January back to December of the year before.
+
+```python
+def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[str, Any]:
+    """Every figure of the note for one student and one month, each with the entries it came from."""
+    entries = list(entries)
+    # A transfer is counted as sent only when it was not cancelled, failed or returned, in any month, as a
+    # reply says money was sent only when it was; those are listed with their outcome instead.
+    # Source: the attacker brief of 8 October.
+    keys = {
+        entry.payload.get("receipt", {}).get("receipt_id"): entry.payload.get("receipt", {}).get("idempotency_key")
+        for entry in entries
+        if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+    }
+    not_sent = {
+        entry.payload["receipt"].get("idempotency_key")
+        for entry in entries
+        if entry.kind == "receipt"
+        and entry.payload.get("user_id") == user_id
+        and entry.payload.get("receipt", {}).get("status") in PROBLEM_STATUSES
+    } | {
+        keys.get(entry.payload.get("receipt_id"))
+        for entry in entries
+        if entry.kind == "note"
+        and entry.payload.get("user_id") == user_id
+        and entry.payload.get("kind") == "cancel_result"
+        and entry.payload.get("status") == "done"
+    }
+    # A transfer every rail refused at execution leaves a rail error note and no receipt; one that failed on
+    # one rail and was then paid on another has a receipt, and is not a problem. Source: the attacker brief.
+    receipted = {key for key in keys.values()}
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    standing: list[dict[str, Any]] = []
+    problems: list[dict[str, Any]] = []
+    refusals: list[int] = []
+    for entry in entries:
+        payload = entry.payload
+        if payload.get("user_id") != user_id or month_of(entry.ts) != month:
+            continue
+        action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+        if (
+            entry.kind == "execution"
+            and action.get("type") == "transfer"
+            and "route" in payload
+            and action.get("idempotency_key") not in not_sent
+        ):
+            key = (str(action.get("currency")), str(action.get("corridor")))
+            group = groups.setdefault(
+                key, {"currency": key[0], "corridor": key[1], "count": 0, "total": Decimal(0), "fees": Decimal(0), "seqs": []}
+            )
+            group["count"] += 1
+            group["total"] += _decimal(action.get("amount"))
+            group["fees"] += _decimal(payload["route"].get("fee"))
+            group["seqs"].append(entry.seq)
+            if payload.get("standing_mandate_id"):
+                standing.append({"standing_mandate_id": payload["standing_mandate_id"], "seq": entry.seq})
+        elif entry.kind == "receipt" and payload.get("receipt", {}).get("status") in PROBLEM_STATUSES:
+            receipt = payload["receipt"]
+            problems.append({"receipt_id": receipt.get("receipt_id"), "outcome": receipt["status"], "seq": entry.seq})
+        elif entry.kind == "note" and payload.get("kind") == "cancel_result" and payload.get("status") == "done":
+            problems.append({"receipt_id": payload.get("receipt_id"), "outcome": "cancelled", "seq": entry.seq})
+        elif (
+            entry.kind == "note"
+            and "rail_error" in payload
+            and payload.get("executed") is False
+            and payload.get("idempotency_key") not in receipted
+        ):
+            problems.append({"receipt_id": None, "rail": payload.get("rail"), "outcome": "refused_by_rail", "seq": entry.seq})
+        elif entry.kind == "decision" and not payload.get("decision", {}).get("allowed", True):
+            refusals.append(entry.seq)
+    transfers = [
+        {**group, "total": format(group["total"], "f"), "fees": format(group["fees"], "f")} for group in groups.values()
+    ]
+    return {
+        "month": month,
+        "transfers": transfers,
+        "standing_runs": standing,
+        "problems": problems,
+        "refusals": {"count": len(refusals), "seqs": refusals},
+    }
+```
+
+`summarize` walks the entries once and keeps only the student's, in the month. It first gathers the idempotency keys of every transfer the student's ledger shows cancelled, failed or returned, in any month, because a note says a transfer was sent only when it was. Every other transfer execution, one with a route, adds to the group for its currency and corridor, with its amount and the fee its route recorded, and its sequence goes into the group's `seqs`, so every figure can be checked against the entry it came from. `setdefault` creates a group the first time a key is seen. A receipt that failed or was returned, a cancel the rail carried out, a transfer every rail refused at execution, which left a rail error note and no receipt, and a refused decision are listed with their sequences too. Totals are kept as `Decimal` and written with `format(..., "f")`, so no amount is rounded through a float.
+
+```python
+def render(summary: dict[str, Any], lang: str) -> str:
+    """The note in the student's language, from the summary's figures and nothing else."""
+    texts = TEXTS.get(lang, TEXTS["en"])
+    transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
+    problems = ", ".join(
+        f"{item['receipt_id'] or item.get('rail')} {texts[item['outcome']]}" for item in summary["problems"]
+    ) or texts["none"]
+    return texts["note"].format(
+        month=summary["month"],
+        transfers=transfers,
+        standing=len(summary["standing_runs"]),
+        problems=problems,
+        refusals=summary["refusals"]["count"],
+    )
+```
+
+`render` builds the sentence from the summary's figures alone, in one of the three languages. `AgentLoop.write_monthly_notes` calls `summarize` and `render` for the month that ended, once per student, and `_run_tool` adds the rendered note to the reply when the student asks through `monthly_summary`.
+
 ## The evaluation harness, `core/harness.py`
 
 The harness turns the task and attack suites into evidence. For every entry it looks for a scenario, a scripted conversation in `suites/scenarios/<id>.yaml`. It plays each scenario through the real `AgentLoop` with the fake model adapter, router, and rails, judges the outcome, and writes `evidence/report.md`. Nothing in the report is typed by hand.
@@ -6677,7 +7101,18 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
+from contracts.schemas import (
+    AgentReply,
+    Mandate,
+    Message,
+    Plan,
+    ReceiptStatus,
+    RescueReply,
+    Role,
+    Source,
+    StandingEvent,
+    ToolCall,
+)
 from core.agent import ANCHOR_KIND, AgentLoop
 from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
@@ -6797,7 +7232,63 @@ def _plan(fixtures: dict[str, Any]) -> Plan:
     return Plan.model_validate({**demo, **fixtures.get("plan", {})})
 
 
-def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
+# A fixtures.user block may name a fixture file in fixtures/ by its plain name, such as demo_parent.
+FIXTURE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+
+
+@dataclass
+class _Who:
+    """Who a run is: the user id, their mandate, balances, plan, and Chinese cards."""
+
+    user_id: str
+    mandate: Mandate
+    balances: dict[str, Decimal]
+    plan: Plan
+    chinese_cards: list[dict[str, Any]]
+
+
+def _who(fixtures: dict[str, Any]) -> _Who:
+    """The demo student, or the user a scenario's fixtures.user names, written inline or by fixture file.
+
+    A user block holds a user id, a mandate with its own currency, limits, payees, corridors and purposes,
+    balances and a plan. A scenario's mandate and plan still replace the block's key by key.
+    """
+    block = fixtures.get("user")
+    if block is None:
+        balances = fixtures.get("balances", FIXTURE_BALANCES)
+        cards = fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")
+        return _Who(
+            USER,
+            _mandate(fixtures.get("mandate", {})),
+            {currency: Decimal(amount) for currency, amount in balances.items()},
+            _plan(fixtures),
+            cards or [],
+        )
+    if "fixture" in block:
+        name = str(block["fixture"])
+        if not FIXTURE_NAME.fullmatch(name):
+            raise ValueError(f"fixtures.user names fixture {name!r}, which is not a plain fixture name")
+        block = {**load_suite(ROOT / "fixtures" / f"{name}.yaml"), **{k: v for k, v in block.items() if k != "fixture"}}
+    now = datetime.now(timezone.utc)
+    mandate = Mandate.model_validate(
+        {
+            "user_id": block["user_id"],
+            "valid_from": now - FIXTURE_VALIDITY,
+            "valid_until": now + FIXTURE_VALIDITY,
+            **block["mandate"],
+            **fixtures.get("mandate", {}),
+        }
+    )
+    return _Who(
+        block["user_id"],
+        mandate,
+        {currency: Decimal(str(amount)) for currency, amount in fixtures.get("balances", block["balances"]).items()},
+        Plan.model_validate({**block["plan"], **fixtures.get("plan", {})}),
+        fixtures.get("chinese_cards", block.get("chinese_cards")) or [],
+    )
+
+
+def _fail_once_keys(entries: list[dict[str, Any]], user_id: str = USER) -> dict[str, set[str]]:
     """Build, per rail, the idempotency keys the loop will use for the proposals that must fail once.
 
     The loop's key is the student, the letter t and the turn number, the tool, and the call number
@@ -6806,23 +7297,25 @@ def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
     """
     keys: dict[str, set[str]] = {}
     for entry in entries:
-        key = entry.get("key") or f"{USER}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
+        key = entry.get("key") or f"{user_id}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
         keys.setdefault(entry["rail"], set()).add(key)
     return keys
 
 
-def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
+def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
     names = fixtures.get("rails", list(FIXTURE_RAILS))
     unknown = [name for name in names if name not in FIXTURE_RAILS]
     if unknown:
         raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
     traces = scripted_traces(fixtures.get("traces"))
-    failing = _fail_once_keys(fixtures.get("fail_once", []))
+    failing = _fail_once_keys(fixtures.get("fail_once", []), user_id)
     scripts = fixtures.get("rail_scripts", {})
-    stray = sorted({*traces, *failing, *scripts} - set(names))
+    # Fixture: the status each fake rail issues receipts at, completed unless the scenario chooses one.
+    statuses = {name: ReceiptStatus(status) for name, status in (fixtures.get("receipt_status") or {}).items()}
+    stray = sorted({*traces, *failing, *scripts, *statuses} - set(names))
     if stray:
-        raise ValueError(f"traces, fail_once or rail_scripts name rails {stray}, which this scenario does not build")
-    scripted_fakes = sorted({*traces, *failing} & set(SIM_RAILS))
+        raise ValueError(f"traces, fail_once, rail_scripts or receipt_status name rails {stray}, which this scenario does not build")
+    scripted_fakes = sorted({*traces, *failing, *statuses} & set(SIM_RAILS))
     if scripted_fakes:
         raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
@@ -6847,7 +7340,7 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
 
 ```python
 def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
-    """The council a scenario asks for, with one scripted reply per voice.
+    """The council a scenario asks for, with one scripted reply per voice for each deliberation.
 
     Without `fixtures.council` the loop is built with no council at all, which is how every
     scenario written before the council ran and still runs.
@@ -6855,10 +7348,12 @@ def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
     scripted = fixtures.get("council")
     if scripted is None:
         return None
-    if len(scripted) != len(VOICES):
+    # One reply for each voice, in the order of VOICES, for each deliberation the run convenes, consumed in
+    # order: a run whose rent and allowance both escalate scripts ten.
+    if not scripted or len(scripted) % len(VOICES):
         raise ValueError(
             f"council scripts {len(scripted)} voices, and it needs one for each of "
-            f"{', '.join(VOICES)}"
+            f"{', '.join(VOICES)} in every deliberation"
         )
     return FiveVoiceCouncil(FakeModelAdapter(scripted))
 ```
@@ -6883,6 +7378,8 @@ def reply_kind(reply: AgentReply) -> str:
         return "receipt"
     if reply.freeze is not None:
         return "freeze"
+    if reply.cancel is not None:
+        return "cancel"
     if reply.confirmation is not None:
         return "confirmation"
     if reply.decision is not None and not reply.decision.allowed:
@@ -7041,9 +7538,10 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
         # A run's own fixtures replace the scenario's key by key, so two runs of one entry can
         # differ in what they are given, such as a council that splits its vote differently.
         fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
-        balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
-        mandates = {USER: _mandate(fixtures.get("mandate", {}))}
-        rails = _rails(fixtures)
+        who = _who(fixtures)
+        user = who.user_id
+        mandates = {user: who.mandate}
+        rails = _rails(fixtures, user)
         inbound = seed_inbound(rails, inbound_from_fixture(fixtures.get("inbound_receipts"), rails))
         loop = AgentLoop(
             adapter=adapter,
@@ -7052,21 +7550,19 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             router=FakeRouter(),
             rails=rails,
             mandates=mandates,
-            balances={USER: balances},
+            balances={user: who.balances},
             pending={},
             council=_council(fixtures),
-            plans={USER: _plan(fixtures)},
-            inbound_receipts={USER: inbound},
+            plans={user: who.plan},
+            inbound_receipts={user: inbound},
             anchor=LocalSignedAnchor(anchors_path),
             # A scenario's own Chinese cards replace the demo fixture's, which are a fixture too.
-            chinese_cards={
-                USER: (fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")) or []
-            },
+            chinese_cards={user: who.chinese_cards},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
             if "run_due" in turn:
-                events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
+                events = loop.run_due_standing_mandates(_run_due_time(mandates[user], turn["run_due"]))
                 result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
                 continue
             if "tamper" in turn:
@@ -7079,9 +7575,9 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
                 if turn["rescue"] not in RESCUE_TURNS:
                     raise ValueError(f"rescue must be start or step, not {turn['rescue']!r}")
                 if turn["rescue"] == "start":
-                    reply = loop.rescue_start(USER, turn["trigger"], message)
+                    reply = loop.rescue_start(user, turn["trigger"], message)
                 else:
-                    reply = loop.rescue_step(USER, message, confirmation_token=token)
+                    reply = loop.rescue_step(user, message, confirmation_token=token)
                 replies.append(reply)
                 result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
                 continue
@@ -7092,7 +7588,7 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             )
             token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
             before = len(adapter.calls)
-            reply = loop.handle(USER, message, confirmation_token=token, pasted=pasted)
+            reply = loop.handle(user, message, confirmation_token=token, pasted=pasted)
             replies.append(reply)
             result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
             result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))
@@ -7328,6 +7824,8 @@ from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
+# A parent in India, loaded beside the demo student when the file exists, so the app can show both sides.
+DEMO_PARENT = ROOT / "fixtures" / "demo_parent.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
 CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
 # The anchors are kept beside the ledger they anchor, so data/anchors.jsonl for data/ledger.jsonl.
@@ -7509,8 +8007,10 @@ def create_app(
     council: Council | None = None,
     sim_rails: bool | None = None,
     anchor: Anchor | None = None,
+    parent_fixture_path: Path | None = DEMO_PARENT,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
+    parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
     ledger_path = ledger_path or LEDGER_PATH
     ledger = JsonlLedger(ledger_path)
@@ -7529,6 +8029,8 @@ def create_app(
         key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
     }}
     _restore_rails(rails, ledger)
+    # The demo student first, then the parent when its fixture exists.
+    people = [fixture, *([parent] if parent is not None else [])]
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))
     loop = AgentLoop(
@@ -7537,23 +8039,29 @@ def create_app(
         ledger=ledger,
         router=FakeRouter(),
         rails=rails,
-        mandates={user_id: _demo_mandate(fixture, ledger)},
-        balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
+        mandates={person["user_id"]: _demo_mandate(person, ledger) for person in people},
+        balances={
+            person["user_id"]: {currency: Decimal(amount) for currency, amount in person["balances"].items()}
+            for person in people
+        },
         pending={},
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
         council=council if council is not None else council_for(),
-        plans={user_id: Plan.model_validate(fixture["plan"])},
+        plans={person["user_id"]: Plan.model_validate(person["plan"]) for person in people},
         inbound_receipts={user_id: inbound},
         anchor=anchor,
         chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
-    users = {user_id}
+    users = {person["user_id"] for person in people}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
     lock = threading.Lock()
 
     def run_due(now: datetime) -> list[StandingEvent]:
         with lock:
-            return [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+            events = [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+            # The first tick in a new month writes each student's note for the month that ended, once.
+            loop.write_monthly_notes(now)
+            return events
 
     async def tick() -> None:
         while True:
@@ -8537,8 +9045,86 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_reply_guard.py` | `test_a_rescue_reply_is_guarded_too` | A rescue reply is guarded too |
 | `test_walkthrough.py` | `test_the_walkthrough_covers_stage_8a` | The walkthrough covers stage 8a |
 | `test_walkthrough.py` | `test_every_yaml_excerpt_under_a_yaml_heading_is_copied_exactly` | Every yaml excerpt under a yaml heading is copied exactly |
+| `test_walkthrough.py` | `test_the_walkthrough_covers_stage_8b` | The walkthrough covers stage 8b |
+| `test_api.py` | `test_a_done_cancel_survives_a_restart_of_the_api` | A done cancel survives a restart of the api |
+| `test_api.py` | `test_the_scheduler_writes_the_monthly_note_once_on_the_first_run_in_a_new_month` | The scheduler writes the monthly note once on the first run in a new month |
+| `test_api.py` | `test_the_api_loads_the_demo_parent_beside_the_demo_student` | The api loads the demo parent beside the demo student |
+| `test_api.py` | `test_the_api_runs_without_a_parent_fixture` | The api runs without a parent fixture |
+| `test_cancel.py` | `test_cancel_result_has_the_shape_and_outcomes_of_freeze_result` | Cancel result has the shape and outcomes of freeze result |
+| `test_cancel.py` | `test_rail_declares_cancel` | Rail declares cancel |
+| `test_cancel.py` | `test_cancel_transfer_is_t2_with_its_own_warning` | Cancel transfer is t2 with its own warning |
+| `test_cancel.py` | `test_agent_reply_carries_an_optional_cancel_result` | Agent reply carries an optional cancel result |
+| `test_cancel.py` | `test_the_engine_allows_a_cancel_of_the_students_own_executed_transfer_with_confirmation` | The engine allows a cancel of the students own executed transfer with confirmation |
+| `test_cancel.py` | `test_the_engine_refuses_a_cancel_of_anything_not_in_the_students_history_under_r04` | The engine refuses a cancel of anything not in the students history under r04 |
+| `test_cancel.py` | `test_the_engine_refuses_a_cancel_with_no_receipt` | The engine refuses a cancel with no receipt |
+| `test_cancel.py` | `test_a_cancel_from_pasted_text_is_refused_under_r01` | A cancel from pasted text is refused under r01 |
+| `test_cancel.py` | `test_the_token_binds_the_receipt_and_leaves_every_other_token_unchanged` | The token binds the receipt and leaves every other token unchanged |
+| `test_cancel.py` | `test_the_fake_rail_cancels_a_created_or_funded_receipt_and_returns_it` | The fake rail cancels a created or funded receipt and returns it |
+| `test_cancel.py` | `test_the_fake_rail_will_not_cancel_once_a_transfer_has_moved_on` | The fake rail will not cancel once a transfer has moved on |
+| `test_cancel.py` | `test_the_fake_rail_fails_to_cancel_a_receipt_it_never_issued` | The fake rail fails to cancel a receipt it never issued |
+| `test_cancel.py` | `test_the_fake_rail_still_issues_completed_receipts_by_default` | The fake rail still issues completed receipts by default |
+| `test_cancel.py` | `test_sim_pix_never_cancels_and_cites_the_real_time_entry` | Sim pix never cancels and cites the real time entry |
+| `test_cancel.py` | `test_upi_paynow_cancels_while_created_and_not_once_completed` | Upi paynow cancels while created and not once completed |
+| `test_cancel.py` | `test_a_cancelled_upi_transfer_still_counts_toward_the_day_cap` | A cancelled upi transfer still counts toward the day cap |
+| `test_cancel.py` | `test_the_china_rail_cancels_before_in_transit_and_names_the_stage_after` | The china rail cancels before in transit and names the stage after |
+| `test_cancel.py` | `test_a_created_receipt_is_cancelled_through_the_t2_round_trip` | A created receipt is cancelled through the t2 round trip |
+| `test_cancel.py` | `test_an_in_transit_receipt_is_not_cancelled_and_the_reply_says_why` | An in transit receipt is not cancelled and the reply says why |
+| `test_cancel.py` | `test_a_cancelled_transfer_keeps_its_share_of_the_daily_limit` | A cancelled transfer keeps its share of the daily limit |
+| `test_cancel.py` | `test_another_students_receipt_cannot_be_cancelled` | Another students receipt cannot be cancelled |
+| `test_cancel.py` | `test_a_seeded_inbound_receipt_cannot_be_cancelled` | A seeded inbound receipt cannot be cancelled |
+| `test_cancel.py` | `test_a_receipt_id_that_only_a_paste_names_is_refused_under_r01` | A receipt id that only a paste names is refused under r01 |
+| `test_cancel.py` | `test_the_model_cannot_supply_its_own_cancel_of` | The model cannot supply its own cancel of |
+| `test_cancel.py` | `test_a_waiting_cancel_survives_a_restart` | A waiting cancel survives a restart |
+| `test_cancel.py` | `test_the_cancel_result_note_names_the_receipt_and_never_the_token` | The cancel result note names the receipt and never the token |
+| `test_harness.py` | `test_a_scenario_chooses_the_status_a_fake_rail_issues_receipts_at` | A scenario chooses the status a fake rail issues receipts at |
+| `test_harness.py` | `test_a_receipt_status_for_a_rail_the_scenario_does_not_build_is_refused` | A receipt status for a rail the scenario does not build is refused |
+| `test_harness.py` | `test_a_reply_carrying_a_cancel_result_is_of_kind_cancel` | A reply carrying a cancel result is of kind cancel |
+| `test_harness.py` | `test_a_council_fixture_may_script_several_deliberations_five_replies_each` | A council fixture may script several deliberations five replies each |
+| `test_monthly.py` | `test_months_are_utc_and_the_previous_month_wraps_the_year` | Months are utc and the previous month wraps the year |
+| `test_monthly.py` | `test_a_paid_transfer_is_summed_per_currency_and_corridor_with_its_fee_and_its_entry` | A paid transfer is summed per currency and corridor with its fee and its entry |
+| `test_monthly.py` | `test_another_month_and_another_student_are_left_out` | Another month and another student are left out |
+| `test_monthly.py` | `test_refusals_are_counted_with_their_entries` | Refusals are counted with their entries |
+| `test_monthly.py` | `test_a_cancelled_and_a_failed_or_returned_transfer_are_listed_with_their_entries` | A cancelled and a failed or returned transfer are listed with their entries |
+| `test_monthly.py` | `test_a_returned_receipt_is_listed_and_a_not_supported_cancel_is_not` | A returned receipt is listed and a not supported cancel is not |
+| `test_monthly.py` | `test_a_standing_run_is_listed_with_its_entry` | A standing run is listed with its entry |
+| `test_monthly.py` | `test_the_note_is_written_in_the_students_language` | The note is written in the students language |
+| `test_monthly.py` | `test_an_empty_month_says_no_transfers_were_sent` | An empty month says no transfers were sent |
+| `test_monthly.py` | `test_monthly_summary_is_a_t0_action` | Monthly summary is a t0 action |
+| `test_monthly.py` | `test_the_tool_runs_as_proposal_decision_execution_and_the_reply_carries_the_codes_figures` | The tool runs as proposal decision execution and the reply carries the codes figures |
+| `test_monthly.py` | `test_the_tool_takes_the_month_the_student_names` | The tool takes the month the student names |
+| `test_monthly.py` | `test_a_month_that_is_not_a_month_is_an_error_and_no_figures` | A month that is not a month is an error and no figures |
+| `test_monthly.py` | `test_the_first_tick_in_a_new_month_writes_the_note_for_the_month_that_ended_once` | The first tick in a new month writes the note for the month that ended once |
+| `test_monthly.py` | `test_a_tick_still_inside_the_month_writes_nothing_for_it` | A tick still inside the month writes nothing for it |
+| `test_monthly.py` | `test_a_restart_never_writes_the_note_for_the_same_month_twice` | A restart never writes the note for the same month twice |
+| `test_monthly.py` | `test_the_tick_writes_in_the_language_of_the_students_latest_turn` | The tick writes in the language of the students latest turn |
+| `test_monthly.py` | `test_the_tick_calls_no_model` | The tick calls no model |
+| `test_parent.py` | `test_the_parent_fixture_is_marked_and_valid` | The parent fixture is marked and valid |
+| `test_parent.py` | `test_the_parent_sends_only_to_the_student_on_in_sg_for_the_rbis_purposes` | The parent sends only to the student on in sg for the rbis purposes |
+| `test_parent.py` | `test_a_scenario_runs_as_the_parent_named_by_fixtures_user` | A scenario runs as the parent named by fixtures user |
+| `test_parent.py` | `test_a_user_block_can_be_written_inline` | A user block can be written inline |
+| `test_parent.py` | `test_the_parent_cannot_pay_the_landlord_of_the_demo_student` | The parent cannot pay the landlord of the demo student |
+| `test_parent.py` | `test_a_second_transfer_the_same_day_over_the_cap_is_refused_by_the_rail_and_the_reply_names_the_cap` | A second transfer the same day over the cap is refused by the rail and the reply names the cap |
+| `test_parent.py` | `test_without_fixtures_user_the_demo_student_is_still_the_user` | Without fixtures user the demo student is still the user |
+| `test_parent.py` | `test_every_existing_scenario_still_passes` | Every existing scenario still passes |
+| `test_parent.py` | `test_the_ledger_shows_the_whole_truth_of_the_refused_second_transfer` | The ledger shows the whole truth of the refused second transfer |
+| `test_attack_four.py` | `test_a_transfer_the_rail_refused_at_the_cap_appears_in_the_monthly_note` | A transfer the rail refused at the cap appears in the monthly note |
+| `test_attack_four.py` | `test_a_rail_failure_followed_by_a_payment_on_another_route_is_not_listed` | A rail failure followed by a payment on another route is not listed |
+| `test_attack_four.py` | `test_the_note_names_the_rail_that_refused` | The note names the rail that refused |
+| `test_attack_three.py` | `test_control_a_plain_receipt_id_in_a_paste_is_refused_under_r01` | Control a plain receipt id in a paste is refused under r01 |
+| `test_attack_three.py` | `test_a_receipt_id_only_a_paste_names_is_refused_under_r01_whatever_its_hyphen_or_suffix` | A receipt id only a paste names is refused under r01 whatever its hyphen or suffix |
+| `test_attack_three.py` | `test_the_monthly_summary_never_reports_an_empty_month_for_a_month_spelled_in_other_digits` | The monthly summary never reports an empty month for a month spelled in other digits |
+| `test_attack_three.py` | `test_a_cancelled_transfer_is_not_reported_as_sent_in_the_monthly_note` | A cancelled transfer is not reported as sent in the monthly note |
+| `test_attack_three.py` | `test_a_standing_run_that_was_cancelled_is_not_counted_as_run_or_sent` | A standing run that was cancelled is not counted as run or sent |
+| `test_agent.py` | `test_a_scheduled_standing_run_the_rail_refuses_records_the_rails_reason_in_its_ledger_note` | A scheduled standing run the rail refuses records the rails reason in its ledger note |
+| `test_agent.py` | `test_a_standing_run_paid_from_chat_that_the_rail_refuses_gives_the_rails_reason` | A standing run paid from chat that the rail refuses gives the rails reason |
+| `test_cancel.py` | `test_latest_resolves_to_the_students_most_recent_receipt_before_the_proposal` | Latest resolves to the students most recent receipt before the proposal |
+| `test_cancel.py` | `test_latest_is_read_in_any_case` | Latest is read in any case |
+| `test_cancel.py` | `test_latest_from_a_paste_is_data_and_refused_under_r01` | Latest from a paste is data and refused under r01 |
+| `test_cancel.py` | `test_latest_from_a_tool_result_is_data_and_refused_under_r01` | Latest from a tool result is data and refused under r01 |
+| `test_cancel.py` | `test_latest_with_no_receipt_gets_the_honest_reply` | Latest with no receipt gets the honest reply |
+| `test_cancel.py` | `test_latest_never_reaches_another_students_receipt` | Latest never reaches another students receipt |
 
-In all, 88 parametrized tests add 240 extra runs, which is how 738 test functions become 978 tests.
+In all, 96 parametrized tests add 258 extra runs, which is how 816 test functions become 1074 tests.
 
 ## The Stage 8a tests
 
@@ -8687,6 +9273,68 @@ def test_a_plan_change_that_only_a_pasted_message_asked_for_is_not_applied():
 
 A pasted message tells the model to change the backup card and the wallet flag, and the scripted model does. Before the fix the loop stamped every plan update as the student's own turn, so the change applied. Now `_untrusted_plan_update` finds `revolut:card_02` only in the paste, the engine refuses the update under R01, and the plan is unchanged. The other tests cover free text in the cash plan, a restart with an old backup, the rebuild applying only the four fields, the cash warning when two cards together could reach the cap, and impossible fixture figures.
 
+## The Stage 8b tests
+
+Three test files arrived with the second half of Stage 8, each written before its code and seen to fail first.
+
+### The cancel tests, `tests/test_cancel.py`
+
+```python
+def test_a_seeded_inbound_receipt_cannot_be_cancelled():
+    rails = _rails()
+    rails["cn_bank_remit_sim"] = CnBankRemitSimRail()
+    from rails.inbound import inbound_from_fixture
+
+    inbound = inbound_from_fixture(
+        {"cn_bank_remit_sim": [{"receipt_id": "cn_bank_remit_sim-in-0001", "amount": "20000", "currency": "CNY",
+                                "corridor": "CN>SG", "status": "created", "sender": "parent", "sent_hours_ago": 1}]},
+        rails,
+    )
+    where = seed_inbound(rails, inbound)
+    s = _setup([], rails=rails)
+    s.loop._receipt_rails[USER] = dict(where)
+
+    reply = _cancel(s, "cn_bank_remit_sim-in-0001")
+
+    assert reply.confirmation is None
+    assert reply.decision.rule_ids == ["R04"]
+    assert s.loop._rails["cn_bank_remit_sim"].status("cn_bank_remit_sim-in-0001").status is not ReceiptStatus.RETURNED
+```
+
+The test seeds a parent's transfer into the China rail, exactly as the API does on start, and tells the loop which rail holds it, so the student could trace it. The model then proposes to cancel it. The ledger holds no receipt entry for it, so the loop leaves `cancel_of` empty, the engine refuses under R04, no confirmation is offered, and the rail's trace is not returned. The file also covers the contract, the engine, every rail's answer, the round trip for a created and an in transit receipt, another student's receipt, a paste, and a restart.
+
+### The monthly note tests, `tests/test_monthly.py`
+
+```python
+def test_a_restart_never_writes_the_note_for_the_same_month_twice():
+    ledger = HashChainLedger()
+    _rent_paid(ledger=ledger)
+    tick = _first_of_next_month(_month_now())
+
+    _loop(ledger).write_monthly_notes(tick)
+    _loop(ledger).write_monthly_notes(tick + timedelta(hours=1))
+
+    assert len(_monthly_notes(ledger)) == 1
+```
+
+The test pays rent, then builds two loops over the same ledger, one after the other, as a restart does, and gives each a time in the next month. The first writes the note; the second finds it while rebuilding from the ledger and writes nothing. `_first_of_next_month` computes the month from the clock only to place the injected time; the loop itself reads the month only from the time it is given.
+
+### The parent tests, `tests/test_parent.py`
+
+```python
+def test_the_parent_sends_only_to_the_student_on_in_sg_for_the_rbis_purposes():
+    mandate = PARENT["mandate"]
+    entries = load_knowledge()
+
+    assert mandate["currency"] == "INR"
+    assert mandate["allowed_payees"] == ["student_001"]
+    assert mandate["allowed_corridors"] == ["IN>SG"]
+    assert mandate["allowed_purposes"] == entries[UPI_PURPOSE_ENTRY]["values"]["purposes"]
+    assert Decimal(mandate["per_txn_limit"]) < Decimal(str(entries[UPI_CAP_ENTRY]["values"]["daily_cap"]))
+```
+
+The test reads the fixture and the two UPI to PayNow entries and checks that the parent's purposes are the entry's own list and that the per transaction limit is under the entry's cap, so the fixture cannot drift from its sources. The file also runs scenarios as the parent and checks the ledger of a second transfer refused by the rail.
+
 ## The suites and their scenarios
 
 The suites are YAML, a text format for structured data. A line starting with `- ` begins a new item in a list, `key: value` sets a field, and `[A, B]` is an inline list.
@@ -8715,7 +9363,7 @@ def load(path):
 
 `with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, numbers, and dates, and never creates arbitrary Python objects from the file.
 
-A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Fifty four entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
+A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Fifty eight entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
 
 ```yaml
 id: X17
@@ -8804,6 +9452,47 @@ fixtures:
 
 `fixtures.plan` replaces the demo plan key by key, so this student has two cards, no backup and no phone wallet. `null` is YAML's word for nothing, which Python reads as `None`.
 
+## The Stage 8b scenarios
+
+### T26, `suites/scenarios/T26.yaml`
+
+```yaml
+  - lang: en
+    fixtures:
+      receipt_status: {wise: created}
+```
+
+`fixtures.receipt_status` makes the fake Wise rail issue receipts at `created`, so the rent is still pending when the student asks to cancel it. The second run issues it `in_transit` instead.
+
+### T35, `suites/scenarios/T35.yaml`
+
+```yaml
+expected:
+  reply: answer
+  ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, execution]
+```
+
+The ledger kinds show the rent's trail and then the summary's proposal, decision and execution, with no confirmation, because the summary is T0.
+
+### T18, `suites/scenarios/T18.yaml`
+
+```yaml
+fixtures:
+  user: {fixture: demo_parent}
+```
+
+`fixtures.user` names a fixture file by its plain name, so the run is the parent from `fixtures/demo_parent.yaml`, the same file the API loads.
+
+### T30, `suites/scenarios/T30.yaml`
+
+```yaml
+    expected:
+      ledger: [proposal, decision, execution, proposal, decision, council, confirmation, execution, receipt, proposal, decision, council, confirmation, execution, receipt, proposal, decision, execution]
+      anchors: 2
+```
+
+`anchors: 2` counts the anchor entries, one after each T2 execution, the rent and the allowance, which the `ledger` kinds leave out.
+
 ## The knowledge base, `rails/knowledge/`
 
 `rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds the first eight entries. This is one of them: `singapore.yaml` holds the two entries the rescue reads, a cash pickup option and a replacement card estimate, each checked by SP, which `checked_by` records, and waiting for a second check. `rails/knowledge/loader.py`, explained above, is the code that reads them. `india.yaml` and `brazil.yaml` hold the entries the UPI to PayNow and Pix rails read, and an entry may carry `values`, the figures and lists of its statement as data, which the README describes and `tests/test_knowledge_values.py` checks against the statement.
@@ -8875,6 +9564,31 @@ YAML turns an unquoted `2026-09-15` into a `date` object, but a quoted one stays
 ```
 
 `values` holds the provider's display name, which the loop's sentence uses, and the ways the entry says Wise collects documents. The statement says the page is about verifying an address, because that is the only page on file. The second entry, `wise_docs_impersonation_002`, holds what Wise's Singapore blog says Wise never does. `checked_by` is `CC`, Claude Code, which opened both pages, and `second_check_by` is empty until a person checks them.
+
+## The demo parent, `fixtures/demo_parent.yaml`
+
+```yaml
+user_id: parent_001
+mandate:
+  id: mandate-parent_001-v1
+  currency: INR
+  # Fixture: under the daily cap of 60,000 rupees in in_upi_paynow_cap_002.
+  per_txn_limit: "50000"
+  # Fixture: above that cap on purpose, so the cap entry, enforced by the rail at execution, is what
+  # refuses a second transfer the same day, not this mandate. Decision 83 of 8 October records why.
+  daily_limit: "100000"
+  # The student is the only payee.
+  allowed_payees: [student_001]
+  allowed_corridors: [IN>SG]
+  # Exactly as in_upi_paynow_purpose_001 states them.
+  allowed_purposes: [maintenance_of_relatives_abroad, gift]
+  cooling_hours: 24
+  # Fixture: the student was added long before any demo, so they are never inside the cooling period.
+  payee_added_at:
+    student_001: "2026-01-01T00:00:00Z"
+```
+
+Every value is a fixture, which the comment at the top of the file says. The daily limit is above the cap on purpose, so the cap entry, which the rail enforces in the India day, is what refuses a second transfer, not the mandate's daily limit in UTC days.
 
 ## Configuration files
 

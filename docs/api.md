@@ -1461,6 +1461,94 @@ Response `200`:
 
 A token that belongs to another action is refused with a `confirmation_rejected` entry whose reason is `not_this_rescue_step`, and the action it belongs to keeps waiting. A step with no rescue running answers that none is in progress, with `do_now` set to `start_rescue`.
 
+## The demo parent
+
+When `fixtures/demo_parent.yaml` exists, the API loads `parent_001` beside `student_001`, so the app can show both sides of money sent from India. The parent is a fixture, not a real person: a rupee mandate whose only payee is `student_001`, on `IN>SG`, for the two purposes `in_upi_paynow_purpose_001` states, `maintenance_of_relatives_abroad` and `gift`, with a per transaction limit of 50,000 rupees, under the 60,000 rupee daily cap of `in_upi_paynow_cap_002`. Every endpoint takes `"user_id": "parent_001"` exactly as it takes the student, and each user's ledger, memory, plan and confirmations are their own. The parent's transfers go over `upi_paynow_sim`, which is built unless `SIM_RAILS` turns the simulated rails off.
+
+A gift from the parent. Request to `POST /chat`:
+
+```json
+{"user_id": "parent_001", "text": "Send 40,000 rupees to student_001 as a gift"}
+```
+
+Response `200`, with the token and the times replaced by placeholders:
+
+```json
+{
+  "text": "Please confirm: send 40000 INR to student_001 for gift over upi_paynow_sim, fee 0 INR and exchange cost 0 INR. Nothing moves until you confirm.",
+  "lang": "en",
+  "confirmation": {
+    "action": {
+      "type": "transfer",
+      "source": "user_turn",
+      "idempotency_key": "parent_001:t1:propose_transfer:1",
+      "requested_at": "<time>",
+      "amount": "40000",
+      "currency": "INR",
+      "corridor": "IN>SG",
+      "payee_id": "student_001",
+      "purpose": "gift",
+      "instrument_id": null,
+      "standing_mandate_id": null,
+      "standing_terms": null,
+      "confirmation_token": null,
+      "plan_update": null,
+      "receipt_id": null,
+      "cancel_of": null
+    },
+    "confirmation_token": "<token>",
+    "warning_key": "warn.transfer.irreversible",
+    "routes": [
+      {
+        "rail": "upi_paynow_sim",
+        "corridor": "IN>SG",
+        "amount": "40000",
+        "currency_from": "INR",
+        "currency_to": "SGD",
+        "fee": "0",
+        "spread_cost": "0",
+        "tax_lines": [],
+        "arrival_hours": 1.0,
+        "status": "up",
+        "simulated": true,
+        "limit_ok": true,
+        "blocked_reason": null,
+        "rule_id": "in_upi_paynow_purpose_001",
+        "fee_source_url": null,
+        "rate_source": "fixture",
+        "quoted_at": "<time>",
+        "purpose": "gift",
+        "payee_id": null
+      }
+    ],
+    "selected_route": "the same route as above",
+    "council": null,
+    "expires_in_seconds": 300
+  },
+  "decision": {
+    "allowed": true,
+    "reasons": [],
+    "rule_ids": ["R11"],
+    "tier": "T2",
+    "requires_confirmation": true,
+    "warning_key": "warn.transfer.irreversible",
+    "confirmation_token": null
+  },
+  "receipt": null,
+  "freeze": null,
+  "cancel": null,
+  "ledger_seqs": [1, 2, 3],
+  "provider": "fake",
+  "model": "fake-model"
+}
+```
+
+`POST /confirm` with the token pays it, and the receipt is simulated, which the reply says. The daily cap is enforced by the rail when it pays, in the India day, so a second transfer the same day that would cross it is still offered a confirmation; when the parent confirms, the rail refuses, no receipt is issued, and the reply says no route is available and gives the rail's reason, which ends `Source: in_upi_paynow_cap_002.` The ledger then holds the proposal, the decision, the confirmation and a rail error note.
+
+## Cancels and the monthly note
+
+`AgentReply` carries `cancel`, null unless the reply is the outcome of a confirmed cancel: `{"status": "done" | "not_supported" | "failed", "deep_link": ..., "reason": ...}`, the same shape as `freeze`. A cancel is proposed in chat with the receipt id the student types, or with "cancel my last transfer", which the loop resolves to the student's most recent receipt, and confirmed through `POST /confirm` like any T2 action; only a receipt in the student's own ledger can be cancelled, never one sent to them. The ledger can now hold a `cancel_result` note, with `receipt_id`, `rail`, `status` and `reason`, and a `monthly_note`, with `month`, `lang`, `text` and `summary`, which the scheduler writes once at the start of each month for the month that ended; the app shows it, and nothing is sent. `POST /standing/run_due` writes it too, for the time it is given.
+
 ## Errors
 
 | Status | When | Body |

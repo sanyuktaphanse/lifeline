@@ -19,6 +19,8 @@ from contracts.schemas import (
     Action,
     ActionType,
     AgentReply,
+    CancelResult,
+    CancelStatus,
     ConfirmationRequest,
     CouncilAdvice,
     CouncilDeliberation,
@@ -50,6 +52,7 @@ from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
+from core.monthly import is_month, month_of, previous_month, render, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
@@ -130,6 +133,14 @@ DOTTED_THOUSANDS = re.compile(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?")
 DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # A thousands grouping written with a space, a no break space, a narrow no break space, or an
 # apostrophe, between a digit and exactly three more.
+# Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
+# a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
+DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+# The word a cancel may name in place of a receipt id: the student's most recent receipt, resolved in code.
+LATEST = "latest"
+# The words for that in the student's own turn, in the three languages. A cancel of "latest" is trusted only
+# when the student's own words this turn say it; when only data says it, it is data. Source: docs/decisions.md.
+LATEST_WORDS = re.compile(r"\b(?:latest|last|most recent|newest|[úu]ltim[oa]|recente)\b|最近|最后|上一笔|刚才")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -155,7 +166,7 @@ SYSTEM_PROMPT = (
 )
 
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
-ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
 # The channel kinds a document request can name. Source: DOCUMENT_CHANNELS in rails/sim/rules.py.
@@ -185,6 +196,8 @@ ROLE_WORDS: dict[str, list[str]] = {
 TRUE_WORDS = frozenset({"true", "yes", "y", "on", "1", "sim", "是", "对"})
 # How a list of senders written as one string is split.
 SENDER_SPLIT = re.compile(r"\s*(?:,|;|/|、|，|和|&|\band\b|\be\b)\s*")
+# The note the tick writes once for each student and each month that has ended.
+MONTHLY_NOTE = "monthly_note"
 # The note a restart writes for a plan update the plan given on start can no longer hold.
 PLAN_UPDATE_SKIPPED = "plan_update_skipped"
 # What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
@@ -272,6 +285,21 @@ TOOLS = [
         [],
     ),
     _tool(
+        "monthly_summary",
+        "Summarise the student's ledger for a calendar month written YYYY-MM, or the current month: transfers "
+        "sent with their totals and fees, standing runs, anything failed, returned or cancelled, and refusals.",
+        {"month": TEXT},
+        [],
+    ),
+    _tool(
+        "cancel_transfer",
+        "Cancel one of the student's own transfers that is still pending, by receipt id, or by the word latest for "
+        "their most recent transfer. Nothing changes until the student confirms it, and a transfer that has moved "
+        "on cannot be cancelled.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
+    _tool(
         "cash_cap_status",
         "Report what is left of the overseas cash withdrawal cap on the student's Chinese bank cards, this "
         "calendar year and today, from the cards on file.",
@@ -322,6 +350,8 @@ TOOL_ACTIONS = {
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
     "cash_cap_status": ActionType.PRECHECK,
     "update_plan": ActionType.UPDATE_PLAN,
+    "cancel_transfer": ActionType.CANCEL_TRANSFER,
+    "monthly_summary": ActionType.MONTHLY_SUMMARY,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -333,6 +363,7 @@ REQUIRED_ARGUMENTS = {
     "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
+    "cancel_transfer": ("receipt_id",),
 }
 
 TEXTS = {
@@ -355,11 +386,17 @@ TEXTS = {
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
+        "no_route_refused": "No route is available for this transfer right now, so nothing was sent. The rail said: {reason}",
         "too_many_steps": "I stopped before finishing. Please ask again.",
         "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
         "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
+        "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
+        "no_receipt_to_cancel": "You have no transfer of your own that Lifeline could cancel.",
+        "cancelled": "Done. Transfer {receipt_id} was cancelled and returned. It still counts toward today's limit.",
+        "cancel_not_supported": "Transfer {receipt_id} could not be cancelled: {reason}",
+        "cancel_failed": "Lifeline could not cancel transfer {receipt_id}: {reason}",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
         "payee_exists": "{payee} is already a payee, so nothing changed.",
         "frozen": "Done. Card {instrument} is frozen.",
@@ -433,11 +470,17 @@ TEXTS = {
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
+        "no_route_refused": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado. A via disse: {reason}",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
         "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
         "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
+        "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
+        "no_receipt_to_cancel": "Você não tem nenhuma transferência sua que o Lifeline possa cancelar.",
+        "cancelled": "Pronto. A transferência {receipt_id} foi cancelada e devolvida. Ela ainda conta para o limite de hoje.",
+        "cancel_not_supported": "A transferência {receipt_id} não pôde ser cancelada: {reason}",
+        "cancel_failed": "O Lifeline não conseguiu cancelar a transferência {receipt_id}: {reason}",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
         "payee_exists": "{payee} já é um destinatário, então nada mudou.",
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
@@ -511,11 +554,17 @@ TEXTS = {
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
+        "no_route_refused": "目前没有可用于这笔转账的路线，因此没有发送任何资金。支付通道的说明：{reason}",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
         "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
         "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
+        "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
+        "no_receipt_to_cancel": "你没有任何可以由 Lifeline 取消的本人转账。",
+        "cancelled": "已完成。转账 {receipt_id} 已取消并退回。它仍计入今天的限额。",
+        "cancel_not_supported": "转账 {receipt_id} 无法取消：{reason}",
+        "cancel_failed": "Lifeline 无法取消转账 {receipt_id}：{reason}",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
         "payee_exists": "{payee} 已经是收款人，因此没有任何更改。",
         "frozen": "已完成。卡片 {instrument} 已冻结。",
@@ -614,7 +663,7 @@ class _Details:
     def add(self, text: str, source: Source) -> None:
         # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
         # detail on one side of the comparison only.
-        text = _visible(text)
+        text = DASHES.sub("-", _visible(text))
         self.texts.append((text.casefold(), source))
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
@@ -674,6 +723,8 @@ class _Trail:
     from_data: _Details = field(default_factory=_Details)
     # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
     notices: list[str] = field(default_factory=list)
+    # What the student typed in this turn, read as the provenance check reads it.
+    said: str = ""
 
 
 @dataclass
@@ -827,7 +878,7 @@ def _route_values(action: Action, route: Route) -> dict[str, Any]:
 def _skeleton(payee: str) -> str:
     """A payee id as the provenance check compares it: compatibility forms folded, invisible
     characters and surrounding spaces removed, case ignored, so padding cannot hide where it came from."""
-    return _visible(payee).strip().casefold()
+    return DASHES.sub("-", _visible(payee)).strip().casefold()
 
 
 def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
@@ -838,6 +889,16 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
+    receipt = _skeleton(action.receipt_id or "")
+    if receipt and receipt not in trail.from_user.payee_ids:
+        # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
+        # as a whole word anywhere in the data.
+        word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
+        source = trail.from_data.payee_ids.get(receipt) or next(
+            (source for text, source in trail.from_data.texts if word.search(text)), None
+        )
+        if source is not None:
+            untrusted["receipt_id"] = source
     return untrusted
 
 
@@ -947,6 +1008,14 @@ def _untrusted_plan_update(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 
 
+def _untrusted_latest(trail: _Trail) -> dict[str, Source]:
+    """Where a cancel of "latest" came from: the student's own words this turn, or data that says it."""
+    if LATEST_WORDS.search(trail.said):
+        return {}
+    source = next((source for text, source in trail.from_data.texts if LATEST_WORDS.search(text)), None)
+    return {} if source is None else {"receipt_id": source}
+
+
 def _anchored[**P, R](
     method: Callable[Concatenate["AgentLoop", str, P], R],
 ) -> Callable[Concatenate["AgentLoop", str, P], R]:
@@ -1036,6 +1105,8 @@ class AgentLoop:
         self._standing_cancelled: set[tuple[str, str, str]] = set()
         self._standing_attempted: set[tuple[str, str, str]] = set()
         self._standing_skipped: set[tuple[str, str, str]] = set()
+        # The months a monthly note was already written for, per student, rebuilt from the ledger.
+        self._monthly_noted: set[tuple[str, str]] = set()
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -1102,6 +1173,11 @@ class AgentLoop:
         else:
             source = Source.PASTED_TEXT if message.source is Source.USER_TURN else message.source
             student = message.model_copy(update={"role": Role.USER, "source": source})
+        # The memory keeps the language the loop answered in, so a note written later, with no turn to
+        # detect it from, is in the student's language. Source: docs/decisions.md, 8 October 2026.
+        student = student.model_copy(update={"lang": lang})
+        if _from_student(student):
+            trail.said = DASHES.sub("-", _visible(student.text)).casefold()
         turn_messages = [_remembered(student)] + ([_remembered(pasted)] if pasted is not None else [])
         history = self._conversations.get(user_id, [])
         for earlier in [*history, *turn_messages]:
@@ -1190,6 +1266,17 @@ class AgentLoop:
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
+        if latest:
+            # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
+            fields.pop("receipt_id", None)
+            resolved = self._latest_receipt(user_id)
+            if resolved is not None:
+                fields["receipt_id"] = resolved
+        if action_type is ActionType.CANCEL_TRANSFER:
+            # The loop names the student's own transfer behind the receipt, never the model; None when the
+            # student's ledger holds no such receipt, which the engine refuses.
+            fields["cancel_of"] = self._own_transfer(user_id, str(fields.get("receipt_id", "")))[0]
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -1204,9 +1291,16 @@ class AgentLoop:
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
+        checked = action.type in (
+            ActionType.TRANSFER,
+            ActionType.ADD_PAYEE,
+            ActionType.CREATE_STANDING_MANDATE,
+            ActionType.CANCEL_TRANSFER,
+        )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
+        elif latest:
+            untrusted = _untrusted_latest(trail)
         else:
             untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
@@ -1245,6 +1339,9 @@ class AgentLoop:
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
+        if "summary" in result:
+            # The figures the student hears are the code's, from the ledger, never the model's.
+            trail.notices.append(render(result["summary"], lang))
         if action.type is ActionType.VERIFY_LEDGER:
             skipped = self._skipped_fields(user_id)
             if skipped:
@@ -1313,6 +1410,11 @@ class AgentLoop:
             return self._ledger_report(user_id, action.requested_at)
         if action.type is ActionType.UPDATE_PLAN:
             return self._update_plan(user_id, action)
+        if action.type is ActionType.MONTHLY_SUMMARY:
+            month = str(arguments.get("month") or month_of(action.requested_at)).strip()
+            if not is_month(month):
+                return {"error": f"A month is written YYYY-MM, such as {month_of(action.requested_at)}."}
+            return {"summary": summarize(self._ledger.entries(), user_id, month)}
         return {"error": f"No runner for {action.type.value}."}
 
     def _skipped_fields(self, user_id: str) -> list[str]:
@@ -1447,7 +1549,10 @@ class AgentLoop:
         token = decision.confirmation_token
         warning_key = decision.warning_key
         if not decision.allowed or not decision.requires_confirmation or not token or not warning_key:
-            return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
+            text = self._refusal(lang, decision)
+            if action.type is ActionType.CANCEL_TRANSFER and not action.receipt_id:
+                text = f"{_text(lang, 'no_receipt_to_cancel')} {text}"
+            return self._reply(trail, lang, text, decision=decision)
         pending = PendingConfirmation(
             user_id=user_id,
             action=action,
@@ -1495,6 +1600,8 @@ class AgentLoop:
                 notice=terms.notice_hours,
                 cancel=terms.cancel_window_hours,
             )
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text = _text(lang, "confirm_cancel", receipt_id=action.receipt_id)
         else:
             text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
         self._pending[token] = pending
@@ -1682,7 +1789,7 @@ class AgentLoop:
         )
         receipt = self._pay_on_route(user_id, trail, action, route, mandate.id, token)
         if isinstance(receipt, RailError):
-            return self._offer_next_route(lang, trail, token, pending)
+            return self._offer_next_route(lang, trail, token, pending, receipt)
         del self._pending[token]
         self._consumed[token] = (user_id, action)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -1746,13 +1853,16 @@ class AgentLoop:
         )
         self._history.setdefault(user_id, []).append(action)
         freeze: FreezeResult | None = None
+        cancel: CancelResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
         elif action.type is ActionType.CREATE_STANDING_MANDATE:
             text = self._create_standing(user_id, lang, trail, action, token)
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text, cancel = self._cancel(user_id, lang, trail, action)
         else:
             text, freeze = self._freeze(lang, trail, action)
-        return self._reply(trail, lang, text, decision=decision, freeze=freeze)
+        return self._reply(trail, lang, text, decision=decision, freeze=freeze, cancel=cancel)
 
     def _add_payee(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
@@ -1892,6 +2002,37 @@ class AgentLoop:
             self._anchor_if_due(user_id)
         return events
 
+    def _student_lang(self, user_id: str) -> str:
+        """The language of the student's latest turn in memory, English when there is none."""
+        for message in reversed(self._conversations.get(user_id, [])):
+            if _from_student(message):
+                return message.lang if message.lang in TEXTS else "en"
+        return "en"
+
+    def write_monthly_notes(self, now: datetime) -> list[dict[str, Any]]:
+        """On the first call in a new month, write each student's note for the month that ended.
+
+        The month is read from the time given, never the clock, so the tick and a test choose it. A note is
+        written once per student and month, survives a restart through the ledger, and calls no model.
+        Nothing is sent; the app shows the note. A student with no entry by that month gets none.
+        """
+        month = previous_month(month_of(now))
+        written: list[dict[str, Any]] = []
+        entries = self._ledger.entries()
+        for user_id, mandate in list(self._mandates.items()):
+            if (user_id, month) in self._monthly_noted:
+                continue
+            if not any(e.payload.get("user_id") == user_id and month_of(e.ts) <= month for e in entries):
+                continue
+            lang = self._student_lang(user_id)
+            summary = summarize(entries, user_id, month)
+            note = {"kind": MONTHLY_NOTE, "month": month, "lang": lang, "text": render(summary, lang), "summary": summary}
+            self._write(self._attempt_trail(user_id, mandate), "note", note)
+            self._monthly_noted.add((user_id, month))
+            written.append(note)
+            self._anchor_if_due(user_id)
+        return written
+
     def _run_standing(
         self, user_id: str, standing: StandingMandate, period: str, now: datetime, event: dict[str, Any]
     ) -> StandingEvent:
@@ -1920,7 +2061,8 @@ class AgentLoop:
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
-        if receipt is None:
+        if not isinstance(receipt, Receipt):
+            # Each rail's reason is in its rail error note, as for a transfer the student confirmed.
             return StandingEvent(kind="rail_failed", decision=decision, **event)
         return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
 
@@ -1929,21 +2071,26 @@ class AgentLoop:
     ) -> AgentReply:
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
+        if isinstance(receipt, RailError):
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(receipt)), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 
     def _pay(
         self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
-    ) -> Receipt | None:
+    ) -> Receipt | RailError | None:
+        """Pay on the cheapest route, then the next; the receipt, the last rail's error, or None with no route."""
         routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
         failed: set[str] = set()
+        last: RailError | None = None
         while (route := self._choose(routes, failed)) is not None:
             receipt = self._pay_on_route(user_id, trail, action, route, mandate_ref, token)
             if not isinstance(receipt, RailError):
                 return receipt
             failed.add(route.rail)
-        return None
+            last = receipt
+        return last
 
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
@@ -2060,8 +2207,55 @@ class AgentLoop:
             return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
         return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
 
+    def _own_transfer(self, user_id: str, receipt_id: str) -> tuple[str | None, str | None]:
+        """The idempotency key and the rail of the student's own transfer behind a receipt, from the
+        student's own ledger receipt entries, or (None, None). A receipt sent to the student, which is
+        never written to the ledger, and another student's receipt are never found."""
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.kind != "receipt" or payload.get("user_id") != user_id:
+                continue
+            receipt = payload.get("receipt", {})
+            if receipt.get("receipt_id") == receipt_id:
+                return receipt.get("idempotency_key"), payload.get("rail")
+        return None, None
+
+    def _latest_receipt(self, user_id: str) -> str | None:
+        """The id of the student's most recent receipt in their own ledger, or None when they have none."""
+        latest = None
+        for entry in self._ledger.entries():
+            if entry.kind == "receipt" and entry.payload.get("user_id") == user_id:
+                latest = entry.payload.get("receipt", {}).get("receipt_id") or latest
+        return latest
+
+    def _cancel(self, user_id: str, lang: str, trail: _Trail, action: Action) -> tuple[str, CancelResult]:
+        receipt_id = action.receipt_id or ""
+        _, rail_name = self._own_transfer(user_id, receipt_id)
+        rail = self._rails.get(rail_name or "")
+        if rail is None:
+            result = CancelResult(status=CancelStatus.FAILED, reason=f"No rail holds receipt {receipt_id}.")
+        else:
+            result = rail.cancel(receipt_id)
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"cancel": result.model_dump(mode="json")}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "cancel_result",
+                "idempotency_key": action.idempotency_key,
+                "receipt_id": receipt_id,
+                "rail": rail_name,
+                "status": result.status.value,
+                "reason": result.reason,
+            },
+        )
+        if result.status is CancelStatus.DONE:
+            return _text(lang, "cancelled", receipt_id=receipt_id), result
+        name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
+        return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
+
     def _offer_next_route(
-        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation
+        self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
     ) -> AgentReply:
         action = pending.action
         failed = pending.selected_route
@@ -2072,7 +2266,9 @@ class AgentLoop:
         if selected is None:
             del self._pending[token]
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
-            return self._reply(trail, lang, _text(lang, "no_route"))
+            # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
+            # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(error)))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -2142,6 +2338,7 @@ class AgentLoop:
         confirmation: ConfirmationRequest | None = None,
         receipt: Receipt | None = None,
         freeze: FreezeResult | None = None,
+        cancel: CancelResult | None = None,
     ) -> AgentReply:
         text = self._guarded(trail, text)
         return AgentReply(
@@ -2151,6 +2348,7 @@ class AgentLoop:
             decision=decision,
             receipt=receipt,
             freeze=freeze,
+            cancel=cancel,
             ledger_seqs=list(trail.seqs),
             provider=trail.provider,
             model=trail.model,
@@ -2909,6 +3107,8 @@ class AgentLoop:
             elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
                 key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
                 self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+            elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
+                self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
             elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
                 self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
             if entry.kind == "proposal" and "standing_run" in entry.payload:

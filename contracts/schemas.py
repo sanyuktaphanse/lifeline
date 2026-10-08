@@ -56,6 +56,8 @@ class ActionType(str, Enum):
     NOTIFY_FAMILY = "notify_family"
     VERIFY_LEDGER = "verify_ledger"
     UPDATE_PLAN = "update_plan"
+    CANCEL_TRANSFER = "cancel_transfer"
+    MONTHLY_SUMMARY = "monthly_summary"
 
 
 class RouteStatus(str, Enum):
@@ -76,6 +78,14 @@ class ReceiptStatus(str, Enum):
 
 
 class FreezeStatus(str, Enum):
+    DONE = "done"
+    NOT_SUPPORTED = "not_supported"
+    FAILED = "failed"
+
+
+class CancelStatus(str, Enum):
+    """The three outcomes of a cancel, the same as a freeze's. Source: docs/decisions.md, 8 October 2026."""
+
     DONE = "done"
     NOT_SUPPORTED = "not_supported"
     FAILED = "failed"
@@ -124,6 +134,11 @@ class Action(BaseModel):
     # The plan fields an update_plan action would change, by name. The engine refuses any name outside
     # PLAN_UPDATE_FIELDS. Source: docs/decisions.md, 8 October 2026.
     plan_update: dict[str, Any] | None = None
+    # A cancel names the receipt, and the loop names the student's own transfer that produced it, by
+    # its idempotency key, or None when the student's ledger holds no such receipt. The engine refuses
+    # a cancel whose cancel_of is not in the student's history. Source: docs/decisions.md, 8 October 2026.
+    receipt_id: str | None = None
+    cancel_of: str | None = None
 
 
 # The only fields of the resilience plan that update_plan may change. The identity check, the
@@ -239,6 +254,12 @@ class FreezeResult(BaseModel):
     reason: str | None = None
 
 
+class CancelResult(BaseModel):
+    status: CancelStatus
+    deep_link: str | None = None
+    reason: str | None = None
+
+
 class LedgerEntry(BaseModel):
     seq: int = Field(ge=1)
     ts: AwareDatetime
@@ -333,6 +354,7 @@ class AgentReply(BaseModel):
     decision: Decision | None = None
     receipt: Receipt | None = None
     freeze: FreezeResult | None = None
+    cancel: CancelResult | None = None
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None

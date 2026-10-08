@@ -12,7 +12,18 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
+from contracts.schemas import (
+    AgentReply,
+    Mandate,
+    Message,
+    Plan,
+    ReceiptStatus,
+    RescueReply,
+    Role,
+    Source,
+    StandingEvent,
+    ToolCall,
+)
 from core.agent import ANCHOR_KIND, AgentLoop
 from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
@@ -126,7 +137,63 @@ def _plan(fixtures: dict[str, Any]) -> Plan:
     return Plan.model_validate({**demo, **fixtures.get("plan", {})})
 
 
-def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
+# A fixtures.user block may name a fixture file in fixtures/ by its plain name, such as demo_parent.
+FIXTURE_NAME = re.compile(r"[a-z][a-z0-9_]*")
+
+
+@dataclass
+class _Who:
+    """Who a run is: the user id, their mandate, balances, plan, and Chinese cards."""
+
+    user_id: str
+    mandate: Mandate
+    balances: dict[str, Decimal]
+    plan: Plan
+    chinese_cards: list[dict[str, Any]]
+
+
+def _who(fixtures: dict[str, Any]) -> _Who:
+    """The demo student, or the user a scenario's fixtures.user names, written inline or by fixture file.
+
+    A user block holds a user id, a mandate with its own currency, limits, payees, corridors and purposes,
+    balances and a plan. A scenario's mandate and plan still replace the block's key by key.
+    """
+    block = fixtures.get("user")
+    if block is None:
+        balances = fixtures.get("balances", FIXTURE_BALANCES)
+        cards = fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")
+        return _Who(
+            USER,
+            _mandate(fixtures.get("mandate", {})),
+            {currency: Decimal(amount) for currency, amount in balances.items()},
+            _plan(fixtures),
+            cards or [],
+        )
+    if "fixture" in block:
+        name = str(block["fixture"])
+        if not FIXTURE_NAME.fullmatch(name):
+            raise ValueError(f"fixtures.user names fixture {name!r}, which is not a plain fixture name")
+        block = {**load_suite(ROOT / "fixtures" / f"{name}.yaml"), **{k: v for k, v in block.items() if k != "fixture"}}
+    now = datetime.now(timezone.utc)
+    mandate = Mandate.model_validate(
+        {
+            "user_id": block["user_id"],
+            "valid_from": now - FIXTURE_VALIDITY,
+            "valid_until": now + FIXTURE_VALIDITY,
+            **block["mandate"],
+            **fixtures.get("mandate", {}),
+        }
+    )
+    return _Who(
+        block["user_id"],
+        mandate,
+        {currency: Decimal(str(amount)) for currency, amount in fixtures.get("balances", block["balances"]).items()},
+        Plan.model_validate({**block["plan"], **fixtures.get("plan", {})}),
+        fixtures.get("chinese_cards", block.get("chinese_cards")) or [],
+    )
+
+
+def _fail_once_keys(entries: list[dict[str, Any]], user_id: str = USER) -> dict[str, set[str]]:
     """Build, per rail, the idempotency keys the loop will use for the proposals that must fail once.
 
     The loop's key is the student, the letter t and the turn number, the tool, and the call number
@@ -135,23 +202,25 @@ def _fail_once_keys(entries: list[dict[str, Any]]) -> dict[str, set[str]]:
     """
     keys: dict[str, set[str]] = {}
     for entry in entries:
-        key = entry.get("key") or f"{USER}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
+        key = entry.get("key") or f"{user_id}:t{entry['turn']}:{entry.get('tool', PROPOSE_TRANSFER)}:{entry['call']}"
         keys.setdefault(entry["rail"], set()).add(key)
     return keys
 
 
-def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
+def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
     names = fixtures.get("rails", list(FIXTURE_RAILS))
     unknown = [name for name in names if name not in FIXTURE_RAILS]
     if unknown:
         raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
     traces = scripted_traces(fixtures.get("traces"))
-    failing = _fail_once_keys(fixtures.get("fail_once", []))
+    failing = _fail_once_keys(fixtures.get("fail_once", []), user_id)
     scripts = fixtures.get("rail_scripts", {})
-    stray = sorted({*traces, *failing, *scripts} - set(names))
+    # Fixture: the status each fake rail issues receipts at, completed unless the scenario chooses one.
+    statuses = {name: ReceiptStatus(status) for name, status in (fixtures.get("receipt_status") or {}).items()}
+    stray = sorted({*traces, *failing, *scripts, *statuses} - set(names))
     if stray:
-        raise ValueError(f"traces, fail_once or rail_scripts name rails {stray}, which this scenario does not build")
-    scripted_fakes = sorted({*traces, *failing} & set(SIM_RAILS))
+        raise ValueError(f"traces, fail_once, rail_scripts or receipt_status name rails {stray}, which this scenario does not build")
+    scripted_fakes = sorted({*traces, *failing, *statuses} & set(SIM_RAILS))
     if scripted_fakes:
         raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
@@ -174,13 +243,14 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
             fail_once_keys=failing.get(name, ()),
             name=name,
             simulated=FIXTURE_RAILS[name],
+            issue_status=statuses.get(name, ReceiptStatus.COMPLETED),
         )
         for name in names
     }
 
 
 def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
-    """The council a scenario asks for, with one scripted reply per voice.
+    """The council a scenario asks for, with one scripted reply per voice for each deliberation.
 
     Without `fixtures.council` the loop is built with no council at all, which is how every
     scenario written before the council ran and still runs.
@@ -188,10 +258,12 @@ def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
     scripted = fixtures.get("council")
     if scripted is None:
         return None
-    if len(scripted) != len(VOICES):
+    # One reply for each voice, in the order of VOICES, for each deliberation the run convenes, consumed in
+    # order: a run whose rent and allowance both escalate scripts ten.
+    if not scripted or len(scripted) % len(VOICES):
         raise ValueError(
             f"council scripts {len(scripted)} voices, and it needs one for each of "
-            f"{', '.join(VOICES)}"
+            f"{', '.join(VOICES)} in every deliberation"
         )
     return FiveVoiceCouncil(FakeModelAdapter(scripted))
 
@@ -211,6 +283,8 @@ def reply_kind(reply: AgentReply) -> str:
         return "receipt"
     if reply.freeze is not None:
         return "freeze"
+    if reply.cancel is not None:
+        return "cancel"
     if reply.confirmation is not None:
         return "confirmation"
     if reply.decision is not None and not reply.decision.allowed:
@@ -354,9 +428,10 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
         # A run's own fixtures replace the scenario's key by key, so two runs of one entry can
         # differ in what they are given, such as a council that splits its vote differently.
         fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
-        balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
-        mandates = {USER: _mandate(fixtures.get("mandate", {}))}
-        rails = _rails(fixtures)
+        who = _who(fixtures)
+        user = who.user_id
+        mandates = {user: who.mandate}
+        rails = _rails(fixtures, user)
         inbound = seed_inbound(rails, inbound_from_fixture(fixtures.get("inbound_receipts"), rails))
         loop = AgentLoop(
             adapter=adapter,
@@ -365,21 +440,19 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             router=FakeRouter(),
             rails=rails,
             mandates=mandates,
-            balances={USER: balances},
+            balances={user: who.balances},
             pending={},
             council=_council(fixtures),
-            plans={USER: _plan(fixtures)},
-            inbound_receipts={USER: inbound},
+            plans={user: who.plan},
+            inbound_receipts={user: inbound},
             anchor=LocalSignedAnchor(anchors_path),
             # A scenario's own Chinese cards replace the demo fixture's, which are a fixture too.
-            chinese_cards={
-                USER: (fixtures["chinese_cards"] if "chinese_cards" in fixtures else load_suite(DEMO_FIXTURE).get("chinese_cards")) or []
-            },
+            chinese_cards={user: who.chinese_cards},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
             if "run_due" in turn:
-                events = loop.run_due_standing_mandates(_run_due_time(mandates[USER], turn["run_due"]))
+                events = loop.run_due_standing_mandates(_run_due_time(mandates[user], turn["run_due"]))
                 result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
                 continue
             if "tamper" in turn:
@@ -392,9 +465,9 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
                 if turn["rescue"] not in RESCUE_TURNS:
                     raise ValueError(f"rescue must be start or step, not {turn['rescue']!r}")
                 if turn["rescue"] == "start":
-                    reply = loop.rescue_start(USER, turn["trigger"], message)
+                    reply = loop.rescue_start(user, turn["trigger"], message)
                 else:
-                    reply = loop.rescue_step(USER, message, confirmation_token=token)
+                    reply = loop.rescue_step(user, message, confirmation_token=token)
                 replies.append(reply)
                 result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
                 continue
@@ -405,7 +478,7 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             )
             token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
             before = len(adapter.calls)
-            reply = loop.handle(USER, message, confirmation_token=token, pasted=pasted)
+            reply = loop.handle(user, message, confirmation_token=token, pasted=pasted)
             replies.append(reply)
             result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
             result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))

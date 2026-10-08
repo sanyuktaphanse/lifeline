@@ -843,3 +843,67 @@ def test_precheck_over_http_without_channel_or_senders_is_unchanged():
 
     assert result["ready"] is None
     assert result["rule_ids"] == ["cn_boc_anxin_009", "cn_fx_quota_001", "cn_cdd_004"]
+
+
+def test_a_done_cancel_survives_a_restart_of_the_api(tmp_path):
+    from contracts.schemas import ReceiptStatus
+    from rails.fake_rail import FakeRail
+
+    def rails():
+        built = demo_rails(sim_rails=False)
+        built["wise"] = FakeRail(name="wise", simulated=False, issue_status=ReceiptStatus.CREATED)
+        return built
+
+    first = TestClient(create_app(adapter=FakeModelAdapter([_call("propose_transfer", RENT), _call("cancel_transfer", {"receipt_id": "wise-0001"})]), rails=rails()))
+    token = _propose(first)
+    first.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+    cancel = first.post("/chat", json={"user_id": USER, "text": "Cancel wise-0001"}).json()
+    done = first.post("/confirm", json={"user_id": USER, "confirmation_token": cancel["confirmation"]["confirmation_token"]}).json()
+    assert done["cancel"]["status"] == "done"
+
+    second = TestClient(create_app(adapter=FakeModelAdapter([]), rails=rails()))
+    trace = second.post("/trace", json={"user_id": USER, "receipt_id": "wise-0001"}).json()
+
+    assert trace["status"] == "returned"
+
+
+def test_the_scheduler_writes_the_monthly_note_once_on_the_first_run_in_a_new_month():
+    from datetime import datetime, timedelta, timezone
+
+    from core.monthly import month_of
+
+    client = _client([_call("propose_transfer", RENT)])
+    token = _propose(client)
+    client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+    month = month_of(datetime.now(timezone.utc))
+    year, number = (int(part) for part in month.split("-"))
+    first = datetime(year + number // 12, number % 12 + 1, 1, tzinfo=timezone.utc)
+
+    for minutes in (0, 1):
+        response = client.post("/standing/run_due", json={"now": (first + timedelta(minutes=minutes)).isoformat()})
+        assert response.status_code == 200
+
+    notes = [e["payload"] for e in client.get(f"/ledger/{USER}").json() if e["payload"].get("kind") == "monthly_note"]
+    assert len(notes) == 1
+    assert notes[0]["month"] == month
+    assert "1 sent on SG>BR, total 1200 SGD" in notes[0]["text"]
+
+
+def test_the_api_loads_the_demo_parent_beside_the_demo_student():
+    client = _client([
+        _call("propose_transfer", {"amount": "40000", "currency": "INR", "corridor": "IN>SG", "payee_id": "student_001", "purpose": "gift"})
+    ])
+
+    reply = client.post("/chat", json={"user_id": "parent_001", "text": "Send 40000 rupees to student_001 as a gift"}).json()
+
+    assert reply["confirmation"]["selected_route"]["rail"] == "upi_paynow_sim"
+    assert reply["confirmation"]["selected_route"]["rule_id"] == "in_upi_paynow_purpose_001"
+    parent_entries = client.get("/ledger/parent_001").json()
+    assert parent_entries and all(e["payload"]["user_id"] == "parent_001" for e in parent_entries)
+    assert all(e["payload"]["user_id"] == USER for e in client.get(f"/ledger/{USER}").json())
+
+
+def test_the_api_runs_without_a_parent_fixture(tmp_path):
+    client = TestClient(create_app(adapter=FakeModelAdapter([]), parent_fixture_path=tmp_path / "absent.yaml"))
+
+    assert client.post("/precheck", json={"user_id": "parent_001", "action_kind": "enable_pix", "provider": "sim_pix"}).status_code == 404

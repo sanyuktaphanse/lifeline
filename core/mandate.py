@@ -31,6 +31,7 @@ WARNING_KEYS = {
     ActionType.ADD_PAYEE: "warn.payee.new",
     ActionType.FREEZE_CARD: "warn.freeze.card",
     ActionType.CREATE_STANDING_MANDATE: "warn.standing.new",
+    ActionType.CANCEL_TRANSFER: "warn.transfer.cancel",
 }
 # Source: the order of evaluation table in docs/technical-reference.md. An allowed
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
@@ -74,6 +75,8 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
             action.instrument_id or "",
             action.standing_mandate_id or "",
             action.standing_terms.model_dump_json() if action.standing_terms else "",
+            # Only a cancel names a receipt, so every token made before cancels existed is unchanged.
+            *([action.receipt_id] if action.receipt_id else []),
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -258,6 +261,17 @@ class DeterministicMandateEngine(MandateEngine):
                 rule_ids.append("R04")
                 reasons.append(
                     f"update_plan may change only {', '.join(PLAN_UPDATE_FIELDS)}, never {', '.join(protected)}."
+                )
+
+        if action.type is ActionType.CANCEL_TRANSFER:
+            sent = {past.idempotency_key for past in history if past.type is ActionType.TRANSFER}
+            if not action.receipt_id:
+                rule_ids.append("R04")
+                reasons.append("Cancelling a transfer needs its receipt id, and this one has none.")
+            elif action.cancel_of not in sent:
+                rule_ids.append("R04")
+                reasons.append(
+                    f"Receipt {action.receipt_id} is not one of this student's own transfers, so it cannot be cancelled here."
                 )
 
         standing_actions = (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE)

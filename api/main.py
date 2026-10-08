@@ -52,6 +52,8 @@ from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
+# A parent in India, loaded beside the demo student when the file exists, so the app can show both sides.
+DEMO_PARENT = ROOT / "fixtures" / "demo_parent.yaml"
 LEDGER_PATH = ROOT / "data" / "ledger.jsonl"
 CONVERSATIONS_PATH = ROOT / "data" / "conversations.jsonl"
 # The anchors are kept beside the ledger they anchor, so data/anchors.jsonl for data/ledger.jsonl.
@@ -192,6 +194,14 @@ def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> None:
             execution = paid[receipt.idempotency_key]
             route = Route.model_validate(execution["route"])
             rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
+        elif (
+            entry.kind == "note"
+            and entry.payload.get("kind") == "cancel_result"
+            and entry.payload.get("status") == "done"
+            and entry.payload.get("rail") in rails
+        ):
+            # A cancel the rail carried out stays carried out after a restart.
+            rails[entry.payload["rail"]].mark_cancelled(entry.payload["receipt_id"])
 
 
 def _without_tokens[R: AgentReply](reply: R) -> R:
@@ -233,8 +243,10 @@ def create_app(
     council: Council | None = None,
     sim_rails: bool | None = None,
     anchor: Anchor | None = None,
+    parent_fixture_path: Path | None = DEMO_PARENT,
 ) -> FastAPI:
     fixture = _load_fixture(fixture_path)
+    parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
     ledger_path = ledger_path or LEDGER_PATH
     ledger = JsonlLedger(ledger_path)
@@ -253,6 +265,8 @@ def create_app(
         key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
     }}
     _restore_rails(rails, ledger)
+    # The demo student first, then the parent when its fixture exists.
+    people = [fixture, *([parent] if parent is not None else [])]
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))
     loop = AgentLoop(
@@ -261,23 +275,29 @@ def create_app(
         ledger=ledger,
         router=FakeRouter(),
         rails=rails,
-        mandates={user_id: _demo_mandate(fixture, ledger)},
-        balances={user_id: {currency: Decimal(amount) for currency, amount in fixture["balances"].items()}},
+        mandates={person["user_id"]: _demo_mandate(person, ledger) for person in people},
+        balances={
+            person["user_id"]: {currency: Decimal(amount) for currency, amount in person["balances"].items()}
+            for person in people
+        },
         pending={},
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
         council=council if council is not None else council_for(),
-        plans={user_id: Plan.model_validate(fixture["plan"])},
+        plans={person["user_id"]: Plan.model_validate(person["plan"]) for person in people},
         inbound_receipts={user_id: inbound},
         anchor=anchor,
         chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
-    users = {user_id}
+    users = {person["user_id"] for person in people}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
     lock = threading.Lock()
 
     def run_due(now: datetime) -> list[StandingEvent]:
         with lock:
-            return [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+            events = [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+            # The first tick in a new month writes each student's note for the month that ended, once.
+            loop.write_monthly_notes(now)
+            return events
 
     async def tick() -> None:
         while True:

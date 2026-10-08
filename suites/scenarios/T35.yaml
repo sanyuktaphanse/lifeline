@@ -1,0 +1,63 @@
+id: T35
+note: The student pays rent and then asks for this month's note. The scripted model calls monthly_summary, a T0 tool that runs as proposal, decision and execution, and the loop builds the note from the ledger alone, with no model, and adds it to the reply in the student's language. The amount, the corridor and the fee in the note come from the run's own execution entry, whose sequence the execution payload names. The scheduler writes the same note once at the start of the next month, which unit tests and an API test check with an injected time; a scenario cannot set the month, so the tick is not part of it. The fee is the fake router's fixture.
+expected:
+  reply: answer
+  ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, execution]
+runs:
+  - lang: en
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+      - user: Yes, send it
+        confirm: latest
+      - user: Give me my note for this month
+        model:
+          - calls:
+              - name: monthly_summary
+          - text: ""
+        expect:
+          must_contain:
+            - "Lifeline's note for"
+            - "Transfers: 1 sent on SG>BR, total 1200 SGD, fees 5.60 SGD."
+            - "Refused requests: 0."
+  - lang: pt
+    turns:
+      - user: Enviar 1.200 SGD de aluguel para landlord_sp no Brasil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+      - user: Sim, pode enviar
+        confirm: latest
+      - user: Quero a nota deste mês
+        model:
+          - calls:
+              - name: monthly_summary
+          - text: ""
+        expect:
+          must_contain:
+            - "Nota do Lifeline para"
+            - "Transferências: 1 enviadas em SG>BR, total de 1200 SGD, taxas de 5.60 SGD."
+            - "Pedidos recusados: 0."
+  - lang: zh
+    turns:
+      - user: 给 landlord_sp 转 1200 新元房租
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+      - user: 好的，发送
+        confirm: latest
+      - user: 给我这个月的月度记录
+        model:
+          - calls:
+              - name: monthly_summary
+          - text: ""
+        expect:
+          must_contain:
+            - "Lifeline 的"
+            - "转账：在 SG>BR 上发出 1 笔，共 1200 SGD，手续费 5.60 SGD。"
+            - "被拒绝的请求：0。"
