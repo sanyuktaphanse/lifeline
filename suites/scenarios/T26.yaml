@@ -1,0 +1,92 @@
+id: T26
+note: The student pays rent, then asks to cancel it. In the first run the fake Wise rail issues the receipt at created, a fixture chosen through receipt_status, so the reply says the transfer is not completed. The model proposes cancel_transfer for the receipt id the student typed; the loop names the student's own transfer behind it from the ledger, the engine allows it at T2 with the cancel warning, and nothing happens until the student confirms. The rail cancels it, the reply says it was cancelled and returned and still counts toward today's limit, a cancel_result note records done, and the trace the model is then given says returned and that the student cancelled it. In the second run the receipt is issued in transit, the confirmed cancel comes back not supported with the rail's honest reason, a cancel_result note records not_supported, and the trace still says in transit. Every status is a fixture of the fake rail, not a real provider's.
+runs:
+  - lang: en
+    fixtures:
+      receipt_status: {wise: created}
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation}
+      - user: Yes, send it
+        confirm: latest
+        expect:
+          reply: receipt
+          must_contain: ["is not completed; its status is created", "Receipt wise-0001"]
+      - user: Cancel wise-0001, I paid the wrong month
+        model:
+          - calls:
+              - name: cancel_transfer
+                arguments: {receipt_id: wise-0001}
+        expect:
+          reply: confirmation
+          warning_key: warn.transfer.cancel
+          must_contain: ["Please confirm: cancel transfer wise-0001. Nothing changes until you confirm."]
+      - user: Yes, cancel it
+        confirm: latest
+        expect:
+          reply: cancel
+          must_contain: ["Done. Transfer wise-0001 was cancelled and returned. It still counts toward today's limit."]
+      - user: Where is wise-0001 now?
+        model:
+          - calls:
+              - name: trace_transfer
+                arguments: {receipt_id: wise-0001}
+          - text: It was returned.
+        expect: {reply: answer}
+      - user: Did it really go back?
+        model:
+          - text: Yes.
+        expect:
+          model_saw:
+            - '"status": "returned"'
+            - "The student cancelled this transfer before it moved on, and it was returned."
+    expected:
+      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, confirmation, execution, note, proposal, decision, execution]
+      notes: [cancel_result]
+  - lang: en
+    fixtures:
+      receipt_status: {wise: in_transit}
+    turns:
+      - user: Send 1,200 SGD rent to landlord_sp in Brazil
+        model:
+          - calls:
+              - name: propose_transfer
+                arguments: {amount: "1200", currency: SGD, corridor: SG>BR, payee_id: landlord_sp, purpose: rent}
+        expect: {reply: confirmation}
+      - user: Yes, send it
+        confirm: latest
+        expect:
+          reply: receipt
+          must_contain: ["its status is in_transit"]
+      - user: Cancel wise-0001, I paid the wrong month
+        model:
+          - calls:
+              - name: cancel_transfer
+                arguments: {receipt_id: wise-0001}
+        expect: {reply: confirmation, warning_key: warn.transfer.cancel}
+      - user: Yes, cancel it
+        confirm: latest
+        expect:
+          reply: cancel
+          must_contain: ["Transfer wise-0001 could not be cancelled: This transfer is in transit, so it can no longer be cancelled through Lifeline."]
+      - user: Where is wise-0001 now?
+        model:
+          - calls:
+              - name: trace_transfer
+                arguments: {receipt_id: wise-0001}
+          - text: It is still on its way.
+        expect: {reply: answer}
+      - user: So it is still moving?
+        model:
+          - text: Yes.
+        expect:
+          model_saw:
+            - '"status": "in_transit"'
+          must_not_contain: [cancelled and returned]
+    expected:
+      ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, confirmation, execution, note, proposal, decision, execution]
+      notes: [cancel_result]

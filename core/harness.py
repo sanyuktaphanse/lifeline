@@ -12,7 +12,18 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
+from contracts.schemas import (
+    AgentReply,
+    Mandate,
+    Message,
+    Plan,
+    ReceiptStatus,
+    RescueReply,
+    Role,
+    Source,
+    StandingEvent,
+    ToolCall,
+)
 from core.agent import ANCHOR_KIND, AgentLoop
 from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
@@ -148,10 +159,12 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
     traces = scripted_traces(fixtures.get("traces"))
     failing = _fail_once_keys(fixtures.get("fail_once", []))
     scripts = fixtures.get("rail_scripts", {})
-    stray = sorted({*traces, *failing, *scripts} - set(names))
+    # Fixture: the status each fake rail issues receipts at, completed unless the scenario chooses one.
+    statuses = {name: ReceiptStatus(status) for name, status in (fixtures.get("receipt_status") or {}).items()}
+    stray = sorted({*traces, *failing, *scripts, *statuses} - set(names))
     if stray:
-        raise ValueError(f"traces, fail_once or rail_scripts name rails {stray}, which this scenario does not build")
-    scripted_fakes = sorted({*traces, *failing} & set(SIM_RAILS))
+        raise ValueError(f"traces, fail_once, rail_scripts or receipt_status name rails {stray}, which this scenario does not build")
+    scripted_fakes = sorted({*traces, *failing, *statuses} & set(SIM_RAILS))
     if scripted_fakes:
         raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
@@ -174,6 +187,7 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
             fail_once_keys=failing.get(name, ()),
             name=name,
             simulated=FIXTURE_RAILS[name],
+            issue_status=statuses.get(name, ReceiptStatus.COMPLETED),
         )
         for name in names
     }
@@ -211,6 +225,8 @@ def reply_kind(reply: AgentReply) -> str:
         return "receipt"
     if reply.freeze is not None:
         return "freeze"
+    if reply.cancel is not None:
+        return "cancel"
     if reply.confirmation is not None:
         return "confirmation"
     if reply.decision is not None and not reply.decision.allowed:

@@ -23,7 +23,7 @@ FROZEN_INTERFACES = {
     Ledger: {"append", "verify", "entries", "head"},
     Anchor: {"anchor", "verify"},
     Router: {"quote", "precheck"},
-    Rail: {"name", "simulated", "execute", "status", "freeze"},
+    Rail: {"name", "simulated", "execute", "status", "freeze", "cancel"},
     Council: {"deliberate"},
     ModelAdapter: {"complete"},
     Translator: {"explain"},
@@ -124,6 +124,7 @@ FROZEN_ACTION_TIERS = {
     "notify_family": "T1",
     "verify_ledger": "T0",
     "update_plan": "T1",
+    "cancel_transfer": "T2",
 }
 
 

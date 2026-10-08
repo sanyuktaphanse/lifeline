@@ -15,7 +15,7 @@ from core.harness import (
 
 SCENARIOS = {
     "T01", "T02", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14",
-    "T15", "T16", "T17", "T19", "T20", "T21", "T22", "T23", "T29", "T31", "T32", "T34", "T36", "T37", "T38", "X01", "X02", "X03", "X04", "X05",
+    "T15", "T16", "T17", "T19", "T20", "T21", "T22", "T23", "T26", "T29", "T31", "T32", "T34", "T36", "T37", "T38", "X01", "X02", "X03", "X04", "X05",
     "X06", "X07", "X08", "X09", "X10", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20",
     "X21", "X22", "X23", "X24", "X26", "X27", "X28",
 }
@@ -339,7 +339,8 @@ def test_a_scenario_scripts_the_traces_a_rail_can_answer(tmp_path):
     unscripted = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
 
     assert scripted.runs[0].failures == []
-    assert "No scripted trace" in " ".join(unscripted.runs[0].failures)
+    # Since Stage 8b a receipt the rail issued but no fixture scripted is traced from the receipt itself.
+    assert unscripted.runs[0].failures == []
 
 
 def test_a_turn_can_leave_the_language_unset_so_the_loop_detects_it(tmp_path):
@@ -644,3 +645,33 @@ def test_must_not_match_passes_a_run_whose_replies_never_match(tmp_path):
     result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
 
     assert result.status == "passed"
+
+
+def test_a_scenario_chooses_the_status_a_fake_rail_issues_receipts_at():
+    from core.harness import _rails
+
+    rails = _rails({"rails": ["wise"], "receipt_status": {"wise": "created"}})
+
+    receipt = rails["wise"].execute(
+        __import__("rails.fake_router", fromlist=["FakeRouter"]).FakeRouter().quote("SG>BR", __import__("decimal").Decimal("10"), "rent", "normal")[0],
+        "m-v1",
+        "key-00000001",
+        "token",
+    )
+    assert receipt.status.value == "created"
+
+
+def test_a_receipt_status_for_a_rail_the_scenario_does_not_build_is_refused():
+    from core.harness import _rails
+
+    with pytest.raises(ValueError):
+        _rails({"rails": ["wise"], "receipt_status": {"bank_wire": "created"}})
+
+
+def test_a_reply_carrying_a_cancel_result_is_of_kind_cancel():
+    from contracts.schemas import AgentReply, CancelResult, CancelStatus
+    from core.harness import reply_kind
+
+    reply = AgentReply(text="Done.", lang="en", cancel=CancelResult(status=CancelStatus.DONE), ledger_seqs=[])
+
+    assert reply_kind(reply) == "cancel"

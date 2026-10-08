@@ -192,6 +192,14 @@ def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> None:
             execution = paid[receipt.idempotency_key]
             route = Route.model_validate(execution["route"])
             rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
+        elif (
+            entry.kind == "note"
+            and entry.payload.get("kind") == "cancel_result"
+            and entry.payload.get("status") == "done"
+            and entry.payload.get("rail") in rails
+        ):
+            # A cancel the rail carried out stays carried out after a restart.
+            rails[entry.payload["rail"]].mark_cancelled(entry.payload["receipt_id"])
 
 
 def _without_tokens[R: AgentReply](reply: R) -> R:

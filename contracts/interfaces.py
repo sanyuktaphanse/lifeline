@@ -5,6 +5,7 @@ from typing import Any
 
 from contracts.schemas import (
     Action,
+    CancelResult,
     Decision,
     FreezeResult,
     LedgerEntry,
@@ -93,6 +94,10 @@ class Rail(ABC):
 
     @abstractmethod
     def freeze(self, instrument_id: str) -> FreezeResult: ...
+
+    @abstractmethod
+    def cancel(self, receipt_id: str) -> CancelResult:
+        """Cancel a transfer this rail issued that has not moved on yet. A done cancel returns it."""
 
 
 class Council(ABC):

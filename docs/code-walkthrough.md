@@ -188,6 +188,7 @@ class ActionType(str, Enum):
     NOTIFY_FAMILY = "notify_family"
     VERIFY_LEDGER = "verify_ledger"
     UPDATE_PLAN = "update_plan"
+    CANCEL_TRANSFER = "cancel_transfer"
 
 
 class RouteStatus(str, Enum):
@@ -208,6 +209,14 @@ class ReceiptStatus(str, Enum):
 
 
 class FreezeStatus(str, Enum):
+    DONE = "done"
+    NOT_SUPPORTED = "not_supported"
+    FAILED = "failed"
+
+
+class CancelStatus(str, Enum):
+    """The three outcomes of a cancel, the same as a freeze's. Source: docs/decisions.md, 8 October 2026."""
+
     DONE = "done"
     NOT_SUPPORTED = "not_supported"
     FAILED = "failed"
@@ -484,6 +493,7 @@ class AgentReply(BaseModel):
     decision: Decision | None = None
     receipt: Receipt | None = None
     freeze: FreezeResult | None = None
+    cancel: CancelResult | None = None
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
@@ -647,6 +657,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.REROUTE_TO_BACKUP: Tier.T1,
     ActionType.NOTIFY_FAMILY: Tier.T1,
     ActionType.UPDATE_PLAN: Tier.T1,
+    ActionType.CANCEL_TRANSFER: Tier.T2,
     ActionType.CREATE_STANDING_MANDATE: Tier.T2,
     ActionType.TRANSFER: Tier.T2,
     ActionType.ADD_PAYEE: Tier.T2,
@@ -746,6 +757,7 @@ WARNING_KEYS = {
     ActionType.ADD_PAYEE: "warn.payee.new",
     ActionType.FREEZE_CARD: "warn.freeze.card",
     ActionType.CREATE_STANDING_MANDATE: "warn.standing.new",
+    ActionType.CANCEL_TRANSFER: "warn.transfer.cancel",
 }
 # Source: the order of evaluation table in docs/technical-reference.md. An allowed
 # T0 or T1 action is governed by the tier rule R02; an allowed T2 action by the
@@ -792,6 +804,8 @@ def confirmation_token_for(action: Action, mandate: Mandate) -> str:
             action.instrument_id or "",
             action.standing_mandate_id or "",
             action.standing_terms.model_dump_json() if action.standing_terms else "",
+            # Only a cancel names a receipt, so every token made before cancels existed is unchanged.
+            *([action.receipt_id] if action.receipt_id else []),
         ],
         separators=(",", ":"),
         ensure_ascii=False,
@@ -988,6 +1002,17 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
                     f"update_plan may change only {', '.join(PLAN_UPDATE_FIELDS)}, never {', '.join(protected)}."
                 )
 
+        if action.type is ActionType.CANCEL_TRANSFER:
+            sent = {past.idempotency_key for past in history if past.type is ActionType.TRANSFER}
+            if not action.receipt_id:
+                rule_ids.append("R04")
+                reasons.append("Cancelling a transfer needs its receipt id, and this one has none.")
+            elif action.cancel_of not in sent:
+                rule_ids.append("R04")
+                reasons.append(
+                    f"Receipt {action.receipt_id} is not one of this student's own transfers, so it cannot be cancelled here."
+                )
+
         standing_actions = (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE)
         if action.type in standing_actions and _standing_named(action, mandate) is None:
             rule_ids.append("R04")
@@ -1134,6 +1159,7 @@ from typing import Any
 
 from contracts.schemas import (
     Action,
+    CancelResult,
     Decision,
     FreezeResult,
     LedgerEntry,
@@ -2296,6 +2322,8 @@ from typing import Any
 from contracts.errors import RailError
 from contracts.interfaces import Rail
 from contracts.schemas import (
+    CancelResult,
+    CancelStatus,
     FreezeResult,
     FreezeStatus,
     Receipt,
@@ -2342,8 +2370,11 @@ class FakeRail(Rail):
         fail_once_keys: Iterable[str] = (FAIL_ONCE_KEY,),
         name: str = "fake",
         simulated: bool = True,
+        issue_status: ReceiptStatus = ReceiptStatus.COMPLETED,
     ) -> None:
         self._name = name
+        # Fixture: the status a receipt is issued at, completed unless a scenario chooses another.
+        self._issue_status = issue_status
         self._simulated = simulated
         self._traces = {
             receipt_id: trace.model_copy(deep=True)
@@ -2390,7 +2421,7 @@ The constructor copies any scripted traces, keyed by receipt id, so a test that 
             rail=self._name,
             amount=route.amount,
             currency=route.currency_from,
-            status=ReceiptStatus.COMPLETED,
+            status=self._issue_status,
             stage_entered_at=now,
             mandate_ref=mandate_ref,
             idempotency_key=idempotency_key,
@@ -2412,14 +2443,62 @@ The order of the checks matters. A key that has already paid is checked first. W
         self._receipts[key] = receipt.model_copy(deep=True)
         self._requests[key] = (route.model_dump(exclude={"quoted_at"}), mandate_ref)
 
+    def _issued(self, receipt_id: str) -> Receipt | None:
+        return next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+
     def status(self, receipt_id: str) -> TraceResult:
         trace = self._traces.get(receipt_id)
-        if trace is None:
+        issued = self._issued(receipt_id)
+        if trace is None and issued is None:
             raise RailError(f"No scripted trace for receipt {receipt_id}.")
-        issued = next((r for r in self._receipts.values() if r.receipt_id == receipt_id), None)
+        if trace is None:
+            # A receipt with no scripted trace is traced from itself; no entry gives a duration.
+            trace = TraceResult(
+                receipt_id=receipt_id,
+                status=issued.status,
+                stage_entered_at=issued.stage_entered_at,
+                typical_duration_source="fixture: no scripted trace and no sourced duration",
+                next_steps=[],
+                warnings=[],
+            )
         if issued is not None:
             trace = trace.model_copy(update={"stage_entered_at": issued.stage_entered_at})
         return trace.model_copy(deep=True)
+
+    def cancel(self, receipt_id: str) -> CancelResult:
+        issued = self._issued(receipt_id)
+        if issued is None:
+            return CancelResult(status=CancelStatus.FAILED, reason=f"{self._name} issued no receipt {receipt_id}.")
+        # What the student is shown is what the rail answers on: the scripted trace when there is one.
+        current = self._traces[receipt_id].status if receipt_id in self._traces else issued.status
+        if current not in CANCELLABLE:
+            return CancelResult(
+                status=CancelStatus.NOT_SUPPORTED,
+                reason=f"This transfer is {current.value.replace('_', ' ')}, so it can no longer be cancelled through Lifeline.",
+            )
+        self.mark_cancelled(receipt_id)
+        return CancelResult(status=CancelStatus.DONE)
+
+    def mark_cancelled(self, receipt_id: str) -> None:
+        """Record a done cancel: the receipt is returned and its trace says the student cancelled it.
+
+        The API calls it on start for every done cancel in the ledger, so a restart keeps it."""
+        issued = self._issued(receipt_id)
+        if issued is None:
+            return
+        now = datetime.now(timezone.utc)
+        returned = issued.model_copy(update={"status": ReceiptStatus.RETURNED, "stage_entered_at": now})
+        self._receipts[issued.idempotency_key] = returned
+        base = self._traces.get(receipt_id)
+        self._traces[receipt_id] = TraceResult(
+            receipt_id=receipt_id,
+            status=ReceiptStatus.RETURNED,
+            stage_entered_at=now,
+            typical_duration_hours=None,
+            typical_duration_source=base.typical_duration_source if base else "fixture: no sourced duration",
+            next_steps=[CANCELLED_STEP],
+            warnings=[],
+        )
 
     def freeze(self, instrument_id: str) -> FreezeResult:
         issuer, separator, _ = instrument_id.partition(":")
@@ -2615,7 +2694,16 @@ from typing import Any
 
 from contracts.errors import RailError
 from contracts.interfaces import Rail
-from contracts.schemas import FreezeResult, FreezeStatus, Receipt, ReceiptStatus, Route, TraceResult
+from contracts.schemas import (
+    CancelResult,
+    CancelStatus,
+    FreezeResult,
+    FreezeStatus,
+    Receipt,
+    ReceiptStatus,
+    Route,
+    TraceResult,
+)
 from rails.sim.rules import entry, no_duration
 
 SCRIPTS = ("normal", "delayed", "held_for_review", "returned", "scam_text")
@@ -2625,6 +2713,10 @@ SCAM_TEXT = (
     "release_agent_88 today, or the money will be returned to the sender."
 )
 SIMULATED_STEP = "This is a simulated rail. No real money moves."
+CANCELLED_STEP = "The student cancelled this transfer before it was in transit, and it was returned."
+# A simulated transfer can be cancelled only before it is in transit, at a stage whose status is none
+# of these. Source: docs/decisions.md, 8 October 2026.
+MOVED_ON = (ReceiptStatus.IN_TRANSIT, ReceiptStatus.COMPLETED, ReceiptStatus.FAILED, ReceiptStatus.RETURNED)
 
 
 class SimRail(Rail):
@@ -2645,6 +2737,8 @@ class SimRail(Rail):
         self._receipts: dict[str, Receipt] = {}
         self._requests: dict[str, tuple[dict[str, Any], str]] = {}
         self._issued = 0
+        # Receipt ids the student cancelled. A cancelled transfer is returned and stays returned.
+        self._cancelled: set[str] = set()
 
     @property
     def name(self) -> str:
@@ -2721,6 +2815,15 @@ class SimRail(Rail):
         now = now or datetime.now(timezone.utc)
         warnings: list[str] = []
         entered = receipt.stage_entered_at
+        if receipt_id in self._cancelled:
+            return TraceResult(
+                receipt_id=receipt_id,
+                status=ReceiptStatus.RETURNED,
+                stage_entered_at=entered,
+                typical_duration_source=f"{self.DURATION_ENTRY}: cancelled by the student",
+                next_steps=[f"{self.NAME} stage: returned.", CANCELLED_STEP, SIMULATED_STEP],
+                warnings=[],
+            )
         if self._script in ("held_for_review", "returned"):
             # The script pins the status: a held or returned transfer never moves on by the clock.
             status = receipt.status
@@ -2803,7 +2906,9 @@ class UpiPayNowSimRail(SimRail):
             for receipt in self._receipts.values()
             if _sender(receipt.mandate_ref) == _sender(mandate_ref)
             and receipt.executed_at.astimezone(SENDER_ZONE).date() == day
-            and receipt.status is not ReceiptStatus.RETURNED
+            # A transfer the student cancelled keeps its share of the day, as it keeps its share of the
+            # mandate's daily limit; only one the provider returned frees it. Source: docs/decisions.md.
+            and (receipt.status is not ReceiptStatus.RETURNED or receipt.receipt_id in self._cancelled)
         ]
         earlier = sum(today, Decimal(0))
         return [reason for _, reason in upi_refusals(route.amount, route.currency_from, route.purpose, earlier)]
@@ -2823,7 +2928,7 @@ Source: docs/decisions.md, 8 October 2026.
 
 from collections.abc import Iterable
 
-from contracts.schemas import ReceiptStatus, Route
+from contracts.schemas import CancelResult, CancelStatus, ReceiptStatus, Route
 from rails.sim.base import SimRail
 from rails.sim.rules import PIX_SCHEME_ENTRY, pix_refusals
 
@@ -3320,6 +3425,8 @@ from contracts.schemas import (
     Action,
     ActionType,
     AgentReply,
+    CancelResult,
+    CancelStatus,
     ConfirmationRequest,
     CouncilAdvice,
     CouncilDeliberation,
@@ -3447,7 +3554,7 @@ The imports come from the contracts and from nothing that belongs to a particula
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
-ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
 # The channel kinds a document request can name. Source: DOCUMENT_CHANNELS in rails/sim/rules.py.
@@ -3564,6 +3671,13 @@ TOOLS = [
         [],
     ),
     _tool(
+        "cancel_transfer",
+        "Cancel one of the student's own transfers that is still pending, by receipt id. Nothing changes until "
+        "the student confirms it, and a transfer that has moved on cannot be cancelled.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
+    _tool(
         "cash_cap_status",
         "Report what is left of the overseas cash withdrawal cap on the student's Chinese bank cards, this "
         "calendar year and today, from the cards on file.",
@@ -3614,6 +3728,7 @@ TOOL_ACTIONS = {
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
     "cash_cap_status": ActionType.PRECHECK,
     "update_plan": ActionType.UPDATE_PLAN,
+    "cancel_transfer": ActionType.CANCEL_TRANSFER,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -3625,6 +3740,7 @@ REQUIRED_ARGUMENTS = {
     "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
+    "cancel_transfer": ("receipt_id",),
 }
 ```
 
@@ -3656,6 +3772,10 @@ TEXTS = {
         "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
+        "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
+        "cancelled": "Done. Transfer {receipt_id} was cancelled and returned. It still counts toward today's limit.",
+        "cancel_not_supported": "Transfer {receipt_id} could not be cancelled: {reason}",
+        "cancel_failed": "Lifeline could not cancel transfer {receipt_id}: {reason}",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
         "payee_exists": "{payee} is already a payee, so nothing changed.",
         "frozen": "Done. Card {instrument} is frozen.",
@@ -3734,6 +3854,10 @@ TEXTS = {
         "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
+        "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
+        "cancelled": "Pronto. A transferência {receipt_id} foi cancelada e devolvida. Ela ainda conta para o limite de hoje.",
+        "cancel_not_supported": "A transferência {receipt_id} não pôde ser cancelada: {reason}",
+        "cancel_failed": "O Lifeline não conseguiu cancelar a transferência {receipt_id}: {reason}",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
         "payee_exists": "{payee} já é um destinatário, então nada mudou.",
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
@@ -3812,6 +3936,10 @@ TEXTS = {
         "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
+        "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
+        "cancelled": "已完成。转账 {receipt_id} 已取消并退回。它仍计入今天的限额。",
+        "cancel_not_supported": "转账 {receipt_id} 无法取消：{reason}",
+        "cancel_failed": "Lifeline 无法取消转账 {receipt_id}：{reason}",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
         "payee_exists": "{payee} 已经是收款人，因此没有任何更改。",
         "frozen": "已完成。卡片 {instrument} 已冻结。",
@@ -4139,6 +4267,9 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
+    receipt = _skeleton(action.receipt_id or "")
+    if receipt and receipt not in trail.from_user.payee_ids and receipt in trail.from_data.payee_ids:
+        untrusted["receipt_id"] = trail.from_data.payee_ids[receipt]
     return untrusted
 ```
 
@@ -4370,6 +4501,10 @@ A conversation turn takes the next turn number and starts a trail. The student's
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        if action_type is ActionType.CANCEL_TRANSFER:
+            # The loop names the student's own transfer behind the receipt, never the model; None when the
+            # student's ledger holds no such receipt, which the engine refuses.
+            fields["cancel_of"] = self._own_transfer(user_id, str(call.arguments.get("receipt_id", "")))[0]
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -4384,7 +4519,12 @@ A conversation turn takes the next turn number and starts a trail. The student's
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
+        checked = action.type in (
+            ActionType.TRANSFER,
+            ActionType.ADD_PAYEE,
+            ActionType.CREATE_STANDING_MANDATE,
+            ActionType.CANCEL_TRANSFER,
+        )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
         else:
@@ -4565,6 +4705,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
                 notice=terms.notice_hours,
                 cancel=terms.cancel_window_hours,
             )
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text = _text(lang, "confirm_cancel", receipt_id=action.receipt_id)
         else:
             text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
         self._pending[token] = pending
@@ -4844,13 +4986,16 @@ When no confirmation waits under the token for this student, and when a waiting 
         )
         self._history.setdefault(user_id, []).append(action)
         freeze: FreezeResult | None = None
+        cancel: CancelResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
         elif action.type is ActionType.CREATE_STANDING_MANDATE:
             text = self._create_standing(user_id, lang, trail, action, token)
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text, cancel = self._cancel(user_id, lang, trail, action)
         else:
             text, freeze = self._freeze(lang, trail, action)
-        return self._reply(trail, lang, text, decision=decision, freeze=freeze)
+        return self._reply(trail, lang, text, decision=decision, freeze=freeze, cancel=cancel)
 
     def _add_payee(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
@@ -5268,6 +5413,7 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         confirmation: ConfirmationRequest | None = None,
         receipt: Receipt | None = None,
         freeze: FreezeResult | None = None,
+        cancel: CancelResult | None = None,
     ) -> AgentReply:
         text = self._guarded(trail, text)
         return AgentReply(
@@ -5277,6 +5423,7 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
             decision=decision,
             receipt=receipt,
             freeze=freeze,
+            cancel=cancel,
             ledger_seqs=list(trail.seqs),
             provider=trail.provider,
             model=trail.model,
@@ -6677,7 +6824,18 @@ from typing import Any
 
 import yaml
 
-from contracts.schemas import AgentReply, Mandate, Message, Plan, RescueReply, Role, Source, StandingEvent, ToolCall
+from contracts.schemas import (
+    AgentReply,
+    Mandate,
+    Message,
+    Plan,
+    ReceiptStatus,
+    RescueReply,
+    Role,
+    Source,
+    StandingEvent,
+    ToolCall,
+)
 from core.agent import ANCHOR_KIND, AgentLoop
 from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
@@ -6819,10 +6977,12 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
     traces = scripted_traces(fixtures.get("traces"))
     failing = _fail_once_keys(fixtures.get("fail_once", []))
     scripts = fixtures.get("rail_scripts", {})
-    stray = sorted({*traces, *failing, *scripts} - set(names))
+    # Fixture: the status each fake rail issues receipts at, completed unless the scenario chooses one.
+    statuses = {name: ReceiptStatus(status) for name, status in (fixtures.get("receipt_status") or {}).items()}
+    stray = sorted({*traces, *failing, *scripts, *statuses} - set(names))
     if stray:
-        raise ValueError(f"traces, fail_once or rail_scripts name rails {stray}, which this scenario does not build")
-    scripted_fakes = sorted({*traces, *failing} & set(SIM_RAILS))
+        raise ValueError(f"traces, fail_once, rail_scripts or receipt_status name rails {stray}, which this scenario does not build")
+    scripted_fakes = sorted({*traces, *failing, *statuses} & set(SIM_RAILS))
     if scripted_fakes:
         raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
@@ -6883,6 +7043,8 @@ def reply_kind(reply: AgentReply) -> str:
         return "receipt"
     if reply.freeze is not None:
         return "freeze"
+    if reply.cancel is not None:
+        return "cancel"
     if reply.confirmation is not None:
         return "confirmation"
     if reply.decision is not None and not reply.decision.allowed:

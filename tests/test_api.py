@@ -843,3 +843,25 @@ def test_precheck_over_http_without_channel_or_senders_is_unchanged():
 
     assert result["ready"] is None
     assert result["rule_ids"] == ["cn_boc_anxin_009", "cn_fx_quota_001", "cn_cdd_004"]
+
+
+def test_a_done_cancel_survives_a_restart_of_the_api(tmp_path):
+    from contracts.schemas import ReceiptStatus
+    from rails.fake_rail import FakeRail
+
+    def rails():
+        built = demo_rails(sim_rails=False)
+        built["wise"] = FakeRail(name="wise", simulated=False, issue_status=ReceiptStatus.CREATED)
+        return built
+
+    first = TestClient(create_app(adapter=FakeModelAdapter([_call("propose_transfer", RENT), _call("cancel_transfer", {"receipt_id": "wise-0001"})]), rails=rails()))
+    token = _propose(first)
+    first.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+    cancel = first.post("/chat", json={"user_id": USER, "text": "Cancel wise-0001"}).json()
+    done = first.post("/confirm", json={"user_id": USER, "confirmation_token": cancel["confirmation"]["confirmation_token"]}).json()
+    assert done["cancel"]["status"] == "done"
+
+    second = TestClient(create_app(adapter=FakeModelAdapter([]), rails=rails()))
+    trace = second.post("/trace", json={"user_id": USER, "receipt_id": "wise-0001"}).json()
+
+    assert trace["status"] == "returned"

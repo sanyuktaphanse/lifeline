@@ -39,7 +39,9 @@ class UpiPayNowSimRail(SimRail):
             for receipt in self._receipts.values()
             if _sender(receipt.mandate_ref) == _sender(mandate_ref)
             and receipt.executed_at.astimezone(SENDER_ZONE).date() == day
-            and receipt.status is not ReceiptStatus.RETURNED
+            # A transfer the student cancelled keeps its share of the day, as it keeps its share of the
+            # mandate's daily limit; only one the provider returned frees it. Source: docs/decisions.md.
+            and (receipt.status is not ReceiptStatus.RETURNED or receipt.receipt_id in self._cancelled)
         ]
         earlier = sum(today, Decimal(0))
         return [reason for _, reason in upi_refusals(route.amount, route.currency_from, route.purpose, earlier)]

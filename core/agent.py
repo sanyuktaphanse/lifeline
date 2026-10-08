@@ -19,6 +19,8 @@ from contracts.schemas import (
     Action,
     ActionType,
     AgentReply,
+    CancelResult,
+    CancelStatus,
     ConfirmationRequest,
     CouncilAdvice,
     CouncilDeliberation,
@@ -155,7 +157,7 @@ SYSTEM_PROMPT = (
 )
 
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
-ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
+ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
 # The channel kinds a document request can name. Source: DOCUMENT_CHANNELS in rails/sim/rules.py.
@@ -272,6 +274,13 @@ TOOLS = [
         [],
     ),
     _tool(
+        "cancel_transfer",
+        "Cancel one of the student's own transfers that is still pending, by receipt id. Nothing changes until "
+        "the student confirms it, and a transfer that has moved on cannot be cancelled.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
+    _tool(
         "cash_cap_status",
         "Report what is left of the overseas cash withdrawal cap on the student's Chinese bank cards, this "
         "calendar year and today, from the cards on file.",
@@ -322,6 +331,7 @@ TOOL_ACTIONS = {
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
     "cash_cap_status": ActionType.PRECHECK,
     "update_plan": ActionType.UPDATE_PLAN,
+    "cancel_transfer": ActionType.CANCEL_TRANSFER,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -333,6 +343,7 @@ REQUIRED_ARGUMENTS = {
     "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
+    "cancel_transfer": ("receipt_id",),
 }
 
 TEXTS = {
@@ -360,6 +371,10 @@ TEXTS = {
         "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
+        "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
+        "cancelled": "Done. Transfer {receipt_id} was cancelled and returned. It still counts toward today's limit.",
+        "cancel_not_supported": "Transfer {receipt_id} could not be cancelled: {reason}",
+        "cancel_failed": "Lifeline could not cancel transfer {receipt_id}: {reason}",
         "payee_added": "Done. {payee} ({display_name}) is now a payee and can receive money from {allowed_from}.",
         "payee_exists": "{payee} is already a payee, so nothing changed.",
         "frozen": "Done. Card {instrument} is frozen.",
@@ -438,6 +453,10 @@ TEXTS = {
         "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
+        "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
+        "cancelled": "Pronto. A transferência {receipt_id} foi cancelada e devolvida. Ela ainda conta para o limite de hoje.",
+        "cancel_not_supported": "A transferência {receipt_id} não pôde ser cancelada: {reason}",
+        "cancel_failed": "O Lifeline não conseguiu cancelar a transferência {receipt_id}: {reason}",
         "payee_added": "Pronto. {payee} ({display_name}) agora é um destinatário e pode receber dinheiro a partir de {allowed_from}.",
         "payee_exists": "{payee} já é um destinatário, então nada mudou.",
         "frozen": "Pronto. O cartão {instrument} está bloqueado.",
@@ -516,6 +535,10 @@ TEXTS = {
         "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
+        "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
+        "cancelled": "已完成。转账 {receipt_id} 已取消并退回。它仍计入今天的限额。",
+        "cancel_not_supported": "转账 {receipt_id} 无法取消：{reason}",
+        "cancel_failed": "Lifeline 无法取消转账 {receipt_id}：{reason}",
         "payee_added": "已完成。{payee}（{display_name}）已成为收款人，自 {allowed_from} 起可以收款。",
         "payee_exists": "{payee} 已经是收款人，因此没有任何更改。",
         "frozen": "已完成。卡片 {instrument} 已冻结。",
@@ -838,6 +861,9 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
+    receipt = _skeleton(action.receipt_id or "")
+    if receipt and receipt not in trail.from_user.payee_ids and receipt in trail.from_data.payee_ids:
+        untrusted["receipt_id"] = trail.from_data.payee_ids[receipt]
     return untrusted
 
 
@@ -1190,6 +1216,10 @@ class AgentLoop:
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        if action_type is ActionType.CANCEL_TRANSFER:
+            # The loop names the student's own transfer behind the receipt, never the model; None when the
+            # student's ledger holds no such receipt, which the engine refuses.
+            fields["cancel_of"] = self._own_transfer(user_id, str(call.arguments.get("receipt_id", "")))[0]
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -1204,7 +1234,12 @@ class AgentLoop:
         except ValidationError as error:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
-        checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
+        checked = action.type in (
+            ActionType.TRANSFER,
+            ActionType.ADD_PAYEE,
+            ActionType.CREATE_STANDING_MANDATE,
+            ActionType.CANCEL_TRANSFER,
+        )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
         else:
@@ -1495,6 +1530,8 @@ class AgentLoop:
                 notice=terms.notice_hours,
                 cancel=terms.cancel_window_hours,
             )
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text = _text(lang, "confirm_cancel", receipt_id=action.receipt_id)
         else:
             text = _text(lang, "confirm_freeze", instrument=action.instrument_id)
         self._pending[token] = pending
@@ -1746,13 +1783,16 @@ class AgentLoop:
         )
         self._history.setdefault(user_id, []).append(action)
         freeze: FreezeResult | None = None
+        cancel: CancelResult | None = None
         if action.type is ActionType.ADD_PAYEE:
             text = self._add_payee(user_id, mandate, lang, trail, action, pending.display_name)
         elif action.type is ActionType.CREATE_STANDING_MANDATE:
             text = self._create_standing(user_id, lang, trail, action, token)
+        elif action.type is ActionType.CANCEL_TRANSFER:
+            text, cancel = self._cancel(user_id, lang, trail, action)
         else:
             text, freeze = self._freeze(lang, trail, action)
-        return self._reply(trail, lang, text, decision=decision, freeze=freeze)
+        return self._reply(trail, lang, text, decision=decision, freeze=freeze, cancel=cancel)
 
     def _add_payee(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, action: Action, name: str | None
@@ -2060,6 +2100,45 @@ class AgentLoop:
             return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
         return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
 
+    def _own_transfer(self, user_id: str, receipt_id: str) -> tuple[str | None, str | None]:
+        """The idempotency key and the rail of the student's own transfer behind a receipt, from the
+        student's own ledger receipt entries, or (None, None). A receipt sent to the student, which is
+        never written to the ledger, and another student's receipt are never found."""
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.kind != "receipt" or payload.get("user_id") != user_id:
+                continue
+            receipt = payload.get("receipt", {})
+            if receipt.get("receipt_id") == receipt_id:
+                return receipt.get("idempotency_key"), payload.get("rail")
+        return None, None
+
+    def _cancel(self, user_id: str, lang: str, trail: _Trail, action: Action) -> tuple[str, CancelResult]:
+        receipt_id = action.receipt_id or ""
+        _, rail_name = self._own_transfer(user_id, receipt_id)
+        rail = self._rails.get(rail_name or "")
+        if rail is None:
+            result = CancelResult(status=CancelStatus.FAILED, reason=f"No rail holds receipt {receipt_id}.")
+        else:
+            result = rail.cancel(receipt_id)
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"cancel": result.model_dump(mode="json")}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "cancel_result",
+                "idempotency_key": action.idempotency_key,
+                "receipt_id": receipt_id,
+                "rail": rail_name,
+                "status": result.status.value,
+                "reason": result.reason,
+            },
+        )
+        if result.status is CancelStatus.DONE:
+            return _text(lang, "cancelled", receipt_id=receipt_id), result
+        name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
+        return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
+
     def _offer_next_route(
         self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation
     ) -> AgentReply:
@@ -2142,6 +2221,7 @@ class AgentLoop:
         confirmation: ConfirmationRequest | None = None,
         receipt: Receipt | None = None,
         freeze: FreezeResult | None = None,
+        cancel: CancelResult | None = None,
     ) -> AgentReply:
         text = self._guarded(trail, text)
         return AgentReply(
@@ -2151,6 +2231,7 @@ class AgentLoop:
             decision=decision,
             receipt=receipt,
             freeze=freeze,
+            cancel=cancel,
             ledger_seqs=list(trail.seqs),
             provider=trail.provider,
             model=trail.model,

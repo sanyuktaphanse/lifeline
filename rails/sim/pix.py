@@ -7,7 +7,7 @@ Source: docs/decisions.md, 8 October 2026.
 
 from collections.abc import Iterable
 
-from contracts.schemas import ReceiptStatus, Route
+from contracts.schemas import CancelResult, CancelStatus, ReceiptStatus, Route
 from rails.sim.base import SimRail
 from rails.sim.rules import PIX_SCHEME_ENTRY, pix_refusals
 
@@ -30,3 +30,12 @@ class PixSimRail(SimRail):
 
     def refusals(self, route: Route, mandate_ref: str) -> list[str]:
         return [reason for _, reason in pix_refusals(route.payee_id, self.pix_key_on_file)]
+
+    def cancel(self, receipt_id: str) -> CancelResult:
+        return CancelResult(
+            status=CancelStatus.NOT_SUPPORTED,
+            reason=(
+                "Pix funds become available to the payee in real time, so a Pix transfer cannot be cancelled "
+                f"once it is sent. Source: {PIX_SCHEME_ENTRY}."
+            ),
+        )
