@@ -6593,7 +6593,7 @@ Quote a bare yes or no. YAML reads an unquoted `Yes` as the value true, not as t
 
 ## The knowledge base, `rails/knowledge/`
 
-`rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds the first eight entries. This is one of them: `singapore.yaml` holds the two entries the rescue reads, a cash pickup option and a replacement card estimate, each checked once by Claude Code, which `checked_by` records as `CC`, and waiting for a person's check. `rails/knowledge/loader.py`, explained above, is the code that reads them.
+`rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds the first eight entries. This is one of them: `singapore.yaml` holds the two entries the rescue reads, a cash pickup option and a replacement card estimate, each checked by SP, which `checked_by` records, and waiting for a second check. `rails/knowledge/loader.py`, explained above, is the code that reads them.
 
 ```yaml
 - id: cn_fx_quota_001

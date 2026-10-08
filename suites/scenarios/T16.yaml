@@ -1,5 +1,5 @@
 id: T16
-note: A rescue on a plan with no backup card. After the identity answer and the confirmed freeze of the primary Wise card, the wallet token check finds no backup, so the machine goes from S3 straight to S6. There the reply lists the cash pickup option from the knowledge entry the plan names and the message template for the trusted contact, who is named with a channel and never a phone number. No transfer is proposed at all, so no money goes to anyone, and no new payee is added. The cash pickup entry is checked once, by Claude Code, and still needs a person's check before the demo. The scripted model supplies nothing; every call in a rescue is built by code.
+note: A rescue on a plan with no backup card. After the identity answer and the confirmed freeze of the primary Wise card, the wallet token check finds no backup, so the machine goes from S3 straight to S6. There the reply lists the cash pickup option from the knowledge entry the plan names and the message template for the trusted contact, who is named with a channel and never a phone number. No transfer is proposed at all, so no money goes to anyone, and no new payee is added. The cash pickup entry is checked by SP and still needs a second check before the demo. The scripted model supplies nothing; every call in a rescue is built by code.
 fixtures:
   plan:
     backup_instrument: null
