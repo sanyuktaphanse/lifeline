@@ -27,6 +27,30 @@ FISCO_KEY_PATH=<this folder>/anchor.key
 
 `docker compose down` in this folder stops the network. The nodes, their keys, the build output, the downloaded tooling, the anchor key and `deployment.json` are generated here and ignored by git.
 
+## Create your own network
+
+You need Docker running and the repository's virtual environment, made once from the repository root with `python3 -m venv .venv` and `.venv/bin/pip install -r requirements.txt`. Then, from the repository root:
+
+```
+bash chain/setup.sh
+```
+
+It starts the container, downloads the official tooling, builds and starts four nodes, compiles and deploys the contract, and prints four lines. Put them in `.env`. With them set, `.venv/bin/python -m pytest tests/test_anchor_fisco.py` runs the three live tests instead of skipping them. To use a different Python, run `PYTHON=/path/to/python bash chain/setup.sh`.
+
+Everything it creates stays in this folder, holds your own keys, and is ignored by git through `chain/.gitignore`, so none of it can be committed:
+
+| Path | What it is |
+| --- | --- |
+| `nodes/` | The four nodes, their data, logs and configuration, the chain's CA key and certificates, each node's `node.pem` and SSL key, the SDK key, and the admin account key that `build_chain.sh` creates under `nodes/ca/accounts/` |
+| `build/` | The compiled contract, `LifelineEvidence.bin` and `LifelineEvidence.abi` |
+| `fisco-bcos` | The node binary, unpacked from the release |
+| `fisco-bcos-*.tar.gz` | The release archive it came from |
+| `build_chain.sh` | The official build script, downloaded for the release |
+| `anchor.key` | Lifeline's anchor account key, one private key as 64 hexadecimal characters |
+| `deployment.json` | The contract address, the deployment transaction and block, and the anchor account's address |
+
+To stop the network, run `docker compose down` in this folder. To start over with a new chain, also remove `nodes/`, `build/` and `deployment.json`, and run `bash chain/setup.sh` again. The contract accepts anchors only from the account that deployed it, so if you also remove `anchor.key`, the next run creates a new key and deploys a new contract for it, and the old address no longer works.
+
 ## How the client reaches the chain
 
 `core/anchor_fisco.py` tries two routes, each behind a small adapter a test can fake. The first is the FISCO BCOS Python SDK, which is not on PyPI and is not installed here, so it reports itself unavailable. The second is the node's native JSON RPC. A transaction is built in FISCO BCOS's TARS format, hashed and signed with secp256k1 in pure Python by `core/fisco_tx.py` and `core/evm_tx.py`, and sent with `sendTransaction`, which answers with the receipt once the transaction is in a block. No package was added.
