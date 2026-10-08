@@ -432,6 +432,7 @@ A transfer carrying a `standing_mandate_id` is checked against that standing man
 | Amount | Within `tolerance_pct` percent of the standing amount |
 | Time | From `notice_hours` before the due time until 24 hours after it |
 | Period | No run of this standing mandate has executed for the same month |
+| Cancelled period | The student has not cancelled the run for that month with `cancel_standing_run` |
 
 A standing mandate the student stopped is not an escalation but a refusal: R12 refuses any transfer under an inactive standing mandate, whatever its source, with a reason saying so. Within the pattern, rule R12 decides the transfer at tier T1: it is allowed with `R12` as its rule and needs no confirmation, because the student confirmed the standing mandate. Outside the pattern, rule R13 treats it as an ordinary T2 transfer needing confirmation: `R13` comes first in the rule ids, and its reason names every part that fell outside, such as the amount and the purpose together. Neither rule lifts the money rules. A run still passes R03 to R09 and R14, so a standing mandate can never pay above a limit or to a payee still cooling.
 
@@ -909,7 +910,7 @@ A precheck that flags something makes the loop add its own sentence, in the stud
 
 A run the engine does not allow, or would escalate, is never paid: it returns a `needs_student` event with the decision. When every route has failed, the notes are written and `rail_failed` is returned. Either way the period is marked attempted and not retried by the scheduler; the student can still pay it from chat. The idempotency key per period means R10 would refuse a second run of the same period even across a restart.
 
-`cancel_standing_run` skips the next period of that standing mandate that has not run: the current period while its run is pending, or the next one once it has run. Its result names the period and is written in its execution entry.
+`cancel_standing_run` skips the next period of that standing mandate that has not run: the current period while its run is pending, or the next one once it has run. Its result names the period and is written in its execution entry. The engine reads the same period from the executed cancel in its history, so since the review of 9 October a run for a cancelled period is outside the pattern for every source: the scheduler skips it, and a run the model proposes from chat escalates under R13 to an ordinary confirmation, which the student may still give, instead of being paid at T1.
 
 `deactivate_standing_mandate` marks the standing mandate inactive in a new mandate version, so the scheduler never runs it again and R12 refuses any transfer under it; earlier versions still show it active, as it was. Stopping one that is already inactive changes nothing.
 
@@ -1365,6 +1366,7 @@ Every change was written test first. The test was run and seen to fail before th
 | `tests/test_reminders.py` | 13 | Due values read as a date or a time in UTC or as none, only the student's own reminder notes read with their sequences, due and upcoming split at a time, and the boundary at the due time itself |
 | `tests/test_api_proactive.py` | 23 | `GET /note/{user_id}/monthly` with a month, without one, for a student with no entries, in the latest turn's language, 404 and a 422 that never echoes and writes nothing, the ledger length unchanged by a GET, and the same text as the chat tool and the tick; `GET /reminders/{user_id}` with T13's reminder upcoming, both lists at an injected time, the boundary, the current time, no reminders, nothing marked delivered or written, 404, and a time with no zone |
 | `tests/test_attack_six.py` | 8 | The Stage 9 attacker brief: a transfer a trace showed returned left out of the sent figures, a day the model invented, wrote with a time, or took from a day first paste refused, a past year that hid the 90 percent line refused, a withdrawal recorded only on the card the student named, the loop's warning kept when a turn runs out of steps, and a card not on file never refused in silence |
+| `tests/test_attack_seven.py` | 8 | The Stage 10 adversarial review: a run for a period the student cancelled escalated under R13 and never paid at T1, from chat, over HTTP and after a rebuild, the student still able to pay it by confirming, a cancel made after a period ran applying to the next period only, and a cancel of another standing mandate changing nothing |
 | Total | 1227 | |
 
 Some tests prove the system says no, and some prove it still says yes. A wall that blocks everything would pass every refusal test, so each group includes a test where the legitimate case goes through: an allowed rent transfer, every known route and receipt status accepted, and a provider reply returned unchanged.
