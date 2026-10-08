@@ -2454,7 +2454,11 @@ class AgentLoop:
         """The latest anchor entry in the ledger, and whether it verifies: signed in the anchor store,
         naming the entry just before it with that entry's hash, and every other signed head matching too."""
         local = isinstance(self._anchor, LocalSignedAnchor)
-        kind = self._anchor.kind if isinstance(self._anchor, LocalSignedAnchor) else None
+        # The local and the FISCO BCOS anchors name their kind and give the time a head was anchored; the
+        # chain also gives its block.
+        kind = getattr(self._anchor, "kind", None)
+        anchored_at = getattr(self._anchor, "anchored_at", None)
+        block_number = getattr(self._anchor, "block_number", None)
         entries = self._ledger.entries()
         latest = next((entry for entry in reversed(entries) if entry.kind == ANCHOR_KIND), None)
         status: dict[str, Any] = {"anchored": False}
@@ -2464,7 +2468,9 @@ class AgentLoop:
             hashes = {entry.seq: entry.hash for entry in entries}
             try:
                 signed = self._anchor.verify(head)
-                at = self._anchor.anchored_at(head) if isinstance(self._anchor, LocalSignedAnchor) else None
+                at = anchored_at(head) if callable(anchored_at) else None
+                if callable(block_number):
+                    status["block_number"] = block_number(head)
                 matches = head_seq == latest.seq - 1 and hashes.get(head_seq) == head and self._store_mismatch(entries) is None
             except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, an unreadable store is reported as not verified with its error
                 signed, matches, at = False, False, None

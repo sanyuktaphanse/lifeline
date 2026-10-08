@@ -175,9 +175,11 @@ def test_the_factory_gives_the_local_anchor_by_default_and_for_local(tmp_path):
         assert anchor.path == path
 
 
-def test_the_factory_says_fisco_is_not_configured_yet(tmp_path):
-    with pytest.raises(AnchorNotConfigured, match="fisco"):
-        anchor_for({"ANCHOR": "fisco"}, tmp_path / "anchors.jsonl")
+def test_the_factory_gives_the_fisco_anchor_for_fisco(tmp_path):
+    from core.anchor_fisco import FiscoBcosAnchor
+
+    for value in ("fisco", " FISCO "):
+        assert isinstance(anchor_for({"ANCHOR": value}, tmp_path / "anchors.jsonl"), FiscoBcosAnchor)
 
 
 def test_the_factory_names_the_values_it_takes_for_an_unknown_anchor(tmp_path):

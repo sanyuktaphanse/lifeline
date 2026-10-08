@@ -129,15 +129,15 @@ class LocalSignedAnchor(Anchor):
 
 
 def anchor_for(env: Mapping[str, str] | None, path: Path) -> Anchor:
-    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty.
-
-    FISCO BCOS arrives in a later change, so until then it is refused rather than quietly replaced.
+    """The anchor ANCHOR names: the local signed anchor at `path` for local or empty, the FISCO BCOS anchor
+    for fisco. The FISCO anchor reads its settings on every call, so a missing or unreachable chain is an
+    error at anchoring time, which the loop writes as an anchor_failed note and never lets block a payment.
     """
     kind = environment(env).get("ANCHOR", "").strip().casefold() or LOCAL
     if kind == LOCAL:
         return LocalSignedAnchor(path)
     if kind == FISCO:
-        raise AnchorNotConfigured(
-            "ANCHOR is fisco, and the FISCO BCOS anchor is not configured in this version. Set ANCHOR to local."
-        )
+        from core.anchor_fisco import FiscoBcosAnchor
+
+        return FiscoBcosAnchor()
     raise ValueError(f"ANCHOR must be one of {', '.join(ANCHOR_KINDS)}, not {kind!r}.")

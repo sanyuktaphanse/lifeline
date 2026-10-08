@@ -705,11 +705,12 @@ Response `200` after a confirmed payment:
 | `anchored` | Whether the ledger holds an anchor entry. When false, only `kind` follows |
 | `head_hash` | The ledger head the latest anchor recorded: the hash of entry `head_seq` |
 | `head_seq` | The sequence number of that entry. The anchor entry itself comes right after it |
-| `verified` | True only when `data/anchors.jsonl` holds that head in a line whose signature checks and `matches_ledger` is true. A line edited in any field makes it false |
+| `verified` | True only when the anchor store holds that head, a line in `data/anchors.jsonl` whose signature checks for `local` or a record in the LifelineEvidence contract for `fisco`, and `matches_ledger` is true. A line edited in any field makes it false |
 | `matches_ledger` | Whether the ledger agrees with the anchor store: the anchor entry names the entry just before it with that entry's hash, and every head the store holds signed names an entry the ledger still holds, with its hash. A ledger edited and rechained, cut short, or paired with a line from another ledger makes it false |
-| `anchored_at` | The time the anchor store recorded for that head, or `null` when no signed line holds it |
-| `kind` | Where the head is anchored: `local` today |
-| `error` | Present only when the anchor store could not be read; `verified` is then false |
+| `anchored_at` | The time the anchor store recorded for that head, the line's time for `local` or the block time for `fisco`, or `null` when it holds none |
+| `kind` | Where the head is anchored: `local`, the default, or `fisco` when `ANCHOR` is fisco |
+| `block_number` | Present only when the kind is `fisco`: the block the chain recorded for that head, or `null` when it holds none |
+| `error` | Present only when the anchor store could not be read, such as a chain that does not answer; `verified` is then false |
 | `development_secret` | Present and true only when `LIFELINE_ANCHOR_SECRET` is unset and the public development secret signs, so anyone could forge a line; never in production |
 
 An anchor entry carries the student's id like every entry, so `GET /ledger/{user_id}` lists it, after the entries it anchors. The line in `data/anchors.jsonl` holds only a hash of the id. A student can ask for the same check in chat, which runs the T0 tool `verify_ledger` and shows today's entries beside it.

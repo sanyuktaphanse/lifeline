@@ -207,3 +207,44 @@ def test_a_real_node_anchors_a_head_and_verifies_it_with_a_block_number():
     assert anchor_id.startswith("fisco:0x")
     assert anchor.verify(head) is True
     assert anchor.block_number(head) >= 1
+
+
+def test_the_verify_endpoint_shows_the_block_number_and_the_kind_fisco(configured, monkeypatch, tmp_path):
+    import api.main
+    from fastapi.testclient import TestClient
+
+    from core.fake_adapter import FakeModelAdapter
+    from tests.test_api import RENT, RENT_REQUEST, USER, _call
+
+    monkeypatch.setattr(api.main, "LEDGER_PATH", tmp_path / "data" / "ledger.jsonl")
+    monkeypatch.setattr(api.main, "CONVERSATIONS_PATH", tmp_path / "data" / "conversations.jsonl")
+    monkeypatch.setenv("COUNCIL", "")
+    client = TestClient(api.main.create_app(adapter=FakeModelAdapter([_call("propose_transfer", RENT)]), anchor=FiscoBcosAnchor(transports=[FakeTransport()])))
+    token = client.post("/chat", json={"user_id": USER, "text": RENT_REQUEST}).json()["confirmation"]["confirmation_token"]
+    client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+
+    anchor = client.get(f"/ledger/{USER}/verify").json()["anchor"]
+
+    assert anchor["kind"] == "fisco"
+    assert anchor["verified"] is True and anchor["matches_ledger"] is True
+    assert anchor["block_number"] == 42
+    assert anchor["anchored_at"] == "2026-10-08T12:00:00+00:00"
+    assert "development_secret" not in anchor
+
+
+def test_a_chain_that_cannot_be_read_is_reported_as_not_verified_with_its_error(configured):
+    from core.agent import AgentLoop
+    from core.ledger import HashChainLedger
+    from core.mandate import DeterministicMandateEngine
+    from rails.fake_router import FakeRouter
+
+    ledger = HashChainLedger()
+    head = ledger.append("agent", "turn", {"user_id": "student_001", "turn": 1})
+    ledger.append("agent", "anchor", {"user_id": "student_001", "head_hash": head.hash, "head_seq": head.seq, "anchor_id": "fisco:0x1", "anchored_at": "2026-10-08T12:00:00+00:00"})
+    loop = AgentLoop(adapter=None, engine=DeterministicMandateEngine(), ledger=ledger, router=FakeRouter(), rails={}, mandates={},
+                     balances={}, pending={}, anchor=FiscoBcosAnchor(transports=[FakeTransport(fail=httpx.ConnectError("refused"))]))
+
+    status = loop.anchor_status()
+
+    assert status["kind"] == "fisco"
+    assert status["verified"] is False and "FiscoAnchorError" in status["error"]
