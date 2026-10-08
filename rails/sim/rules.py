@@ -1,11 +1,14 @@
 """The rules the simulated rails and the router share, each read from a knowledge entry by its id.
 
-No figure is written here: every limit, purpose, and document list comes from `values` in the entry,
-and every refusal names the entry it rests on. Source: docs/decisions.md, 8 October 2026.
+No sourced figure is written here: every limit, purpose, and document list comes from `values` in the entry,
+and every refusal names the entry it rests on. Source: docs/decisions.md, 8 October 2026. The one product
+constant, the cash cap's warning lines, is named as Lifeline's own choice where it is defined.
 """
 
 import re
 import unicodedata
+from collections.abc import Iterable
+from datetime import date
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
@@ -36,6 +39,11 @@ NO_SINGAPORE_PAGE = (
     "UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file "
     f"for it. Source: {CN_INSTITUTION_ENTRY}."
 )
+# Source: docs/decisions.md, Stage 9 of 8 October 2026. Lifeline's own choice, not a sourced figure: the
+# percentages of the annual cap across all cards, and of each card's daily cap, at which the cash cap warns.
+# cn_atm_cap_005 gives the caps; nothing on file gives a line to warn at. At 90 the warning carries the
+# entry's consequence sentence.
+CASH_CAP_WARNING_PERCENTS = (70, 90)
 WISE_DOCS_ENTRY = "wise_docs_channel_001"
 WISE_SCAM_ENTRY = "wise_docs_impersonation_002"
 # The kinds of channel a provider's request for documents can name, never the address itself.
@@ -184,6 +192,51 @@ class ChineseCard(BaseModel):
     withdrawn_today: NonNegativeAmount
 
 
+def _day(value: Any) -> date | None:
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def with_withdrawals(
+    cards: list[dict[str, Any]], withdrawals: Iterable[dict[str, Any]], today: date
+) -> list[dict[str, Any]]:
+    """Each card's starting position from the fixture plus the withdrawals recorded on it.
+
+    A withdrawal counts toward the year when it was made in today's calendar year, and toward the day when it
+    was made today. A withdrawal on a card the fixture does not hold, or with no readable day, is not counted.
+    """
+    added_year: dict[str, Decimal] = {}
+    added_today: dict[str, Decimal] = {}
+    for withdrawal in withdrawals:
+        made = _day(withdrawal.get("date"))
+        if made is None or made.year != today.year:
+            continue
+        card = str(withdrawal.get("instrument_id"))
+        amount = Decimal(str(withdrawal.get("amount")))
+        added_year[card] = added_year.get(card, Decimal(0)) + amount
+        if made == today:
+            added_today[card] = added_today.get(card, Decimal(0)) + amount
+    return [
+        {
+            **card,
+            "withdrawn_this_year": Decimal(str(card.get("withdrawn_this_year")))
+            + added_year.get(str(card.get("instrument_id")), Decimal(0)),
+            "withdrawn_today": Decimal(str(card.get("withdrawn_today")))
+            + added_today.get(str(card.get("instrument_id")), Decimal(0)),
+        }
+        for card in cards
+    ]
+
+
+def _line_reached(used: Decimal, cap: Decimal) -> int | None:
+    """The highest of Lifeline's warning lines the amount has reached, compared exactly, or None."""
+    return max((level for level in CASH_CAP_WARNING_PERCENTS if used * 100 >= cap * level), default=None)
+
+
 def cash_cap_status(cards: list[dict[str, Any]]) -> dict[str, Any]:
     """What is left of the overseas cash cap, by cn_atm_cap_005, for the cards a fixture holds.
 
@@ -205,11 +258,28 @@ def cash_cap_status(cards: list[dict[str, Any]]) -> dict[str, Any]:
         # Today's withdrawals are part of the year's and within the daily cap, or the fixture cannot be true.
         if card.withdrawn_today > card.withdrawn_this_year or card.withdrawn_today > daily:
             raise ValueError(f"Card {card.instrument_id} in the fixture has withdrawals today that cannot be true.")
-    remaining_year = max(annual - sum((card.withdrawn_this_year for card in held), Decimal(0)), Decimal(0))
+    used_year = sum((card.withdrawn_this_year for card in held), Decimal(0))
+    remaining_year = max(annual - used_year, Decimal(0))
+    # The lines are read across all cards for the year, so splitting across cards or days cannot hide one,
+    # and per card for the day, as the entry caps each card per day.
+    thresholds: list[dict[str, Any]] = []
+    year_level = _line_reached(used_year, annual)
+    if year_level is not None:
+        thresholds.append({"scope": "year", "level": year_level, "used": used_year, "cap": annual})
+    for card in held:
+        day_level = _line_reached(card.withdrawn_today, daily)
+        if day_level is not None:
+            thresholds.append(
+                {"scope": "card_day", "instrument_id": card.instrument_id, "level": day_level,
+                 "used": card.withdrawn_today, "cap": daily}
+            )
     # What all the cards together may still take today, each within its own daily cap. Source: the
     # attacker brief of 8 October: two cards can reach the cap in one day while each is under it.
     cards_today_total = sum((daily - card.withdrawn_today for card in held), Decimal(0))
     return {
+        "used_year": used_year,
+        "annual_cap": annual,
+        "thresholds": thresholds,
         "remaining_year": remaining_year,
         "per_card_daily_cap": daily,
         "cards_today_total": cards_today_total,

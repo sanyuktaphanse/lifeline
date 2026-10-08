@@ -1,5 +1,5 @@
 id: T37
-note: The student asks how much cash they can still take out abroad on their Chinese cards. The scripted model calls cash_cap_status, a T0 tool mapped to the precheck with action kind overseas_cash, which runs as proposal, decision and execution. The cards and the yuan withdrawn on each come from the chinese_cards fixture in fixtures/demo_user.yaml, and the caps and the consequence from the values of cn_atm_cap_005, read by id. The entry counts every card of an individual together, so the 94,500 yuan withdrawn across the two cards leaves 5,500 for the year, at or below one card's daily cap of 10,000 and below the 18,500 the two cards together may still take today, and the loop writes a cash_cap_warning note and its own warning in the student's language with the remaining amount, that exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year, and the entry id. The second turn checks the model was given each card's figures for the year and for today. The withdrawals are a fixture, not a record of real ones, and the entry was checked once by S and waits for a second check.
+note: The student asks how much cash they can still take out abroad on their Chinese cards. The scripted model calls cash_cap_status, a T0 tool mapped to the precheck with action kind overseas_cash, which runs as proposal, decision and execution. The cards and the yuan withdrawn on each come from the chinese_cards fixture in fixtures/demo_user.yaml, and the caps and the consequence from the values of cn_atm_cap_005, read by id. The entry counts every card of an individual together, so the 94,500 yuan withdrawn across the two cards leaves 5,500 for the year, at or below one card's daily cap of 10,000 and below the 18,500 the two cards together may still take today, and the loop writes a cash_cap_warning note and its own warning in the student's language with the remaining amount, that exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year, and the entry id. The second turn checks the model was given each card's figures for the year and for today. The withdrawals are a fixture, not a record of real ones, and the entry was checked once by S and waits for a second check. The third run, in Chinese, starts from cards with 85,000 yuan withdrawn this year, and the student says they took out 6,000 yuan on icbc:card_03 today. The scripted model calls record_cash_withdrawal, a T1 action that runs as proposal, decision and execution, the execution holding the card, the amount in yuan and the date; the ledger's withdrawal takes the year to 91,000 yuan across all cards, past Lifeline's 90 percent line, so the loop writes a cash_cap_warning note and warns in Chinese with the two year consequence and the entry id. The 70 and 90 percent lines are Lifeline's choice, not a sourced figure.
 expected:
   ledger: [proposal, decision, execution, note]
   notes: [cash_cap_warning]
@@ -48,3 +48,27 @@ runs:
         expect:
           reply: answer
           model_saw: *cards
+  - lang: zh
+    # Fixture: cards below the 90 percent line, so the recorded withdrawal is what crosses it. Not real cards.
+    fixtures:
+      chinese_cards:
+        - instrument_id: "icbc:card_03"
+          withdrawn_this_year: "85000"
+          withdrawn_today: "0"
+        - instrument_id: "boc:card_04"
+          withdrawn_this_year: "0"
+          withdrawn_today: "0"
+    turns:
+      - user: 我今天在境外用 icbc:card_03 取了 6000 元现金，帮我记下来。
+        model:
+          - calls:
+              - name: record_cash_withdrawal
+                arguments: {instrument_id: "icbc:card_03", amount: "6000"}
+          - text: ""
+        expect:
+          reply: answer
+          lang: zh
+          must_contain:
+            - "你所有中国银行卡本年度境外取现已用 91,000 CNY，年度额度为 100,000 CNY，已达到 Lifeline 的 90% 提醒线。"
+            - "超过年度额度后，当年余下时间和下一年都不能在境外取现。"
+            - "来源：cn_atm_cap_005。"

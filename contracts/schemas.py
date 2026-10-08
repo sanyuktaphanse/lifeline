@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Annotated, Any, Literal
@@ -58,6 +58,7 @@ class ActionType(str, Enum):
     UPDATE_PLAN = "update_plan"
     CANCEL_TRANSFER = "cancel_transfer"
     MONTHLY_SUMMARY = "monthly_summary"
+    RECORD_CASH_WITHDRAWAL = "record_cash_withdrawal"
 
 
 class RouteStatus(str, Enum):
@@ -139,6 +140,9 @@ class Action(BaseModel):
     # a cancel whose cancel_of is not in the student's history. Source: docs/decisions.md, 8 October 2026.
     receipt_id: str | None = None
     cancel_of: str | None = None
+    # The day a recorded overseas cash withdrawal was made, which the cash cap counts against the year and
+    # the day. Only record_cash_withdrawal carries it. Source: docs/decisions.md, Stage 9 of 8 October 2026.
+    withdrawal_date: date | None = None
 
 
 # The only fields of the resilience plan that update_plan may change. The identity check, the

@@ -102,7 +102,8 @@ def test_engine_and_check_wrapper_give_the_same_decision():
 
 
 # Pinned so that adding or retiering an action type is a change someone has to make here on purpose.
-# Source: docs/decisions.md, 18 September 2026 and 8 October 2026, the second record of which adds update_plan.
+# Source: docs/decisions.md, 18 September 2026 and 8 October 2026, the second record of which adds update_plan,
+# and the Stage 9 record of 8 October, which adds record_cash_withdrawal.
 FROZEN_ACTION_TIERS = {
     "transfer": "T2",
     "read_balance": "T0",
@@ -126,6 +127,7 @@ FROZEN_ACTION_TIERS = {
     "update_plan": "T1",
     "cancel_transfer": "T2",
     "monthly_summary": "T0",
+    "record_cash_withdrawal": "T1",
 }
 
 

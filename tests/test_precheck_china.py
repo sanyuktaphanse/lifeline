@@ -517,6 +517,10 @@ def test_every_yuan_figure_in_the_warning_comes_from_the_fixture_and_the_entry()
     status = cash_cap_status(DEMO_CARDS)
     allowed = {status["remaining_year"], Decimal(str(CAP["per_card_daily_cap"])), Decimal(str(CAP["annual_cap"]))}
     allowed |= {card["remaining_today"] for card in status["cards"]} | {status["cards_today_total"]}
+    # Stage 9: the year's use, from the fixture, and Lifeline's warning lines, a product constant.
+    from rails.sim.rules import CASH_CAP_WARNING_PERCENTS
+
+    allowed |= {status["used_year"]} | {Decimal(level) for level in CASH_CAP_WARNING_PERCENTS}
     figures = _figures(reply.text.replace(ATM_CAP_ENTRY, ""))
     assert figures and figures <= allowed
 

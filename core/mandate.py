@@ -39,7 +39,12 @@ WARNING_KEYS = {
 ALLOWED_RULE = {Tier.T0: "R02", Tier.T1: "R02", Tier.T2: "R11"}
 # Source: docs/decisions.md, 8 October 2026. A new payee id is plain ASCII letters, digits, and
 # the joiners . @ - _, so a lookalike letter, a space, or an invisible character cannot pass for one.
-CARD_ACTIONS = (ActionType.FREEZE_CARD, ActionType.REROUTE_TO_BACKUP, ActionType.CHECK_WALLET_TOKEN)
+CARD_ACTIONS = (
+    ActionType.FREEZE_CARD,
+    ActionType.REROUTE_TO_BACKUP,
+    ActionType.CHECK_WALLET_TOKEN,
+    ActionType.RECORD_CASH_WITHDRAWAL,
+)
 PLAIN_INSTRUMENT_ID = re.compile(INSTRUMENT_ID)
 PLAIN_PAYEE_ID = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
 
@@ -261,6 +266,25 @@ class DeterministicMandateEngine(MandateEngine):
                 rule_ids.append("R04")
                 reasons.append(
                     f"update_plan may change only {', '.join(PLAN_UPDATE_FIELDS)}, never {', '.join(protected)}."
+                )
+
+        if action.type is ActionType.RECORD_CASH_WITHDRAWAL:
+            missing = [
+                name
+                for name in ("instrument_id", "amount", "currency", "withdrawal_date")
+                if getattr(action, name) in (None, "")
+            ]
+            if missing:
+                rule_ids.append("R04")
+                reasons.append(
+                    "Recording a cash withdrawal needs the card, the amount, its currency and the day, and this "
+                    f"one has no {', no '.join(missing)}."
+                )
+            elif action.withdrawal_date is not None and action.withdrawal_date > _utc_date(action):
+                rule_ids.append("R04")
+                reasons.append(
+                    f"A withdrawal on {action.withdrawal_date.isoformat()} cannot be recorded on "
+                    f"{_utc_date(action).isoformat()}, because that day has not come."
                 )
 
         if action.type is ActionType.CANCEL_TRANSFER:
