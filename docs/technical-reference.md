@@ -1474,6 +1474,10 @@ All times are local time.
 | `7519069` | 8 Oct | Docs: Stage 8 second half, cancels, the monthly note, the parent and the first week |
 | `668b4fa` | 8 Oct | Attacker brief three: receipt ids with other dashes, months in other digits, cancelled transfers in the note |
 | `3459d95` | 8 Oct | Attacker brief four: a transfer the rail refused at the cap is listed in the monthly note |
+| `470860c` | 8 Oct | Anchor: the LifelineEvidence contract and a FISCO BCOS client with faked transports |
+| `39f6309` | 8 Oct | Anchor: a four node local FISCO BCOS network, the contract deployed, a real anchor and verify |
+| `614e3d1` | 8 Oct | Anchor: the factory gives the FISCO BCOS anchor, and the verify block shows its block |
+| `31863b8` | 8 Oct | FISCO anchor attacker brief: close eight breaks |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
