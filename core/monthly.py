@@ -142,6 +142,18 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         and entry.payload.get("kind") == "cancel_result"
         and entry.payload.get("status") == "done"
     }
+    # A trace the student ran that the rail answered failed or returned outranks the receipt's first status.
+    # Source: the Stage 9 attacker brief.
+    traced = {
+        entry.payload["result"]["trace"].get("receipt_id"): (entry.payload["result"]["trace"].get("status"), entry)
+        for entry in entries
+        if entry.kind == "execution"
+        and entry.payload.get("user_id") == user_id
+        and isinstance((entry.payload.get("result") or {}).get("trace"), dict)
+        and entry.payload["result"]["trace"].get("receipt_id") in keys
+        and entry.payload["result"]["trace"].get("status") in PROBLEM_STATUSES
+    }
+    not_sent |= {keys[receipt_id] for receipt_id in traced}
     # A transfer every rail refused at execution leaves a rail error note and no receipt; one that failed on
     # one rail and was then paid on another has a receipt, and is not a problem. Source: the attacker brief.
     receipted = {key for key in keys.values()}
@@ -194,6 +206,10 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
             unusual[UNUSUAL_NOTES[payload["kind"]]].append(entry.seq)
         elif entry.kind == INJECTION:
             unusual[INJECTION].append(entry.seq)
+    listed = {item["receipt_id"] for item in problems}
+    for receipt_id, (status, entry) in traced.items():
+        if receipt_id not in listed and month_of(entry.ts) == month:
+            problems.append({"receipt_id": receipt_id, "outcome": status, "seq": entry.seq})
     transfers = [
         {**group, **{name: format(group[name], "f") for name in ("total", "fees", "spread")}} for group in groups.values()
     ]

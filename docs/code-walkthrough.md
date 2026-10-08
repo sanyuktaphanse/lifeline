@@ -4031,6 +4031,7 @@ TEXTS = {
         "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} {currency} a day and your cards together may still withdraw {today} {currency} today, so you can reach the cap. {consequence} Source: {entry_id}.",
         "cash_cap_year": "You have used {used} {currency} of the {cap} {currency} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
         "cash_cap_year_consequence": "You have used {used} {currency} of the {cap} {currency} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
+        "withdrawal_not_recorded": "Lifeline recorded no cash withdrawal. {reason}",
         "cash_cap_card_day": "Card {instrument} has withdrawn {used} {currency} today of its daily cap of {cap} {currency}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
@@ -4118,6 +4119,7 @@ TEXTS = {
         "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} {currency} por dia e seus cartões juntos ainda podem sacar {today} {currency} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "cash_cap_year": "Você já sacou {used} {currency} do limite anual de {cap} {currency} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
         "cash_cap_year_consequence": "Você já sacou {used} {currency} do limite anual de {cap} {currency} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "withdrawal_not_recorded": "O Lifeline não registrou nenhum saque em dinheiro. {reason}",
         "cash_cap_card_day": "O cartão {instrument} já sacou {used} {currency} hoje do limite diário de {cap} {currency}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
@@ -4205,6 +4207,7 @@ TEXTS = {
         "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计）。单张卡每天可取 {daily} {currency}，你的卡今天合计还能取 {today} {currency}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "cash_cap_year": "你所有中国银行卡本年度境外取现已用 {used} {currency}，年度额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
         "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used} {currency}，年度额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "withdrawal_not_recorded": "Lifeline 没有记录任何取现。{reason}",
         "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used} {currency}，单卡每日额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
@@ -4752,7 +4755,10 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
                 messages.append(tool_message)
                 turn_messages.append(tool_message)
-        reply = self._reply(trail, lang, _text(lang, "too_many_steps"), decision=decision)
+        # The loop's own sentences, such as a cash cap warning, are kept when the turn runs out of steps.
+        # Source: the Stage 9 attacker brief.
+        text = " ".join([_text(lang, "too_many_steps"), *trail.notices])
+        reply = self._reply(trail, lang, text, decision=decision)
         turn_messages.append(Message(role=Role.ASSISTANT, text=reply.text, lang=lang))
         return self._finish(trail, turn_messages, reply)
 ```
@@ -4842,7 +4848,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
         elif action.type is ActionType.RECORD_CASH_WITHDRAWAL:
-            untrusted = _untrusted_withdrawal(trail, action, call.arguments)
+            untrusted = _untrusted_withdrawal(trail, action, self._chinese_cards.get(user_id, []))
         elif latest:
             untrusted = _untrusted_latest(trail)
         else:
@@ -4882,6 +4888,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
             self._after_precheck(trail, lang, action, call.arguments, result)
         if "withdrawal_recorded" in result:
             self._warn_cash_cap(trail, lang, action)
+        elif action.type is ActionType.RECORD_CASH_WITHDRAWAL:
+            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=result.get("error", "")))
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
@@ -7290,6 +7298,18 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
         and entry.payload.get("kind") == "cancel_result"
         and entry.payload.get("status") == "done"
     }
+    # A trace the student ran that the rail answered failed or returned outranks the receipt's first status.
+    # Source: the Stage 9 attacker brief.
+    traced = {
+        entry.payload["result"]["trace"].get("receipt_id"): (entry.payload["result"]["trace"].get("status"), entry)
+        for entry in entries
+        if entry.kind == "execution"
+        and entry.payload.get("user_id") == user_id
+        and isinstance((entry.payload.get("result") or {}).get("trace"), dict)
+        and entry.payload["result"]["trace"].get("receipt_id") in keys
+        and entry.payload["result"]["trace"].get("status") in PROBLEM_STATUSES
+    }
+    not_sent |= {keys[receipt_id] for receipt_id in traced}
     # A transfer every rail refused at execution leaves a rail error note and no receipt; one that failed on
     # one rail and was then paid on another has a receipt, and is not a problem. Source: the attacker brief.
     receipted = {key for key in keys.values()}
@@ -7342,6 +7362,10 @@ def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[
             unusual[UNUSUAL_NOTES[payload["kind"]]].append(entry.seq)
         elif entry.kind == INJECTION:
             unusual[INJECTION].append(entry.seq)
+    listed = {item["receipt_id"] for item in problems}
+    for receipt_id, (status, entry) in traced.items():
+        if receipt_id not in listed and month_of(entry.ts) == month:
+            problems.append({"receipt_id": receipt_id, "outcome": status, "seq": entry.seq})
     transfers = [
         {**group, **{name: format(group[name], "f") for name in ("total", "fees", "spread")}} for group in groups.values()
     ]

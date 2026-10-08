@@ -32,6 +32,7 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 6. the receipts each fake rail issued, so receipt numbers continue and a trace still finds its receipt;
 7. the last twenty messages of each student's conversation, read from `data/conversations.jsonl`, so the model keeps its context.
 8. every rescue in progress, at the step it had reached, with the card it chose, the result of its freeze, and the backup card payments moved to, so a rescue can be finished after a restart.
+9. every overseas cash withdrawal the student recorded, which the cash cap reads from the ledger on every call, so the position after a restart is the fixture's starting position plus those withdrawals.
 
 The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on start the loop reads the time of the last anchor from the ledger, so the hourly anchor keeps its pace. The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete the three files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
 
@@ -1550,6 +1551,144 @@ Response `200`, with the token and the times replaced by placeholders:
 
 `AgentReply` carries `cancel`, null unless the reply is the outcome of a confirmed cancel: `{"status": "done" | "not_supported" | "failed", "deep_link": ..., "reason": ...}`, the same shape as `freeze`. A cancel is proposed in chat with the receipt id the student types, or with "cancel my last transfer", which the loop resolves to the student's most recent receipt, and confirmed through `POST /confirm` like any T2 action; only a receipt in the student's own ledger can be cancelled, never one sent to them. The ledger can now hold a `cancel_result` note, with `receipt_id`, `rail`, `status` and `reason`, and a `monthly_note`, with `month`, `lang`, `text` and `summary`, which the scheduler writes once at the start of each month for the month that ended; the app shows it, and nothing is sent. `POST /standing/run_due` writes it too, for the time it is given.
 
+## The monthly note and reminders
+
+### GET /note/{user_id}/monthly
+
+The monthly note for one calendar month, in UTC, built from the student's ledger alone with no model. The optional query parameter `month` is written `YYYY-MM`; without it the note is for the month of the student's latest ledger entry, or the current month when there is none. The note is in the language of the student's latest turn, as the scheduler's note is.
+
+The request runs the T0 tool `monthly_summary` through the engine, as `/trace` and `/precheck` do, so it leaves a `proposal`, a `decision` and an `execution` in the ledger. The text is rendered from the summary that execution recorded, by the same code the chat tool and the scheduler use, so the three give the same text for the same month and language.
+
+The response carries the text, the `summary` with the entry sequences behind every figure, and `seqs`, every one of those sequences once and in order. The summary holds the transfers sent per currency and corridor with their fees and exchange cost, `taxes` with `on_file` false while no route carries a tax line, the `routes` used, and in `comparisons` one item per transfer sent: `compared` true with the bank wire's cost, the route's cost and the saving, and `quote_seq`, only when the ledger holds a `get_quote` for that transfer's corridor and amount in the same turn, and `compared` false otherwise. `unusual` counts payees added, rescues started and suspected injections, beside `refusals`, and `coming` lists the standing runs and reminders due in the following month. The text names a reminder by its due date only.
+
+`GET /note/student_001/monthly?month=2026-10`, after a quote and a rent payment in one turn and two reminders, returns `200`:
+
+```json
+{
+  "user_id": "student_001",
+  "month": "2026-10",
+  "lang": "en",
+  "text": "Lifeline's note for 2026-10, from your ledger. Transfers: 1 sent on SG>BR, total 1200 SGD, fees 5.60 SGD. Exchange cost paid: 0 SGD on SG>BR. Taxes: no tax figure is on file, because no route or entry carries one. Routes used: 1 over wise. Against the bank wire: wise for 1200 SGD cost 49.40 SGD less than the bank wire quoted in the same turn. Standing runs that ran: 0. Failed, returned or cancelled: none. Unusual: refused requests 0, payees added 0, rescues started 0, suspected injections 0. Coming in 2026-11: a reminder due 2026-11-02.",
+  "summary": {
+    "month": "2026-10",
+    "transfers": [
+      {
+        "currency": "SGD",
+        "corridor": "SG>BR",
+        "count": 1,
+        "total": "1200",
+        "fees": "5.60",
+        "spread": "0",
+        "seqs": [
+          9
+        ]
+      }
+    ],
+    "standing_runs": [],
+    "problems": [],
+    "refusals": {
+      "count": 0,
+      "seqs": []
+    },
+    "taxes": {
+      "on_file": false,
+      "seqs": []
+    },
+    "routes": [
+      {
+        "rail": "wise",
+        "count": 1,
+        "seqs": [
+          9
+        ]
+      }
+    ],
+    "comparisons": [
+      {
+        "seq": 9,
+        "rail": "wise",
+        "amount": "1200",
+        "currency": "SGD",
+        "compared": true,
+        "quote_seq": 3,
+        "bank_wire_cost": "55.00",
+        "route_cost": "5.60",
+        "saving": "49.40"
+      }
+    ],
+    "unusual": {
+      "payees_added": {
+        "count": 0,
+        "seqs": []
+      },
+      "rescues_started": {
+        "count": 0,
+        "seqs": []
+      },
+      "injection_suspected": {
+        "count": 0,
+        "seqs": []
+      }
+    },
+    "coming": {
+      "month": "2026-11",
+      "standing_runs": [],
+      "reminders": [
+        {
+          "text": "Renew the student pass",
+          "due": "2026-11-02T00:00:00+00:00",
+          "seq": 20
+        }
+      ]
+    }
+  },
+  "seqs": [
+    3,
+    9,
+    20
+  ]
+}
+```
+
+A month that is not `YYYY-MM`, such as `2026-13`, `26-10` or one in fullwidth digits, is a `422` whose detail never repeats what was sent, and nothing is written:
+
+```json
+{
+  "detail": "month must be a four digit year, a hyphen and a two digit month."
+}
+```
+
+### GET /reminders/{user_id}
+
+The student's reminders, read from the reminder notes `set_reminder` writes, split at the optional query parameter `now`, an ISO time with a zone, or at the current time. `due` lists the reminders whose due time is at or before `now`, and `upcoming` the rest, each with its `text`, its `due` time in UTC and the `seq` of the note that set it. A due value written as a date is due at the start of that day in UTC; one that is neither a date nor a time has `due` null and is listed as upcoming. Nothing is marked delivered, because the app delivers, and the request writes nothing to the ledger. A `now` without a zone is a `422`.
+
+`GET /reminders/student_001?now=2026-10-09T00:00:00Z` returns `200`:
+
+```json
+{
+  "user_id": "student_001",
+  "now": "2026-10-09T00:00:00Z",
+  "due": [
+    {
+      "text": "Rent is due on 1 October",
+      "due": "2026-09-28T00:00:00Z",
+      "seq": 15
+    }
+  ],
+  "upcoming": [
+    {
+      "text": "Renew the student pass",
+      "due": "2026-11-02T00:00:00Z",
+      "seq": 20
+    }
+  ]
+}
+```
+
+### Recording a cash withdrawal in chat
+
+The chat tool `record_cash_withdrawal` records an overseas cash withdrawal the student says they made on one of their Chinese bank cards, as a T1 action with no confirmation. Its execution holds the card, the amount in yuan and the day under `result.withdrawal_recorded`. The amount must be in the student's own words in that turn, so a pasted message, a statement or a tool result that claims a withdrawal is refused under R01. A day other than today must be written YYYY-MM-DD in those words, and when they name one of the student's cards, by id or by issuer, the withdrawal is recorded only on a card they named. A card not on file records nothing, and the reply says so whatever the model writes. The cash cap then counts the fixture's starting position plus every withdrawal the ledger records, and the reply warns at 70 and 90 percent of the annual cap across all cards and of each card's daily cap, the caps read from `cn_atm_cap_005`. The 70 and 90 percent lines are Lifeline's choice, not a sourced figure. The warning is a `cash_cap_warning` note, which now also holds `used_year` and the `thresholds` reached.
+
 ## Errors
 
 | Status | When | Body |
@@ -1559,6 +1698,8 @@ Response `200`, with the token and the times replaced by placeholders:
 | `403` | `/trace` or `/precheck` refused by the mandate engine | `{"detail": {"rule_ids": [...], "reasons": [...]}}` |
 | `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long, or a rescue `trigger` or a `lang` is outside its list | FastAPI's validation detail |
 | `403` | `/standing/run_due` when `LIFELINE_ENV` is `production` | `{"detail": "<reason>"}` |
+| `422` | `/note/{user_id}/monthly` with a `month` that is not `YYYY-MM`; the detail never repeats it | `{"detail": "month must be a four digit year, a hyphen and a two digit month."}` |
+| `422` | `/reminders/{user_id}` with a `now` that is not a time with a zone | FastAPI's validation detail |
 | `503` | `/chat` or `/confirm` could not get an answer from a model, such as a missing key or a status error from the provider; the reason names the provider and, when there was one, the status | `{"detail": "<reason>"}` |
 
 Unknown user, `404`:
