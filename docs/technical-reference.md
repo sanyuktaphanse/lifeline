@@ -1265,6 +1265,11 @@ All times are local time.
 | `e001c94` | 8 Oct | Rescue state machine S0 to S9 with honest partner paths |
 | `d48363e` | 8 Oct | Rescue: tokens settle only their own step, a restart runs on, pasted payees stay traced |
 | `6fcb676` | 8 Oct | Family notice tells receipts by status and simulation, card ids stay issuer:card |
+| `12cbd1b` | 8 Oct | Docs: the rescue, its decisions, the attacker findings, and what is still open |
+| `e15e276` | 8 Oct | Identity lock after three wrong answers; transfer replies say the receipt status |
+| `62d7cfa` | 8 Oct | X11: a block during a rescue is told truthfully in the family notice |
+| `201346c` | 8 Oct | Walkthrough: the rescue, the loader and the plan, with every excerpt checked |
+| `d107b8f` | 8 Oct | Docs: the identity lock, receipt status replies, X11, and the open items |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
