@@ -7,7 +7,7 @@ mandate:
   # Fixture: under the daily cap of 60,000 rupees in in_upi_paynow_cap_002.
   per_txn_limit: "50000"
   # Fixture: above that cap on purpose, so the cap entry, enforced by the rail at execution, is what
-  # refuses a second transfer the same day, not this mandate. Decision 81 of 8 October records why.
+  # refuses a second transfer the same day, not this mandate. Decision 83 of 8 October records why.
   daily_limit: "100000"
   # The student is the only payee.
   allowed_payees: [student_001]

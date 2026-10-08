@@ -29,16 +29,20 @@ Every Python excerpt below is copied exactly from the file it names, and `tests/
 21. The council, `core/council.py`
 22. The rescue machine, `core/rescue.py`
 23. The agent loop, `core/agent.py`, with the rescue
-24. The evaluation harness, `core/harness.py`
-25. The API, `api/main.py`
-26. The tests
-27. The Stage 8a tests
-28. The suites and their scenarios
-29. The Stage 8a scenarios
-30. The knowledge base, `rails/knowledge/`
-31. The provider entries, `rails/knowledge/providers.yaml`
-32. Configuration files
-33. Commands used to build and check the repo
+24. The monthly note, `core/monthly.py`
+25. The evaluation harness, `core/harness.py`
+26. The API, `api/main.py`
+27. The tests
+28. The Stage 8a tests
+29. The Stage 8b tests
+30. The suites and their scenarios
+31. The Stage 8a scenarios
+32. The Stage 8b scenarios
+33. The knowledge base, `rails/knowledge/`
+34. The provider entries, `rails/knowledge/providers.yaml`
+35. The demo parent, `fixtures/demo_parent.yaml`
+36. Configuration files
+37. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -6248,6 +6252,55 @@ In `_rebuild_from_ledger` an execution of `update_plan` with a result of `plan_u
 
 After every entry has been read, the rebuild writes one `plan_update_skipped` note for each skipped update not already noted, naming the fields and never the values, so the student's ledger says the plan is not what they last set and a later restart writes nothing more.
 
+### Cancelling a transfer, `core/agent.py`
+
+A cancel is a T2 action like a freeze, with one difference: the engine has to know the receipt belongs to the student, and it cannot see receipts. The loop tells it, from the ledger.
+
+```python
+    def _own_transfer(self, user_id: str, receipt_id: str) -> tuple[str | None, str | None]:
+        """The idempotency key and the rail of the student's own transfer behind a receipt, from the
+        student's own ledger receipt entries, or (None, None). A receipt sent to the student, which is
+        never written to the ledger, and another student's receipt are never found."""
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.kind != "receipt" or payload.get("user_id") != user_id:
+                continue
+            receipt = payload.get("receipt", {})
+            if receipt.get("receipt_id") == receipt_id:
+                return receipt.get("idempotency_key"), payload.get("rail")
+        return None, None
+```
+
+```python
+    def _cancel(self, user_id: str, lang: str, trail: _Trail, action: Action) -> tuple[str, CancelResult]:
+        receipt_id = action.receipt_id or ""
+        _, rail_name = self._own_transfer(user_id, receipt_id)
+        rail = self._rails.get(rail_name or "")
+        if rail is None:
+            result = CancelResult(status=CancelStatus.FAILED, reason=f"No rail holds receipt {receipt_id}.")
+        else:
+            result = rail.cancel(receipt_id)
+        self._write(trail, "execution", {"action": _action_json(action), "result": {"cancel": result.model_dump(mode="json")}})
+        self._write(
+            trail,
+            "note",
+            {
+                "kind": "cancel_result",
+                "idempotency_key": action.idempotency_key,
+                "receipt_id": receipt_id,
+                "rail": rail_name,
+                "status": result.status.value,
+                "reason": result.reason,
+            },
+        )
+        if result.status is CancelStatus.DONE:
+            return _text(lang, "cancelled", receipt_id=receipt_id), result
+        name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
+        return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
+```
+
+`_own_transfer` reads the student's own `receipt` entries and returns the idempotency key of the transfer behind the receipt and the rail that issued it. A receipt sent to the student is seeded into its rail on every start and never written to the ledger, so it is never found, and neither is another student's. `_run_tool` puts the key in `Action.cancel_of` before the proposal is written, whatever the model passed, and the engine refuses under R04 a cancel whose `cancel_of` is not an executed transfer in this student's history. After the student confirms, `_carry_out` calls `_cancel`, which asks the rail, writes the whole `CancelResult` in the execution entry and a `cancel_result` note, and says the outcome: done, or the rail's own reason when it would not or could not cancel.
+
 ### The rescue, `core/agent.py`
 
 The rescue's methods sit in `AgentLoop` beside everything else, because every effect of a rescue is an ordinary action of the loop. Its state lives in three places set up in `__init__`: `self._machine`, the `RescueMachine`; `self._rescues`, a `_Rescue` per student holding what the rescue knows beyond its state, its language, the ledger entry it began at, the card, the freeze result, how many identity answers were wrong, and whether it is locked; and `self._live`, the backup card a rescue moved the student onto. `_Outcome` gathers what one call writes to its reply, and `RESTING` names the three states where the machine waits for the student.
@@ -6868,6 +6921,85 @@ MAX_IDENTITY_ATTEMPTS = 3
 ```
 
 `_rebuild_rescue` is called for every ledger entry during `_rebuild_from_ledger`. It replays `rescue_started` and every `rescue_transition` through the same machine and the same table, so a rebuilt rescue can only be in a state the live one could reach. It counts the wrong answers again and restores the lock, so three wrong answers before a restart stay three after it. It restores the chosen card, closes the allowances a skip closed, and restores the freeze result and the live card from their executions.
+
+## The monthly note, `core/monthly.py`
+
+The monthly note reads ledger entries and nothing else, and calls no model.
+
+```python
+def month_of(moment: datetime) -> str:
+    """The calendar month of a moment, in UTC, written YYYY-MM."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m")
+```
+
+```python
+def previous_month(month: str) -> str:
+    year, number = (int(part) for part in month.split("-"))
+    return f"{year - 1}-12" if number == 1 else f"{year}-{number - 1:02d}"
+```
+
+`astimezone(timezone.utc)` puts a moment in UTC before `strftime("%Y-%m")` writes its month, so a time given in another zone is read as UTC. `previous_month` wraps January back to December of the year before.
+
+```python
+def summarize(entries: Iterable[LedgerEntry], user_id: str, month: str) -> dict[str, Any]:
+    """Every figure of the note for one student and one month, each with the entries it came from."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    standing: list[dict[str, Any]] = []
+    problems: list[dict[str, Any]] = []
+    refusals: list[int] = []
+    for entry in entries:
+        payload = entry.payload
+        if payload.get("user_id") != user_id or month_of(entry.ts) != month:
+            continue
+        action = payload.get("action") if isinstance(payload.get("action"), dict) else {}
+        if entry.kind == "execution" and action.get("type") == "transfer" and "route" in payload:
+            key = (str(action.get("currency")), str(action.get("corridor")))
+            group = groups.setdefault(
+                key, {"currency": key[0], "corridor": key[1], "count": 0, "total": Decimal(0), "fees": Decimal(0), "seqs": []}
+            )
+            group["count"] += 1
+            group["total"] += _decimal(action.get("amount"))
+            group["fees"] += _decimal(payload["route"].get("fee"))
+            group["seqs"].append(entry.seq)
+            if payload.get("standing_mandate_id"):
+                standing.append({"standing_mandate_id": payload["standing_mandate_id"], "seq": entry.seq})
+        elif entry.kind == "receipt" and payload.get("receipt", {}).get("status") in PROBLEM_STATUSES:
+            receipt = payload["receipt"]
+            problems.append({"receipt_id": receipt.get("receipt_id"), "outcome": receipt["status"], "seq": entry.seq})
+        elif entry.kind == "note" and payload.get("kind") == "cancel_result" and payload.get("status") == "done":
+            problems.append({"receipt_id": payload.get("receipt_id"), "outcome": "cancelled", "seq": entry.seq})
+        elif entry.kind == "decision" and not payload.get("decision", {}).get("allowed", True):
+            refusals.append(entry.seq)
+    transfers = [
+        {**group, "total": format(group["total"], "f"), "fees": format(group["fees"], "f")} for group in groups.values()
+    ]
+    return {
+        "month": month,
+        "transfers": transfers,
+        "standing_runs": standing,
+        "problems": problems,
+        "refusals": {"count": len(refusals), "seqs": refusals},
+    }
+```
+
+`summarize` walks the entries once and keeps only the student's, in the month. A transfer execution, one with a route, adds to the group for its currency and corridor, with its amount and the fee its route recorded, and its sequence goes into the group's `seqs`, so every figure can be checked against the entry it came from. `setdefault` creates a group the first time a key is seen. A receipt that failed or was returned, a cancel the rail carried out, and a refused decision are listed with their sequences too. Totals are kept as `Decimal` and written with `format(..., "f")`, so no amount is rounded through a float.
+
+```python
+def render(summary: dict[str, Any], lang: str) -> str:
+    """The note in the student's language, from the summary's figures and nothing else."""
+    texts = TEXTS.get(lang, TEXTS["en"])
+    transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
+    problems = ", ".join(f"{item['receipt_id']} {texts[item['outcome']]}" for item in summary["problems"]) or texts["none"]
+    return texts["note"].format(
+        month=summary["month"],
+        transfers=transfers,
+        standing=len(summary["standing_runs"]),
+        problems=problems,
+        refusals=summary["refusals"]["count"],
+    )
+```
+
+`render` builds the sentence from the summary's figures alone, in one of the three languages. `AgentLoop.write_monthly_notes` calls `summarize` and `render` for the month that ended, once per student, and `_run_tool` adds the rendered note to the reply when the student asks through `monthly_summary`.
 
 ## The evaluation harness, `core/harness.py`
 
@@ -8832,8 +8964,70 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_reply_guard.py` | `test_a_rescue_reply_is_guarded_too` | A rescue reply is guarded too |
 | `test_walkthrough.py` | `test_the_walkthrough_covers_stage_8a` | The walkthrough covers stage 8a |
 | `test_walkthrough.py` | `test_every_yaml_excerpt_under_a_yaml_heading_is_copied_exactly` | Every yaml excerpt under a yaml heading is copied exactly |
+| `test_walkthrough.py` | `test_the_walkthrough_covers_stage_8b` | The walkthrough covers stage 8b |
+| `test_api.py` | `test_a_done_cancel_survives_a_restart_of_the_api` | A done cancel survives a restart of the api |
+| `test_api.py` | `test_the_scheduler_writes_the_monthly_note_once_on_the_first_run_in_a_new_month` | The scheduler writes the monthly note once on the first run in a new month |
+| `test_api.py` | `test_the_api_loads_the_demo_parent_beside_the_demo_student` | The api loads the demo parent beside the demo student |
+| `test_api.py` | `test_the_api_runs_without_a_parent_fixture` | The api runs without a parent fixture |
+| `test_cancel.py` | `test_cancel_result_has_the_shape_and_outcomes_of_freeze_result` | Cancel result has the shape and outcomes of freeze result |
+| `test_cancel.py` | `test_rail_declares_cancel` | Rail declares cancel |
+| `test_cancel.py` | `test_cancel_transfer_is_t2_with_its_own_warning` | Cancel transfer is t2 with its own warning |
+| `test_cancel.py` | `test_agent_reply_carries_an_optional_cancel_result` | Agent reply carries an optional cancel result |
+| `test_cancel.py` | `test_the_engine_allows_a_cancel_of_the_students_own_executed_transfer_with_confirmation` | The engine allows a cancel of the students own executed transfer with confirmation |
+| `test_cancel.py` | `test_the_engine_refuses_a_cancel_of_anything_not_in_the_students_history_under_r04` | The engine refuses a cancel of anything not in the students history under r04 |
+| `test_cancel.py` | `test_the_engine_refuses_a_cancel_with_no_receipt` | The engine refuses a cancel with no receipt |
+| `test_cancel.py` | `test_a_cancel_from_pasted_text_is_refused_under_r01` | A cancel from pasted text is refused under r01 |
+| `test_cancel.py` | `test_the_token_binds_the_receipt_and_leaves_every_other_token_unchanged` | The token binds the receipt and leaves every other token unchanged |
+| `test_cancel.py` | `test_the_fake_rail_cancels_a_created_or_funded_receipt_and_returns_it` | The fake rail cancels a created or funded receipt and returns it |
+| `test_cancel.py` | `test_the_fake_rail_will_not_cancel_once_a_transfer_has_moved_on` | The fake rail will not cancel once a transfer has moved on |
+| `test_cancel.py` | `test_the_fake_rail_fails_to_cancel_a_receipt_it_never_issued` | The fake rail fails to cancel a receipt it never issued |
+| `test_cancel.py` | `test_the_fake_rail_still_issues_completed_receipts_by_default` | The fake rail still issues completed receipts by default |
+| `test_cancel.py` | `test_sim_pix_never_cancels_and_cites_the_real_time_entry` | Sim pix never cancels and cites the real time entry |
+| `test_cancel.py` | `test_upi_paynow_cancels_while_created_and_not_once_completed` | Upi paynow cancels while created and not once completed |
+| `test_cancel.py` | `test_a_cancelled_upi_transfer_still_counts_toward_the_day_cap` | A cancelled upi transfer still counts toward the day cap |
+| `test_cancel.py` | `test_the_china_rail_cancels_before_in_transit_and_names_the_stage_after` | The china rail cancels before in transit and names the stage after |
+| `test_cancel.py` | `test_a_created_receipt_is_cancelled_through_the_t2_round_trip` | A created receipt is cancelled through the t2 round trip |
+| `test_cancel.py` | `test_an_in_transit_receipt_is_not_cancelled_and_the_reply_says_why` | An in transit receipt is not cancelled and the reply says why |
+| `test_cancel.py` | `test_a_cancelled_transfer_keeps_its_share_of_the_daily_limit` | A cancelled transfer keeps its share of the daily limit |
+| `test_cancel.py` | `test_another_students_receipt_cannot_be_cancelled` | Another students receipt cannot be cancelled |
+| `test_cancel.py` | `test_a_seeded_inbound_receipt_cannot_be_cancelled` | A seeded inbound receipt cannot be cancelled |
+| `test_cancel.py` | `test_a_receipt_id_that_only_a_paste_names_is_refused_under_r01` | A receipt id that only a paste names is refused under r01 |
+| `test_cancel.py` | `test_the_model_cannot_supply_its_own_cancel_of` | The model cannot supply its own cancel of |
+| `test_cancel.py` | `test_a_waiting_cancel_survives_a_restart` | A waiting cancel survives a restart |
+| `test_cancel.py` | `test_the_cancel_result_note_names_the_receipt_and_never_the_token` | The cancel result note names the receipt and never the token |
+| `test_harness.py` | `test_a_scenario_chooses_the_status_a_fake_rail_issues_receipts_at` | A scenario chooses the status a fake rail issues receipts at |
+| `test_harness.py` | `test_a_receipt_status_for_a_rail_the_scenario_does_not_build_is_refused` | A receipt status for a rail the scenario does not build is refused |
+| `test_harness.py` | `test_a_reply_carrying_a_cancel_result_is_of_kind_cancel` | A reply carrying a cancel result is of kind cancel |
+| `test_harness.py` | `test_a_council_fixture_may_script_several_deliberations_five_replies_each` | A council fixture may script several deliberations five replies each |
+| `test_monthly.py` | `test_months_are_utc_and_the_previous_month_wraps_the_year` | Months are utc and the previous month wraps the year |
+| `test_monthly.py` | `test_a_paid_transfer_is_summed_per_currency_and_corridor_with_its_fee_and_its_entry` | A paid transfer is summed per currency and corridor with its fee and its entry |
+| `test_monthly.py` | `test_another_month_and_another_student_are_left_out` | Another month and another student are left out |
+| `test_monthly.py` | `test_refusals_are_counted_with_their_entries` | Refusals are counted with their entries |
+| `test_monthly.py` | `test_a_cancelled_and_a_failed_or_returned_transfer_are_listed_with_their_entries` | A cancelled and a failed or returned transfer are listed with their entries |
+| `test_monthly.py` | `test_a_returned_receipt_is_listed_and_a_not_supported_cancel_is_not` | A returned receipt is listed and a not supported cancel is not |
+| `test_monthly.py` | `test_a_standing_run_is_listed_with_its_entry` | A standing run is listed with its entry |
+| `test_monthly.py` | `test_the_note_is_written_in_the_students_language` | The note is written in the students language |
+| `test_monthly.py` | `test_an_empty_month_says_no_transfers_were_sent` | An empty month says no transfers were sent |
+| `test_monthly.py` | `test_monthly_summary_is_a_t0_action` | Monthly summary is a t0 action |
+| `test_monthly.py` | `test_the_tool_runs_as_proposal_decision_execution_and_the_reply_carries_the_codes_figures` | The tool runs as proposal decision execution and the reply carries the codes figures |
+| `test_monthly.py` | `test_the_tool_takes_the_month_the_student_names` | The tool takes the month the student names |
+| `test_monthly.py` | `test_a_month_that_is_not_a_month_is_an_error_and_no_figures` | A month that is not a month is an error and no figures |
+| `test_monthly.py` | `test_the_first_tick_in_a_new_month_writes_the_note_for_the_month_that_ended_once` | The first tick in a new month writes the note for the month that ended once |
+| `test_monthly.py` | `test_a_tick_still_inside_the_month_writes_nothing_for_it` | A tick still inside the month writes nothing for it |
+| `test_monthly.py` | `test_a_restart_never_writes_the_note_for_the_same_month_twice` | A restart never writes the note for the same month twice |
+| `test_monthly.py` | `test_the_tick_writes_in_the_language_of_the_students_latest_turn` | The tick writes in the language of the students latest turn |
+| `test_monthly.py` | `test_the_tick_calls_no_model` | The tick calls no model |
+| `test_parent.py` | `test_the_parent_fixture_is_marked_and_valid` | The parent fixture is marked and valid |
+| `test_parent.py` | `test_the_parent_sends_only_to_the_student_on_in_sg_for_the_rbis_purposes` | The parent sends only to the student on in sg for the rbis purposes |
+| `test_parent.py` | `test_a_scenario_runs_as_the_parent_named_by_fixtures_user` | A scenario runs as the parent named by fixtures user |
+| `test_parent.py` | `test_a_user_block_can_be_written_inline` | A user block can be written inline |
+| `test_parent.py` | `test_the_parent_cannot_pay_the_landlord_of_the_demo_student` | The parent cannot pay the landlord of the demo student |
+| `test_parent.py` | `test_a_second_transfer_the_same_day_over_the_cap_is_refused_by_the_rail_and_the_reply_names_the_cap` | A second transfer the same day over the cap is refused by the rail and the reply names the cap |
+| `test_parent.py` | `test_without_fixtures_user_the_demo_student_is_still_the_user` | Without fixtures user the demo student is still the user |
+| `test_parent.py` | `test_every_existing_scenario_still_passes` | Every existing scenario still passes |
+| `test_parent.py` | `test_the_ledger_shows_the_whole_truth_of_the_refused_second_transfer` | The ledger shows the whole truth of the refused second transfer |
 
-In all, 88 parametrized tests add 240 extra runs, which is how 738 test functions become 978 tests.
+In all, 93 parametrized tests add 251 extra runs, which is how 800 test functions become 1051 tests.
 
 ## The Stage 8a tests
 
@@ -8982,6 +9176,68 @@ def test_a_plan_change_that_only_a_pasted_message_asked_for_is_not_applied():
 
 A pasted message tells the model to change the backup card and the wallet flag, and the scripted model does. Before the fix the loop stamped every plan update as the student's own turn, so the change applied. Now `_untrusted_plan_update` finds `revolut:card_02` only in the paste, the engine refuses the update under R01, and the plan is unchanged. The other tests cover free text in the cash plan, a restart with an old backup, the rebuild applying only the four fields, the cash warning when two cards together could reach the cap, and impossible fixture figures.
 
+## The Stage 8b tests
+
+Three test files arrived with the second half of Stage 8, each written before its code and seen to fail first.
+
+### The cancel tests, `tests/test_cancel.py`
+
+```python
+def test_a_seeded_inbound_receipt_cannot_be_cancelled():
+    rails = _rails()
+    rails["cn_bank_remit_sim"] = CnBankRemitSimRail()
+    from rails.inbound import inbound_from_fixture
+
+    inbound = inbound_from_fixture(
+        {"cn_bank_remit_sim": [{"receipt_id": "cn_bank_remit_sim-in-0001", "amount": "20000", "currency": "CNY",
+                                "corridor": "CN>SG", "status": "created", "sender": "parent", "sent_hours_ago": 1}]},
+        rails,
+    )
+    where = seed_inbound(rails, inbound)
+    s = _setup([], rails=rails)
+    s.loop._receipt_rails[USER] = dict(where)
+
+    reply = _cancel(s, "cn_bank_remit_sim-in-0001")
+
+    assert reply.confirmation is None
+    assert reply.decision.rule_ids == ["R04"]
+    assert s.loop._rails["cn_bank_remit_sim"].status("cn_bank_remit_sim-in-0001").status is not ReceiptStatus.RETURNED
+```
+
+The test seeds a parent's transfer into the China rail, exactly as the API does on start, and tells the loop which rail holds it, so the student could trace it. The model then proposes to cancel it. The ledger holds no receipt entry for it, so the loop leaves `cancel_of` empty, the engine refuses under R04, no confirmation is offered, and the rail's trace is not returned. The file also covers the contract, the engine, every rail's answer, the round trip for a created and an in transit receipt, another student's receipt, a paste, and a restart.
+
+### The monthly note tests, `tests/test_monthly.py`
+
+```python
+def test_a_restart_never_writes_the_note_for_the_same_month_twice():
+    ledger = HashChainLedger()
+    _rent_paid(ledger=ledger)
+    tick = _first_of_next_month(_month_now())
+
+    _loop(ledger).write_monthly_notes(tick)
+    _loop(ledger).write_monthly_notes(tick + timedelta(hours=1))
+
+    assert len(_monthly_notes(ledger)) == 1
+```
+
+The test pays rent, then builds two loops over the same ledger, one after the other, as a restart does, and gives each a time in the next month. The first writes the note; the second finds it while rebuilding from the ledger and writes nothing. `_first_of_next_month` computes the month from the clock only to place the injected time; the loop itself reads the month only from the time it is given.
+
+### The parent tests, `tests/test_parent.py`
+
+```python
+def test_the_parent_sends_only_to_the_student_on_in_sg_for_the_rbis_purposes():
+    mandate = PARENT["mandate"]
+    entries = load_knowledge()
+
+    assert mandate["currency"] == "INR"
+    assert mandate["allowed_payees"] == ["student_001"]
+    assert mandate["allowed_corridors"] == ["IN>SG"]
+    assert mandate["allowed_purposes"] == entries[UPI_PURPOSE_ENTRY]["values"]["purposes"]
+    assert Decimal(mandate["per_txn_limit"]) < Decimal(str(entries[UPI_CAP_ENTRY]["values"]["daily_cap"]))
+```
+
+The test reads the fixture and the two UPI to PayNow entries and checks that the parent's purposes are the entry's own list and that the per transaction limit is under the entry's cap, so the fixture cannot drift from its sources. The file also runs scenarios as the parent and checks the ledger of a second transfer refused by the rail.
+
 ## The suites and their scenarios
 
 The suites are YAML, a text format for structured data. A line starting with `- ` begins a new item in a list, `key: value` sets a field, and `[A, B]` is an inline list.
@@ -9010,7 +9266,7 @@ def load(path):
 
 `with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, numbers, and dates, and never creates arbitrary Python objects from the file.
 
-A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Fifty four entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
+A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Fifty eight entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
 
 ```yaml
 id: X17
@@ -9099,6 +9355,47 @@ fixtures:
 
 `fixtures.plan` replaces the demo plan key by key, so this student has two cards, no backup and no phone wallet. `null` is YAML's word for nothing, which Python reads as `None`.
 
+## The Stage 8b scenarios
+
+### T26, `suites/scenarios/T26.yaml`
+
+```yaml
+  - lang: en
+    fixtures:
+      receipt_status: {wise: created}
+```
+
+`fixtures.receipt_status` makes the fake Wise rail issue receipts at `created`, so the rent is still pending when the student asks to cancel it. The second run issues it `in_transit` instead.
+
+### T35, `suites/scenarios/T35.yaml`
+
+```yaml
+expected:
+  reply: answer
+  ledger: [proposal, decision, confirmation, execution, receipt, proposal, decision, execution]
+```
+
+The ledger kinds show the rent's trail and then the summary's proposal, decision and execution, with no confirmation, because the summary is T0.
+
+### T18, `suites/scenarios/T18.yaml`
+
+```yaml
+fixtures:
+  user: {fixture: demo_parent}
+```
+
+`fixtures.user` names a fixture file by its plain name, so the run is the parent from `fixtures/demo_parent.yaml`, the same file the API loads.
+
+### T30, `suites/scenarios/T30.yaml`
+
+```yaml
+    expected:
+      ledger: [proposal, decision, execution, proposal, decision, council, confirmation, execution, receipt, proposal, decision, council, confirmation, execution, receipt, proposal, decision, execution]
+      anchors: 2
+```
+
+`anchors: 2` counts the anchor entries, one after each T2 execution, the rent and the allowance, which the `ledger` kinds leave out.
+
 ## The knowledge base, `rails/knowledge/`
 
 `rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds the first eight entries. This is one of them: `singapore.yaml` holds the two entries the rescue reads, a cash pickup option and a replacement card estimate, each checked by SP, which `checked_by` records, and waiting for a second check. `rails/knowledge/loader.py`, explained above, is the code that reads them. `india.yaml` and `brazil.yaml` hold the entries the UPI to PayNow and Pix rails read, and an entry may carry `values`, the figures and lists of its statement as data, which the README describes and `tests/test_knowledge_values.py` checks against the statement.
@@ -9170,6 +9467,31 @@ YAML turns an unquoted `2026-09-15` into a `date` object, but a quoted one stays
 ```
 
 `values` holds the provider's display name, which the loop's sentence uses, and the ways the entry says Wise collects documents. The statement says the page is about verifying an address, because that is the only page on file. The second entry, `wise_docs_impersonation_002`, holds what Wise's Singapore blog says Wise never does. `checked_by` is `CC`, Claude Code, which opened both pages, and `second_check_by` is empty until a person checks them.
+
+## The demo parent, `fixtures/demo_parent.yaml`
+
+```yaml
+user_id: parent_001
+mandate:
+  id: mandate-parent_001-v1
+  currency: INR
+  # Fixture: under the daily cap of 60,000 rupees in in_upi_paynow_cap_002.
+  per_txn_limit: "50000"
+  # Fixture: above that cap on purpose, so the cap entry, enforced by the rail at execution, is what
+  # refuses a second transfer the same day, not this mandate. Decision 83 of 8 October records why.
+  daily_limit: "100000"
+  # The student is the only payee.
+  allowed_payees: [student_001]
+  allowed_corridors: [IN>SG]
+  # Exactly as in_upi_paynow_purpose_001 states them.
+  allowed_purposes: [maintenance_of_relatives_abroad, gift]
+  cooling_hours: 24
+  # Fixture: the student was added long before any demo, so they are never inside the cooling period.
+  payee_added_at:
+    student_001: "2026-01-01T00:00:00Z"
+```
+
+Every value is a fixture, which the comment at the top of the file says. The daily limit is above the cap on purpose, so the cap entry, which the rail enforces in the India day, is what refuses a second transfer, not the mandate's daily limit in UTC days.
 
 ## Configuration files
 
