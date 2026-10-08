@@ -184,6 +184,7 @@ class ActionType(str, Enum):
     REROUTE_TO_BACKUP = "reroute_to_backup"
     NOTIFY_FAMILY = "notify_family"
     VERIFY_LEDGER = "verify_ledger"
+    UPDATE_PLAN = "update_plan"
 
 
 class RouteStatus(str, Enum):
@@ -642,6 +643,7 @@ TIERS: dict[ActionType, Tier] = {
     ActionType.RESCUE_IDENTITY_CHECK: Tier.T1,
     ActionType.REROUTE_TO_BACKUP: Tier.T1,
     ActionType.NOTIFY_FAMILY: Tier.T1,
+    ActionType.UPDATE_PLAN: Tier.T1,
     ActionType.CREATE_STANDING_MANDATE: Tier.T2,
     ActionType.TRANSFER: Tier.T2,
     ActionType.ADD_PAYEE: Tier.T2,
@@ -718,7 +720,17 @@ from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
-from contracts.schemas import INSTRUMENT_ID, Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
+from contracts.schemas import (
+    INSTRUMENT_ID,
+    PLAN_UPDATE_FIELDS,
+    Action,
+    ActionType,
+    Decision,
+    Mandate,
+    Source,
+    StandingMandate,
+    Tier,
+)
 from core.standing import occurrence_containing
 from core.tiers import TIERS
 
@@ -959,6 +971,18 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
                 reasons.append(
                     "A standing mandate needs an amount, a currency, a corridor, a payee, a purpose, "
                     f"an id, and its terms, and this one has no {', no '.join(missing)}."
+                )
+
+        if action.type is ActionType.UPDATE_PLAN:
+            changes = action.plan_update or {}
+            protected = sorted(name for name in changes if name not in PLAN_UPDATE_FIELDS)
+            if not changes:
+                rule_ids.append("R04")
+                reasons.append("Updating the plan needs at least one field to change, and this one has none.")
+            elif protected:
+                rule_ids.append("R04")
+                reasons.append(
+                    f"update_plan may change only {', '.join(PLAN_UPDATE_FIELDS)}, never {', '.join(protected)}."
                 )
 
         standing_actions = (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE)
@@ -1976,6 +2000,8 @@ from typing import Any
 from contracts.interfaces import Router
 from contracts.schemas import PrecheckResult, Route, RouteStatus
 from rails.sim.rules import (
+    WISE_INBOUND_ENTRY,
+    arrival_facts,
     CN_CDD_ENTRY,
     CN_FUNDING_ENTRY,
     CN_QUOTA_ENTRY,
@@ -2073,6 +2099,24 @@ class FakeRouter(Router):
                     purpose=purpose,
                 )
             ]
+        if corridor == "SG>CN":
+            # The entry's limits are in yuan and the quote is in Singapore dollars, and no rate is sourced,
+            # so the route names its entry and the precheck states the limits.
+            return [
+                self._route(
+                    "wise",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "CNY",
+                    quoted_at,
+                    fee=WISE_FEE,
+                    arrival_hours=WISE_SG_CN_HOURS,
+                    simulated=False,
+                    rule_id=WISE_INBOUND_ENTRY,
+                    purpose=purpose,
+                )
+            ]
         if corridor == "IN>SG":
             # The router knows no earlier transfer, so it checks the cap for this amount alone; the
             # rail checks the day's total when it pays.
@@ -2147,6 +2191,16 @@ class FakeRouter(Router):
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
+        if action_kind == "arrive_in_china":
+            triggers, rule_ids = arrival_facts()
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=None,
+                rule_ids=rule_ids,
             )
         if action_kind == "overseas_cash":
             ready, triggers, rule_ids = cash_cap_sentences(list(user_context.get("cards") or []))
@@ -2440,6 +2494,11 @@ CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
 ATM_CAP_ENTRY = "cn_atm_cap_005"
+WALLET_FOREIGN_ENTRY = "cn_wallet_foreign_006"
+WISE_INBOUND_ENTRY = "cn_wise_in_007"
+# Source: docs/decisions.md, 8 October 2026. No entry on file covers cash on a foreign card in China;
+# cn_atm_cap_005 covers Chinese cards used abroad, not this.
+NO_FOREIGN_CARD_CASH = "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
 # Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
 NO_SINGAPORE_PAGE = (
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
@@ -3267,6 +3326,7 @@ from contracts.schemas import (
     FreezeStatus,
     Mandate,
     Message,
+    PLAN_UPDATE_FIELDS,
     Plan,
     Receipt,
     ReceiptStatus,
@@ -3302,6 +3362,7 @@ from rails.sim.rules import (
     DOCUMENT_CHANNELS,
     NO_SINGAPORE_PAGE,
     WISE_DOCS_ENTRY,
+    arrival_facts,
     cash_cap_status,
     is_wise,
 )
@@ -3486,6 +3547,19 @@ TOOLS = [
         [],
     ),
     _tool(
+        "update_plan",
+        "Change the student's resilience plan. Only the backup card, written issuer:card and one of the "
+        "plan's own cards, the backup route, whether a phone wallet holds the card, and the cash plan, a "
+        "list of knowledge entry ids, can change; nothing else in the plan ever changes in chat.",
+        {
+            "backup_instrument": TEXT,
+            "backup_route": TEXT,
+            "wallet_token_present": {"type": "boolean"},
+            "cash_plan": {"type": "array", "items": TEXT},
+        },
+        [],
+    ),
+    _tool(
         "export_credentials",
         "Reveals stored credentials, such as card numbers, card tokens, or recovery codes.",
         {"what": TEXT},
@@ -3515,6 +3589,7 @@ TOOL_ACTIONS = {
     "verify_ledger": ActionType.VERIFY_LEDGER,
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
     "cash_cap_status": ActionType.PRECHECK,
+    "update_plan": ActionType.UPDATE_PLAN,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -3541,6 +3616,8 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
+        "plan_updated": "Your plan now has: {fields}.",
         "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together, which is no more than the {daily} {currency} one card may withdraw in a day. {consequence} Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
@@ -3616,6 +3693,8 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
+        "plan_updated": "Seu plano agora tem: {fields}.",
         "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que não passa dos {daily} {currency} que um cartão pode sacar em um dia. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
@@ -3691,6 +3770,8 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
+        "plan_updated": "你的计划现在为：{fields}。",
         "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计），不超过单张卡一天可取的 {daily} {currency}。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
@@ -4244,6 +4325,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
             return None, {"error": f"Unknown tool {call.name}."}
         if call.name == "cash_cap_status":
             call = call.model_copy(update={"arguments": dict(CASH_CAP_ARGUMENTS)})
+        if action_type is ActionType.UPDATE_PLAN:
+            call = call.model_copy(update={"arguments": _plan_arguments(call.arguments)})
         if action_type is ActionType.PRECHECK:
             call = call.model_copy(update={"arguments": _canonical_precheck(call.arguments)})
         missing = [
@@ -4253,6 +4336,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
             return None, {"error": f"{call.name} needs {', '.join(missing)}."}
         key = f"{user_id}:t{trail.turn}:{call.name}:{number}"
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
+        if action_type is ActionType.UPDATE_PLAN:
+            fields = {"plan_update": dict(call.arguments)}
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -4302,6 +4387,9 @@ A conversation turn takes the next turn number and starts a trail. The student's
         self._write(trail, "execution", {"action": _action_json(action), "result": result})
         if action.type is ActionType.PRECHECK:
             self._after_precheck(trail, lang, action, call.arguments, result)
+        if "plan_updated" in result:
+            fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
+            trail.notices.append(_text(lang, "plan_updated", fields=fields))
         return decision, result
 ```
 
@@ -4366,6 +4454,8 @@ When the source was changed, the engine refuses the action under R01, exactly as
             return outcome
         if action.type is ActionType.VERIFY_LEDGER:
             return self._ledger_report(user_id, action.requested_at)
+        if action.type is ActionType.UPDATE_PLAN:
+            return self._update_plan(user_id, action)
         return {"error": f"No runner for {action.type.value}."}
 ```
 
@@ -5227,6 +5317,14 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
                 if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
                     update = self._without_standing(user_id, deactivated["standing_mandate_id"])
                     self._new_version(user_id, update, deactivated["new_mandate_id"])
+            if (
+                entry.kind == "execution"
+                and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
+                and "plan_updated" in entry.payload.get("result", {})
+                and user_id in self._plans
+            ):
+                plan = self._plans[user_id]
+                self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **entry.payload["result"]["plan_updated"]})
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))

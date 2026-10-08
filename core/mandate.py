@@ -8,7 +8,17 @@ from datetime import date, timedelta, timezone
 from decimal import Decimal
 
 from contracts.interfaces import MandateEngine
-from contracts.schemas import INSTRUMENT_ID, Action, ActionType, Decision, Mandate, Source, StandingMandate, Tier
+from contracts.schemas import (
+    INSTRUMENT_ID,
+    PLAN_UPDATE_FIELDS,
+    Action,
+    ActionType,
+    Decision,
+    Mandate,
+    Source,
+    StandingMandate,
+    Tier,
+)
 from core.standing import occurrence_containing
 from core.tiers import TIERS
 
@@ -236,6 +246,18 @@ class DeterministicMandateEngine(MandateEngine):
                 reasons.append(
                     "A standing mandate needs an amount, a currency, a corridor, a payee, a purpose, "
                     f"an id, and its terms, and this one has no {', no '.join(missing)}."
+                )
+
+        if action.type is ActionType.UPDATE_PLAN:
+            changes = action.plan_update or {}
+            protected = sorted(name for name in changes if name not in PLAN_UPDATE_FIELDS)
+            if not changes:
+                rule_ids.append("R04")
+                reasons.append("Updating the plan needs at least one field to change, and this one has none.")
+            elif protected:
+                rule_ids.append("R04")
+                reasons.append(
+                    f"update_plan may change only {', '.join(PLAN_UPDATE_FIELDS)}, never {', '.join(protected)}."
                 )
 
         standing_actions = (ActionType.CANCEL_STANDING_RUN, ActionType.DEACTIVATE_STANDING_MANDATE)

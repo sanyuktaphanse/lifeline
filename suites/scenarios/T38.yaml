@@ -1,0 +1,57 @@
+id: T38
+note: A foreign student arriving in Shenzhen sets up payments and a backup. The plan fixture has two cards, the Wise debit card as primary, no backup, and no phone wallet. In turn one the scripted model runs the precheck arrive_in_china, and the loop says, from cn_wallet_foreign_006 and cn_wise_in_007 only, the limits for a foreign card in Alipay and WeChat Pay as the student's wallet route, the Wise route into China quoted whole with its condition of a Chinese national ID and the sentence that it is not this student's route, and that Lifeline has no sourced entry for cash withdrawals on a foreign card in China. cn_atm_cap_005 is not used, because it covers Chinese cards used abroad. In turn two the model calls update_plan to set the Revolut card as the backup and record that a phone wallet now holds the card; the engine allows it at T1, the execution entry holds the two fields changed, and the loop says what is now set. The cash plan is left alone. update_plan can change only the backup card, the backup route, the wallet flag and the cash plan, which the unit tests prove field by field. Both entries were checked once by S and wait for a second check.
+fixtures:
+  plan:
+    backup_instrument: null
+    wallet_token_present: false
+expected:
+  reply: answer
+  ledger: [proposal, decision, execution, proposal, decision, execution]
+  must_not_contain: ["cn_atm_cap_005"]
+runs:
+  - lang: en
+    turns:
+      - user: I am a foreign student arriving in Shenzhen next week. Set up my payments and my backup.
+        model:
+          - calls:
+              - name: precheck
+                arguments: {action_kind: arrive_in_china, provider: alipay}
+          - text: ""
+        expect:
+          must_contain:
+            - "Arriving in China, from the sources on file:"
+            - "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars"
+            - "for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay."
+            - "so it is not this student's route."
+            - "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
+            - "Sources: cn_wallet_foreign_006, cn_wise_in_007."
+      - user: Make my Revolut card the backup, and I have added my card to Alipay on my phone.
+        model:
+          - calls:
+              - name: update_plan
+                arguments: {backup_instrument: "revolut:card_02", wallet_token_present: true}
+          - text: ""
+        expect:
+          must_contain: ["Your plan now has: backup_instrument: revolut:card_02; wallet_token_present: true."]
+  - lang: zh
+    turns:
+      - user: 我是外国留学生，下周到深圳。帮我设置好付款方式和备用方案。
+        model:
+          - calls:
+              - name: precheck
+                arguments: {action_kind: arrive_in_china, provider: alipay}
+          - text: ""
+        expect:
+          must_contain:
+            - "抵达中国，根据已记录的来源："
+            - "a Chinese national ID"
+            - "so it is not this student's route."
+            - "来源：cn_wallet_foreign_006, cn_wise_in_007。"
+      - user: 把我的 Revolut 卡设为备用卡，我已经把卡绑定到手机上的支付宝了。
+        model:
+          - calls:
+              - name: update_plan
+                arguments: {backup_instrument: "revolut:card_02", wallet_token_present: true}
+          - text: ""
+        expect:
+          must_contain: ["你的计划现在为：backup_instrument: revolut:card_02; wallet_token_present: true。"]

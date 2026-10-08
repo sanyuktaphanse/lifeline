@@ -25,6 +25,11 @@ CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
 ATM_CAP_ENTRY = "cn_atm_cap_005"
+WALLET_FOREIGN_ENTRY = "cn_wallet_foreign_006"
+WISE_INBOUND_ENTRY = "cn_wise_in_007"
+# Source: docs/decisions.md, 8 October 2026. No entry on file covers cash on a foreign card in China;
+# cn_atm_cap_005 covers Chinese cards used abroad, not this.
+NO_FOREIGN_CARD_CASH = "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
 # Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
 NO_SINGAPORE_PAGE = (
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
@@ -206,3 +211,18 @@ def cash_cap_sentences(cards: list[dict[str, Any]]) -> tuple[bool | None, list[s
     ]
     sentences.append(entry(ATM_CAP_ENTRY)["values"]["consequence"])
     return not status["warn"], sentences, [ATM_CAP_ENTRY]
+
+
+def arrival_facts() -> tuple[list[str], list[str]]:
+    """What a foreign student arriving in China is told, from cn_wallet_foreign_006 and cn_wise_in_007 only.
+
+    The wallet entry is the student's route. The Wise entry is quoted whole and said not to be the
+    student's route, because it names its recipients' condition. Cash on a foreign card has no entry.
+    """
+    condition = entry(WISE_INBOUND_ENTRY)["values"]["recipient_condition"]
+    not_yours = (
+        f"That route is for recipients with {condition}, so it is not this student's route. "
+        f"Source: {WISE_INBOUND_ENTRY}."
+    )
+    ids = [WALLET_FOREIGN_ENTRY, WISE_INBOUND_ENTRY]
+    return [*(entry(entry_id)["statement"] for entry_id in ids), not_yours, NO_FOREIGN_CARD_CASH], ids

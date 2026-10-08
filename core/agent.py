@@ -28,6 +28,7 @@ from contracts.schemas import (
     FreezeStatus,
     Mandate,
     Message,
+    PLAN_UPDATE_FIELDS,
     Plan,
     Receipt,
     ReceiptStatus,
@@ -63,6 +64,7 @@ from rails.sim.rules import (
     DOCUMENT_CHANNELS,
     NO_SINGAPORE_PAGE,
     WISE_DOCS_ENTRY,
+    arrival_facts,
     cash_cap_status,
     is_wise,
 )
@@ -256,6 +258,19 @@ TOOLS = [
         [],
     ),
     _tool(
+        "update_plan",
+        "Change the student's resilience plan. Only the backup card, written issuer:card and one of the "
+        "plan's own cards, the backup route, whether a phone wallet holds the card, and the cash plan, a "
+        "list of knowledge entry ids, can change; nothing else in the plan ever changes in chat.",
+        {
+            "backup_instrument": TEXT,
+            "backup_route": TEXT,
+            "wallet_token_present": {"type": "boolean"},
+            "cash_plan": {"type": "array", "items": TEXT},
+        },
+        [],
+    ),
+    _tool(
         "export_credentials",
         "Reveals stored credentials, such as card numbers, card tokens, or recovery codes.",
         {"what": TEXT},
@@ -285,6 +300,7 @@ TOOL_ACTIONS = {
     "verify_ledger": ActionType.VERIFY_LEDGER,
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
     "cash_cap_status": ActionType.PRECHECK,
+    "update_plan": ActionType.UPDATE_PLAN,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -307,6 +323,8 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
+        "plan_updated": "Your plan now has: {fields}.",
         "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together, which is no more than the {daily} {currency} one card may withdraw in a day. {consequence} Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
@@ -382,6 +400,8 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
+        "plan_updated": "Seu plano agora tem: {fields}.",
         "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que não passa dos {daily} {currency} que um cartão pode sacar em um dia. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
@@ -457,6 +477,8 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
+        "plan_updated": "你的计划现在为：{fields}。",
         "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计），不超过单张卡一天可取的 {daily} {currency}。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
@@ -814,6 +836,20 @@ def _canonical_provider(value: Any) -> str:
     return text
 
 
+def _plan_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "none"
+    return "none" if value is None else str(value)
+
+
+def _plan_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """An update_plan call's arguments as the ledger may hold them: a field outside the four keeps its
+    name, so the engine sees and refuses it, and loses its value, so no answer or payee is written."""
+    return {name: value if name in PLAN_UPDATE_FIELDS else REDACTION_MARKER for name, value in arguments.items()}
+
+
 def _canonical_role(value: Any) -> str:
     word = re.sub(r"[\s\-]+", "_", _visible(str(value)).strip().casefold())
     if word in SENDER_ROLES:
@@ -1066,6 +1102,8 @@ class AgentLoop:
             return None, {"error": f"Unknown tool {call.name}."}
         if call.name == "cash_cap_status":
             call = call.model_copy(update={"arguments": dict(CASH_CAP_ARGUMENTS)})
+        if action_type is ActionType.UPDATE_PLAN:
+            call = call.model_copy(update={"arguments": _plan_arguments(call.arguments)})
         if action_type is ActionType.PRECHECK:
             call = call.model_copy(update={"arguments": _canonical_precheck(call.arguments)})
         missing = [
@@ -1075,6 +1113,8 @@ class AgentLoop:
             return None, {"error": f"{call.name} needs {', '.join(missing)}."}
         key = f"{user_id}:t{trail.turn}:{call.name}:{number}"
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
+        if action_type is ActionType.UPDATE_PLAN:
+            fields = {"plan_update": dict(call.arguments)}
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -1124,6 +1164,9 @@ class AgentLoop:
         self._write(trail, "execution", {"action": _action_json(action), "result": result})
         if action.type is ActionType.PRECHECK:
             self._after_precheck(trail, lang, action, call.arguments, result)
+        if "plan_updated" in result:
+            fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
+            trail.notices.append(_text(lang, "plan_updated", fields=fields))
         return decision, result
 
     def _run_now(
@@ -1182,7 +1225,24 @@ class AgentLoop:
             return outcome
         if action.type is ActionType.VERIFY_LEDGER:
             return self._ledger_report(user_id, action.requested_at)
+        if action.type is ActionType.UPDATE_PLAN:
+            return self._update_plan(user_id, action)
         return {"error": f"No runner for {action.type.value}."}
+
+    def _update_plan(self, user_id: str, action: Action) -> dict[str, Any]:
+        """Apply the fields the engine allowed to the plan, which must still validate: a backup must be one
+        of the plan's own cards and not the primary. Nothing changes when it does not."""
+        plan = self._plans.get(user_id)
+        if plan is None:
+            return {"error": f"No resilience plan for {user_id}, so nothing was changed."}
+        changes = dict(action.plan_update or {})
+        try:
+            updated = Plan.model_validate({**plan.model_dump(), **changes})
+        except ValidationError as error:
+            reasons = "; ".join(item["msg"] for item in error.errors())
+            return {"error": f"The plan was not changed: {reasons}"}
+        self._plans[user_id] = updated
+        return {"plan_updated": {name: getattr(updated, name) for name in changes}}
 
     def _after_precheck(
         self, trail: _Trail, lang: str, action: Action, arguments: dict[str, Any], result: dict[str, Any]
@@ -1190,6 +1250,9 @@ class AgentLoop:
         """What a precheck's result makes the loop record and say, from the entries it cites."""
         precheck = result.get("precheck", {})
         kind = precheck.get("action_kind")
+        if kind == "arrive_in_china":
+            facts, ids = arrival_facts()
+            trail.notices.append(_text(lang, "arrival", facts=" ".join(facts), ids=", ".join(ids)))
         if kind == CASH_CAP_ARGUMENTS["action_kind"] and precheck.get("ready") is False:
             status = cash_cap_status(self._chinese_cards.get(trail.user_id, []))
             consequence = load_knowledge()[ATM_CAP_ENTRY]["values"]["consequence"]
@@ -2740,6 +2803,14 @@ class AgentLoop:
                 if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
                     update = self._without_standing(user_id, deactivated["standing_mandate_id"])
                     self._new_version(user_id, update, deactivated["new_mandate_id"])
+            if (
+                entry.kind == "execution"
+                and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
+                and "plan_updated" in entry.payload.get("result", {})
+                and user_id in self._plans
+            ):
+                plan = self._plans[user_id]
+                self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **entry.payload["result"]["plan_updated"]})
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
