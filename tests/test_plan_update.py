@@ -238,3 +238,98 @@ def test_a_transfer_on_the_inbound_route_is_refused_under_r05_by_the_demo_mandat
 
     assert not reply.decision.allowed
     assert "R05" in reply.decision.rule_ids
+
+
+# An update the plan can no longer hold on restart.
+
+THREE_CARDS = {**NO_BACKUP, "cards": [*DEMO_PLAN["cards"], {"name": "HSBC card", "instrument_id": "hsbc:card_09"}]}
+
+
+def _restart(ledger, adapter_responses=()):
+    from core.fake_adapter import FakeModelAdapter
+
+    return AgentLoop(
+        adapter=FakeModelAdapter(list(adapter_responses)),
+        engine=DeterministicMandateEngine(),
+        ledger=ledger,
+        router=FakeRouter(),
+        rails={},
+        mandates={USER: _mandate()},
+        balances={USER: {"SGD": Decimal("2300")}},
+        pending={},
+        plans={USER: Plan.model_validate(NO_BACKUP)},
+    )
+
+
+def _hsbc_backup_ledger() -> HashChainLedger:
+    ledger = HashChainLedger()
+    s = _plan_setup([_call("update_plan", {"backup_instrument": "hsbc:card_09"}), _say("")], plan=THREE_CARDS, ledger=ledger)
+    s.loop.handle(USER, _user("Make my HSBC card the backup"))
+    return ledger
+
+
+def _skipped(ledger):
+    return [e for e in ledger.entries() if e.kind == "note" and e.payload.get("kind") == "plan_update_skipped"]
+
+
+def test_an_update_the_plan_cannot_hold_on_restart_writes_a_note_naming_the_field():
+    ledger = _hsbc_backup_ledger()
+    execution = next(e for e in ledger.entries() if e.kind == "execution")
+
+    restarted = _restart(ledger)
+
+    assert restarted._plans[USER].backup_instrument is None
+    notes = _skipped(ledger)
+    assert len(notes) == 1
+    assert notes[0].payload["user_id"] == USER
+    assert notes[0].payload["fields"] == ["backup_instrument"]
+    assert notes[0].payload["execution_seq"] == execution.seq
+    assert "hsbc:card_09" not in json.dumps(notes[0].payload)
+    assert ledger.verify() is None
+
+
+def test_a_second_restart_does_not_note_the_same_update_again():
+    ledger = _hsbc_backup_ledger()
+
+    _restart(ledger)
+    _restart(ledger)
+
+    assert len(_skipped(ledger)) == 1
+
+
+def test_an_update_the_plan_can_hold_writes_no_skipped_note():
+    ledger = HashChainLedger()
+    s = _plan_setup([_call("update_plan", {"backup_instrument": "revolut:card_02"}), _say("")], ledger=ledger)
+    s.loop.handle(USER, _user("Make my Revolut card the backup"))
+
+    _restart(ledger)
+
+    assert _skipped(ledger) == []
+
+
+@pytest.mark.parametrize(
+    ("lang", "sentence"),
+    [
+        ("en", "After a restart Lifeline could not apply an earlier change to your plan's backup_instrument"),
+        ("pt", "Depois de um reinício o Lifeline não conseguiu aplicar uma mudança anterior em backup_instrument"),
+        ("zh", "重启后，Lifeline 无法应用之前对你计划中 backup_instrument 的修改"),
+    ],
+)
+def test_the_verify_ledger_reply_mentions_a_skipped_update(lang, sentence):
+    ledger = _hsbc_backup_ledger()
+    restarted = _restart(ledger, [_call("verify_ledger", {}), _say("")])
+
+    reply = restarted.handle(USER, _user("Show me my ledger", lang=lang))
+
+    assert sentence in reply.text
+    execution = [e for e in ledger.entries() if e.kind == "execution"][-1]
+    views = execution.payload["result"]["ledger"]["entries"]
+    assert any(view.get("note") == "plan_update_skipped" and view.get("fields") == ["backup_instrument"] for view in views)
+
+
+def test_the_verify_ledger_reply_says_nothing_when_no_update_was_skipped():
+    s = _plan_setup([_call("verify_ledger", {}), _say("All good.")])
+
+    reply = s.loop.handle(USER, _user("Show me my ledger"))
+
+    assert reply.text == "All good."

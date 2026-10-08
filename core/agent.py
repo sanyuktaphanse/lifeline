@@ -185,6 +185,8 @@ ROLE_WORDS: dict[str, list[str]] = {
 TRUE_WORDS = frozenset({"true", "yes", "y", "on", "1", "sim", "是", "对"})
 # How a list of senders written as one string is split.
 SENDER_SPLIT = re.compile(r"\s*(?:,|;|/|、|，|和|&|\band\b|\be\b)\s*")
+# The note a restart writes for a plan update the plan given on start can no longer hold.
+PLAN_UPDATE_SKIPPED = "plan_update_skipped"
 # What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
 CASH_CAP_ARGUMENTS = {"action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
 # What a precheck's user context carries beside the student, from the tool's arguments.
@@ -344,6 +346,7 @@ TEXTS = {
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
         "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
         "plan_updated": "Your plan now has: {fields}.",
+        "plan_update_skipped": "After a restart Lifeline could not apply an earlier change to your plan's {fields}, because your plan no longer allows it, so that part of your plan stays as it was.",
         "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} {currency} a day and your cards together may still withdraw {today} {currency} today, so you can reach the cap. {consequence} Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
@@ -421,6 +424,7 @@ TEXTS = {
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
         "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
         "plan_updated": "Seu plano agora tem: {fields}.",
+        "plan_update_skipped": "Depois de um reinício o Lifeline não conseguiu aplicar uma mudança anterior em {fields} do seu plano, porque o seu plano não permite mais, então essa parte do plano ficou como estava.",
         "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} {currency} por dia e seus cartões juntos ainda podem sacar {today} {currency} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
@@ -498,6 +502,7 @@ TEXTS = {
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
         "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
         "plan_updated": "你的计划现在为：{fields}。",
+        "plan_update_skipped": "重启后，Lifeline 无法应用之前对你计划中 {fields} 的修改，因为你的计划已不再允许，所以这部分计划保持不变。",
         "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计）。单张卡每天可取 {daily} {currency}，你的卡今天合计还能取 {today} {currency}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
@@ -964,6 +969,8 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         view["action"] = payload["action"].get("type")
     if entry.kind == "note" and payload.get("kind"):
         view["note"] = payload["kind"]
+    if entry.kind == "note" and payload.get("kind") == PLAN_UPDATE_SKIPPED:
+        view["fields"] = payload.get("fields")
     if entry.kind == "receipt":
         receipt = payload.get("receipt", {})
         view["receipt"] = {name: receipt.get(name) for name in ("receipt_id", "rail", "amount", "currency", "status")}
@@ -1238,6 +1245,10 @@ class AgentLoop:
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
+        if action.type is ActionType.VERIFY_LEDGER:
+            skipped = self._skipped_fields(user_id)
+            if skipped:
+                trail.notices.append(_text(lang, PLAN_UPDATE_SKIPPED, fields=", ".join(skipped)))
         return decision, result
 
     def _run_now(
@@ -1303,6 +1314,15 @@ class AgentLoop:
         if action.type is ActionType.UPDATE_PLAN:
             return self._update_plan(user_id, action)
         return {"error": f"No runner for {action.type.value}."}
+
+    def _skipped_fields(self, user_id: str) -> list[str]:
+        """Every plan field a restart could not apply for the student, from the ledger, once each."""
+        fields: list[str] = []
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.kind == "note" and payload.get("kind") == PLAN_UPDATE_SKIPPED and payload.get("user_id") == user_id:
+                fields += [name for name in payload.get("fields", []) if name not in fields]
+        return fields
 
     def _update_plan(self, user_id: str, action: Action) -> dict[str, Any]:
         """Apply the fields the engine allowed to the plan, which must still validate: a backup must be one
@@ -2826,6 +2846,9 @@ class AgentLoop:
     def _rebuild_from_ledger(self) -> None:
         proposals: dict[str, dict[str, Any]] = {}
         waiting: dict[str, _Waiting] = {}
+        # Plan updates the plan given on start cannot hold, and the ones a restart already noted.
+        skipped: list[tuple[str, int, list[str]]] = []
+        noted: set[int] = set()
         for entry in self._ledger.entries():
             self._wrote(entry)
             if entry.kind == ANCHOR_KIND:
@@ -2913,14 +2936,23 @@ class AgentLoop:
                 }
                 try:
                     self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
-                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as the fixture gives it and open item 111 records it
-                    pass
+                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
+                    skipped.append((user_id, entry.seq, list(changes)))
+            if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
+                noted.add(int(entry.payload.get("execution_seq", 0)))
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
             self._rebuild_rescue(user_id, entry, waiting)
         for waited in waiting.values():
             self._restore_pending(waited)
+        for user_id, seq, fields in skipped:
+            if seq in noted:
+                continue
+            # The student's ledger says which change was not applied, by field and never by value, once.
+            mandate = self._mandates.get(user_id)
+            trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
+            self._write(trail, "note", {"kind": PLAN_UPDATE_SKIPPED, "execution_seq": seq, "fields": fields})
 
     def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
         """Replay a rescue through the same transitions it took, so a restart lands in the same state."""

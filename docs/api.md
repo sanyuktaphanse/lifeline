@@ -812,6 +812,15 @@ Response `200`:
 
 An `action_kind` the router knows nothing about returns empty lists and `ready` null, not an error.
 
+Two optional fields carry what the chat tool carries, so the app can run the document request flag and the structuring check without the model:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `channel` | text, optional | For `document_request`, the channel the message asks the documents to be sent through. Send the kind, one of `provider_app_upload`, `provider_website_upload`, `email`, `chat`, `link`, `phone`, `post` or `other`; anything else is mapped to a kind before anything is written, an address with an at sign to `email`, a web address to `link`, and the rest to `other` |
+| `senders` | list of text, or one text, optional | For `remit_from_china`, the people whose quota would pay for the student, by role: `self`, `parent`, `grandparent`, `aunt_or_uncle`, `sibling`, `cousin`, `friend`, `other_relative` or `other`. Common words are read as their role, such as `mother` as `parent` and `parents` as two parents; a name becomes `other`. One text is split on commas and the word and |
+
+The loop maps the action kind, the provider, the channel and every sender to these fixed values before the proposal is written, so a raw address or a name sent in any field never reaches the ledger. The response's `provider` is the mapped one.
+
 
 For money from China, `action_kind` `remit_from_china` returns only what knowledge entries say: the Bank of China checklist for funding the student's own account as the documents, and as the review triggers the Chinese side's annual quota, its identity rule, and that no duration is on file. `rule_ids` names the entries. Request:
 
@@ -900,7 +909,62 @@ Response `200`:
 }
 ```
 
-`document_request` and the structuring check of `remit_from_china` need a channel and the senders, which `PrecheckRequest` does not carry, so over this endpoint a Wise document request is always flagged as not ready and `remit_from_china` gives its ordinary answer. In chat the model passes them, and the loop writes them as fixed kinds and roles. A quote on `SG>CN` returns one Wise route whose `rule_id` is `cn_wise_in_007`, which lane C can show as the inbound route; the demo mandate does not allow the corridor, so a transfer on it is refused under R05.
+A message claiming to be from Wise that asks for documents by email. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "document_request", "provider": "Wise", "channel": "verify-team@wise-docs-check.com"}
+```
+
+Response `200`. The ledger's proposal holds `"channel": "email"` and `"provider": "wise"`, never the address, and a `document_request_flagged` note follows the execution:
+
+```json
+{
+  "provider": "wise",
+  "action_kind": "document_request",
+  "documents_likely": [],
+  "review_triggers": [
+    "Wise's help article on verifying an address says Wise will ask the customer to upload a high-quality photo or scan of a document, and that the customer can check their verification status at any time by going to the Verification tab in their account settings.",
+    "Wise says it will never send clickable links asking you to make payments or provide personal information, and will never pressure you to act immediately. Wise says to contact Wise directly through official channels using the Wise website or app, and that if a message claims to be from Wise and includes any of the things Wise will never do, it is likely a scam."
+  ],
+  "ready": false,
+  "rule_ids": [
+    "wise_docs_channel_001",
+    "wise_docs_impersonation_002"
+  ]
+}
+```
+
+With `"channel": "provider_app_upload"` the same request returns `ready` true and only `wise_docs_channel_001`, and no note is written.
+
+A student's costs from China paid with the mother's and an aunt's quota. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "remit_from_china", "provider": "cn_bank_remit_sim", "senders": ["mother", "aunt"]}
+```
+
+Response `200`. The ledger's proposal holds `"senders": ["parent", "aunt_or_uncle"]`, and a `structuring_refused` note with the same roles follows the execution:
+
+```json
+{
+  "provider": "cn_bank_remit_sim",
+  "action_kind": "remit_from_china",
+  "documents_likely": [],
+  "review_triggers": [
+    "From 1 January 2026, cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification under the joint due diligence measures of the People's Bank, the financial regulator, and the securities regulator. Splitting a transfer across people is structuring.",
+    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting.",
+    "Tuition and living costs above the quota can be remitted with documents without consuming the quota. The payment goes to the institution's account, the daily cap is 50,000 US dollars equivalent, and more than two weeks should be allowed.",
+    "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file for it. Source: cn_edu_remit_002."
+  ],
+  "ready": false,
+  "rule_ids": [
+    "cn_cdd_004",
+    "cn_fx_quota_001",
+    "cn_edu_remit_002"
+  ]
+}
+```
+
+With one sender, or none, `remit_from_china` gives its ordinary answer shown above. A request whose body fails validation is answered with `422`, and that answer echoes the body back to the caller, as open item 79 records; it is never written to the ledger. A quote on `SG>CN` returns one Wise route whose `rule_id` is `cn_wise_in_007`, which lane C can show as the inbound route; the demo mandate does not allow the corridor, so a transfer on it is refused under R05.
 
 ### Ledger notes from Stage 8
 

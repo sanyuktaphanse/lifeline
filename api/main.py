@@ -113,6 +113,11 @@ class PrecheckRequest(BaseModel):
     user_id: str
     action_kind: str
     provider: str
+    # What the chat tool carries, so the app can run the document request flag and the structuring
+    # check without the model. The loop writes both as fixed kinds and roles before anything is written,
+    # so a raw address or a name sent here never reaches the ledger. Source: docs/decisions.md, 8 October 2026.
+    channel: str | None = Field(default=None, min_length=1, max_length=MAX_TEXT_CHARS)
+    senders: list[str] | str | None = Field(default=None, max_length=MAX_TEXT_CHARS)
 
 
 class RunDueRequest(BaseModel):
@@ -396,7 +401,11 @@ def create_app(
 
     @app.post("/precheck")
     def precheck(request: PrecheckRequest) -> PrecheckResult:
-        arguments = {"action_kind": request.action_kind, "provider": request.provider}
+        arguments: dict[str, Any] = {"action_kind": request.action_kind, "provider": request.provider}
+        if request.channel is not None:
+            arguments["channel"] = request.channel
+        if request.senders is not None:
+            arguments["senders"] = request.senders
         return PrecheckResult.model_validate(direct(request.user_id, "precheck", arguments, "precheck"))
 
     @app.post("/standing/run_due")
