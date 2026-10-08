@@ -32,7 +32,7 @@ TEXT_CHECKS = ("must_contain", "must_not_contain")
 # The ledger expectation lists the action trail; turn entries only count a turn's messages and are not part of it.
 TURN_KIND = "turn"
 # Expectations judged against the run itself, not against the final reply.
-RUN_CHECKS = ("ledger", "notes", "must_not_contain", "verify")
+RUN_CHECKS = ("ledger", "notes", "family_notice", "must_not_contain", "verify")
 # A turn whose language is this one is built without a language, so the loop detects it.
 DETECT = "detect"
 # The only tool whose action reaches a rail, so the only one a fail_once entry needs to name.
@@ -365,6 +365,13 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
     notes = [entry.payload.get("kind") for entry in ledger.entries() if entry.kind == "note"]
     if "notes" in expected and notes != expected["notes"]:
         result.failures.append(f"notes were {notes}, expected {expected['notes']}")
+    if "family_notice" in expected:
+        notices = [e.payload["text"] for e in ledger.entries() if e.kind == "note" and e.payload.get("kind") == "family_notice"]
+        if not notices:
+            result.failures.append("no family notice was written")
+        for text in expected["family_notice"] if notices else []:
+            if text not in notices[-1]:
+                result.failures.append(f"family notice does not contain {text!r}")
     ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
     for text in expected.get("must_not_contain", []):
         if text in ledger_text:

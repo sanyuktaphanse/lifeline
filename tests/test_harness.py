@@ -15,7 +15,7 @@ from core.harness import (
 SCENARIOS = {
     "T01", "T02", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14",
     "T15", "T16", "T17", "T21", "T22", "T23", "T29", "T32", "T34", "X01", "X02", "X03", "X04", "X05",
-    "X06", "X07", "X08", "X09", "X12", "X13", "X14", "X16", "X17", "X18", "X19", "X20",
+    "X06", "X07", "X08", "X09", "X11", "X12", "X13", "X14", "X16", "X17", "X18", "X19", "X20",
     "X21", "X22", "X23", "X24", "X26",
 }
 
@@ -475,3 +475,27 @@ def test_an_unknown_rescue_turn_is_a_failure(tmp_path):
     failures = _by_id(evaluate(suites, suites / "scenarios"))["T07"].runs[0].failures
 
     assert any("rescue must be start or step" in failure for failure in failures)
+
+
+def test_a_family_notice_expectation_reads_the_notice_the_run_wrote(tmp_path):
+    suites = _suites(tmp_path)
+    turns = [*RESCUE_TURNS, {"rescue": "step"}]
+    _write_scenario(suites, _rescue({"family_notice": ["Card wise:card_01 was frozen.", "The student did not take emergency money."]}, turns=turns))
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert [run.failures for run in result.runs] == [[]]
+
+
+def test_a_family_notice_expectation_fails_when_the_notice_lacks_a_sentence_or_is_missing(tmp_path):
+    suites = _suites(tmp_path)
+    turns = [*RESCUE_TURNS, {"rescue": "step"}]
+    _write_scenario(suites, _rescue({"family_notice": ["Everything was fine."]}, turns=turns))
+    missing = _rescue({"family_notice": ["Card wise:card_01 was frozen."]})
+    missing["id"] = "T99"
+    _write_scenario(suites, missing)
+
+    results = _by_id(evaluate(suites, suites / "scenarios"))
+
+    assert any("family notice does not contain 'Everything was fine.'" in f for f in results["T07"].runs[0].failures)
+    assert any("no family notice was written" in f for f in results["T99"].runs[0].failures)
