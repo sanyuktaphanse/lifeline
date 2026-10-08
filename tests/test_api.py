@@ -769,3 +769,13 @@ def test_without_sim_rails_the_demo_parents_transfer_is_not_seeded():
 
     assert "cn_bank_remit_sim" not in client.app.state.loop._rails
     assert client.post("/trace", json={"user_id": USER, "receipt_id": "cn_bank_remit_sim-in-0001"}).status_code == 404
+
+
+def test_chat_reads_the_demo_fixtures_chinese_cards_for_the_cash_cap():
+    client = _client([_call("cash_cap_status", {}), Message(role=Role.ASSISTANT, text="", provider="fake", model="fake-model")])
+
+    reply = client.post("/chat", json={"user_id": USER, "text": "How much cash can I still take out abroad?"}).json()
+
+    assert "cn_atm_cap_005" in reply["text"]
+    assert "5,500 CNY" in reply["text"]
+    assert _trail_kinds(client) == ["proposal", "decision", "execution", "note"]

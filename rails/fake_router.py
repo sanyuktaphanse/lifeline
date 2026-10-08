@@ -13,6 +13,7 @@ from rails.sim.rules import (
     TUITION,
     UPI_CAP_ENTRY,
     UPI_PURPOSE_ENTRY,
+    cash_cap_sentences,
     cn_documents,
     cn_purpose_refusals,
     document_request,
@@ -172,6 +173,16 @@ class FakeRouter(Router):
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
+        if action_kind == "overseas_cash":
+            ready, triggers, rule_ids = cash_cap_sentences(list(user_context.get("cards") or []))
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=ready,
+                rule_ids=rule_ids,
             )
         if action_kind == "document_request":
             ready, triggers, rule_ids = document_request(

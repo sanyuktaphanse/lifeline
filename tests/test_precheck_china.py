@@ -326,3 +326,203 @@ def test_a_string_flag_is_read_as_a_flag():
     s.loop.handle(USER, _user("use my aunt's quota"))
 
     assert _notes(s, "structuring_refused")
+
+
+# T37, the overseas cash withdrawal cap on Chinese cards.
+
+import re  # noqa: E402
+from decimal import Decimal  # noqa: E402
+
+import yaml  # noqa: E402
+
+from api.main import DEMO_FIXTURE  # noqa: E402
+from rails.sim.rules import ATM_CAP_ENTRY, cash_cap_status  # noqa: E402
+
+DEMO_CARDS = yaml.safe_load(DEMO_FIXTURE.read_text(encoding="utf-8"))["chinese_cards"]
+CAP = load_knowledge()[ATM_CAP_ENTRY]["values"]
+
+
+def _cards_setup(responses, cards=None):
+    s = _setup(responses)
+    s.loop._chinese_cards[USER] = DEMO_CARDS if cards is None else cards
+    return s
+
+
+def test_the_cap_entry_gives_its_figures_and_consequence_as_values():
+    assert Decimal(str(CAP["annual_cap"])) == Decimal("100000")
+    assert Decimal(str(CAP["per_card_daily_cap"])) == Decimal("10000")
+    assert CAP["currency"] == "CNY"
+    assert CAP["consequence"] in load_knowledge()[ATM_CAP_ENTRY]["statement"]
+    assert "following year" in CAP["consequence"]
+
+
+def test_the_demo_fixture_holds_chinese_cards_with_one_close_to_the_annual_cap():
+    total = sum(Decimal(card["withdrawn_this_year"]) for card in DEMO_CARDS)
+    annual = Decimal(str(CAP["annual_cap"]))
+    daily = Decimal(str(CAP["per_card_daily_cap"]))
+
+    assert len(DEMO_CARDS) >= 2
+    assert annual - total <= daily
+    assert max(Decimal(card["withdrawn_this_year"]) for card in DEMO_CARDS) > annual / 2
+
+
+def test_the_year_remainder_is_shared_by_every_card_and_today_is_the_smaller_of_two():
+    cards = [
+        {"instrument_id": "icbc:card_a", "withdrawn_this_year": "80000", "withdrawn_today": "2000"},
+        {"instrument_id": "boc:card_b", "withdrawn_this_year": "15000", "withdrawn_today": "0"},
+    ]
+
+    status = cash_cap_status(cards)
+
+    assert status["remaining_year"] == Decimal("5000")
+    assert status["warn"] is True
+    assert status["cards"] == [
+        {"instrument_id": "icbc:card_a", "remaining_year": Decimal("5000"), "remaining_today": Decimal("5000")},
+        {"instrument_id": "boc:card_b", "remaining_year": Decimal("5000"), "remaining_today": Decimal("5000")},
+    ]
+
+
+def test_far_from_the_cap_there_is_no_warning_and_today_is_the_daily_remainder():
+    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "20000", "withdrawn_today": "3000"}]
+
+    status = cash_cap_status(cards)
+
+    assert status["warn"] is False
+    assert status["cards"][0]["remaining_today"] == Decimal("7000")
+
+
+def test_at_exactly_one_daily_cap_left_it_warns():
+    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "90000", "withdrawn_today": "0"}]
+
+    assert cash_cap_status(cards)["warn"] is True
+
+
+def test_over_the_cap_nothing_is_left_and_never_less_than_zero():
+    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "120000", "withdrawn_today": "12000"}]
+
+    status = cash_cap_status(cards)
+
+    assert status["remaining_year"] == Decimal("0")
+    assert status["cards"][0]["remaining_today"] == Decimal("0")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        [{"instrument_id": "icbc card", "withdrawn_this_year": "1", "withdrawn_today": "0"}],
+        [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "-5", "withdrawn_today": "0"}],
+        [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "1"}],
+    ],
+)
+def test_a_malformed_card_fixture_is_refused(bad):
+    with pytest.raises(ValueError):
+        cash_cap_status(bad)
+
+
+def test_the_router_gives_the_overseas_cash_precheck_from_the_entry():
+    result = FakeRouter().precheck("overseas_cash", "chinese_bank_cards", {"cards": DEMO_CARDS})
+
+    assert result.rule_ids == [ATM_CAP_ENTRY]
+    assert result.ready is False
+    assert CAP["consequence"] in result.review_triggers
+
+
+def test_with_no_cards_on_file_the_router_has_no_record():
+    result = FakeRouter().precheck("overseas_cash", "chinese_bank_cards", {"cards": []})
+
+    assert result.ready is None
+    assert result.rule_ids == []
+    assert result.review_triggers == ["Lifeline has no record of overseas cash withdrawals on your Chinese bank cards."]
+
+
+def test_cash_cap_status_is_a_t0_tool_mapped_to_the_precheck():
+    from core.agent import TOOL_ACTIONS, TOOLS
+    from contracts.schemas import ActionType
+
+    assert TOOL_ACTIONS["cash_cap_status"] is ActionType.PRECHECK
+    assert any(tool["name"] == "cash_cap_status" for tool in TOOLS)
+
+
+def test_cash_cap_status_runs_as_proposal_decision_execution_and_returns_each_card():
+    s = _cards_setup([_call("cash_cap_status", {}), _say("")])
+
+    s.loop.handle(USER, _user("How much cash can I still take out abroad?"))
+
+    assert _kinds(s.ledger) == ["proposal", "decision", "execution", "note"]
+    proposal = next(e for e in s.ledger.entries() if e.kind == "proposal")
+    assert proposal.payload["arguments"]["action_kind"] == "overseas_cash"
+    decision = next(e for e in s.ledger.entries() if e.kind == "decision")
+    assert decision.payload["decision"]["tier"] == "T0"
+    execution = next(e for e in s.ledger.entries() if e.kind == "execution")
+    cards = execution.payload["result"]["cards"]
+    assert [card["instrument_id"] for card in cards] == [card["instrument_id"] for card in DEMO_CARDS]
+    assert _notes(s, "cash_cap_warning")[0]["entry_id"] == ATM_CAP_ENTRY
+
+
+def test_the_model_cannot_supply_its_own_cards():
+    fake = [{"instrument_id": "icbc:card_x", "withdrawn_this_year": "0", "withdrawn_today": "0"}]
+    s = _cards_setup([_call("cash_cap_status", {"cards": fake}), _say("")])
+
+    s.loop.handle(USER, _user("cash left?"))
+
+    execution = next(e for e in s.ledger.entries() if e.kind == "execution")
+    assert "icbc:card_x" not in [card["instrument_id"] for card in execution.payload["result"]["cards"]]
+    assert _notes(s, "cash_cap_warning")
+
+
+@pytest.mark.parametrize(
+    ("lang", "consequence"),
+    [
+        ("en", CAP["consequence"]),
+        ("zh", "超过年度额度后，当年余下时间和下一年都不能在境外取现。"),
+        ("pt", "Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte."),
+    ],
+)
+def test_near_the_cap_the_loop_warns_with_the_remainder_and_the_two_year_consequence(lang, consequence):
+    s = _cards_setup([_call("cash_cap_status", {}), _say("")])
+
+    reply = s.loop.handle(USER, _user("cash", lang=lang))
+
+    remaining = cash_cap_status(DEMO_CARDS)["remaining_year"]
+    assert f"{remaining:,}" in reply.text
+    assert consequence in reply.text
+    assert ATM_CAP_ENTRY in reply.text
+
+
+def test_far_from_the_cap_the_loop_writes_no_warning():
+    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "1000", "withdrawn_today": "0"}]
+    s = _cards_setup([_call("cash_cap_status", {}), _say("Plenty left.")], cards=cards)
+
+    reply = s.loop.handle(USER, _user("cash"))
+
+    assert _notes(s, "cash_cap_warning") == []
+    assert reply.text == "Plenty left."
+
+
+def _figures(text: str) -> set[Decimal]:
+    return {Decimal(number.replace(",", "")) for number in re.findall(r"\d[\d,]*\d|\d", text)}
+
+
+def test_every_yuan_figure_in_the_warning_comes_from_the_fixture_and_the_entry():
+    s = _cards_setup([_call("cash_cap_status", {}), _say("")])
+
+    reply = s.loop.handle(USER, _user("cash"))
+
+    status = cash_cap_status(DEMO_CARDS)
+    allowed = {status["remaining_year"], Decimal(str(CAP["per_card_daily_cap"])), Decimal(str(CAP["annual_cap"]))}
+    allowed |= {card["remaining_today"] for card in status["cards"]}
+    figures = _figures(reply.text.replace(ATM_CAP_ENTRY, ""))
+    assert figures and figures <= allowed
+
+
+def test_changing_the_fixture_or_the_entry_changes_the_figures(monkeypatch):
+    cards = [{"instrument_id": "icbc:card_a", "withdrawn_this_year": "93210", "withdrawn_today": "0"}]
+    s = _cards_setup([_call("cash_cap_status", {}), _say("")], cards=cards)
+    assert "6,790" in s.loop.handle(USER, _user("cash")).text
+
+    import rails.sim.rules as rules
+
+    real = rules.load_knowledge()
+    changed = {**real, ATM_CAP_ENTRY: {**real[ATM_CAP_ENTRY], "values": {**CAP, "annual_cap": 95000}}}
+    monkeypatch.setattr(rules, "load_knowledge", lambda: changed)
+    assert cash_cap_status(cards)["remaining_year"] == Decimal("1790")

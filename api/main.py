@@ -264,6 +264,7 @@ def create_app(
         plans={user_id: Plan.model_validate(fixture["plan"])},
         inbound_receipts={user_id: inbound},
         anchor=anchor,
+        chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.

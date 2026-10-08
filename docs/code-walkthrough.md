@@ -1984,6 +1984,7 @@ from rails.sim.rules import (
     TUITION,
     UPI_CAP_ENTRY,
     UPI_PURPOSE_ENTRY,
+    cash_cap_sentences,
     cn_documents,
     cn_purpose_refusals,
     document_request,
@@ -2146,6 +2147,16 @@ class FakeRouter(Router):
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
+        if action_kind == "overseas_cash":
+            ready, triggers, rule_ids = cash_cap_sentences(list(user_context.get("cards") or []))
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=ready,
+                rule_ids=rule_ids,
             )
         if action_kind == "document_request":
             ready, triggers, rule_ids = document_request(
@@ -2414,6 +2425,9 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from contracts.schemas import INSTRUMENT_ID, NonNegativeAmount
 from rails.knowledge.loader import load_knowledge
 
 UPI_PURPOSE_ENTRY = "in_upi_paynow_purpose_001"
@@ -2425,6 +2439,7 @@ CN_INSTITUTION_ENTRY = "cn_edu_remit_002"
 CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
+ATM_CAP_ENTRY = "cn_atm_cap_005"
 # Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
 NO_SINGAPORE_PAGE = (
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
@@ -3280,12 +3295,14 @@ from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
 from rails.sim.rules import (
+    ATM_CAP_ENTRY,
     CN_CDD_ENTRY,
     CN_INSTITUTION_ENTRY,
     CN_QUOTA_ENTRY,
     DOCUMENT_CHANNELS,
     NO_SINGAPORE_PAGE,
     WISE_DOCS_ENTRY,
+    cash_cap_status,
     is_wise,
 )
 
@@ -3377,6 +3394,8 @@ ROLE_WORDS = {
     "brother": "sibling", "sister": "sibling", "me": "self", "myself": "self",
 }
 TRUE_WORDS = frozenset({"true", "yes", "1"})
+# What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
+CASH_CAP_ARGUMENTS = {"action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
 # What a precheck's user context carries beside the student, from the tool's arguments.
 PRECHECK_CONTEXT = ("provider", "channel", "multiple_people_quota", "senders")
 
@@ -3460,6 +3479,13 @@ TOOLS = [
         [],
     ),
     _tool(
+        "cash_cap_status",
+        "Report what is left of the overseas cash withdrawal cap on the student's Chinese bank cards, this "
+        "calendar year and today, from the cards on file.",
+        {},
+        [],
+    ),
+    _tool(
         "export_credentials",
         "Reveals stored credentials, such as card numbers, card tokens, or recovery codes.",
         {"what": TEXT},
@@ -3488,6 +3514,7 @@ TOOL_ACTIONS = {
     "deactivate_standing_mandate": ActionType.DEACTIVATE_STANDING_MANDATE,
     "verify_ledger": ActionType.VERIFY_LEDGER,
     "export_credentials": ActionType.EXPORT_CREDENTIALS,
+    "cash_cap_status": ActionType.PRECHECK,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -3514,6 +3541,7 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together, which is no more than the {daily} {currency} one card may withdraw in a day. {consequence} Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
@@ -3588,6 +3616,7 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que não passa dos {daily} {currency} que um cartão pode sacar em um dia. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
@@ -3662,6 +3691,7 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计），不超过单张卡一天可取的 {daily} {currency}。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
@@ -4021,8 +4051,12 @@ class AgentLoop:
         inbound_receipts: dict[str, dict[str, str]] | None = None,
         anchor: Anchor | None = None,
         clock: Callable[[], datetime] = _now,
+        chinese_cards: dict[str, list[dict[str, Any]]] | None = None,
     ) -> None:
         self._adapter = adapter
+        # A fixture per student: their Chinese bank cards and the yuan withdrawn overseas on each. The
+        # cash cap reads only this, never cards a model names.
+        self._chinese_cards = {user_id: list(cards) for user_id, cards in (chinese_cards or {}).items()}
         # Where the ledger head is anchored, or nothing, and the clock that times the hourly anchor.
         self._anchor = anchor
         self._clock = clock
@@ -4208,6 +4242,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
         action_type = TOOL_ACTIONS.get(call.name)
         if action_type is None:
             return None, {"error": f"Unknown tool {call.name}."}
+        if call.name == "cash_cap_status":
+            call = call.model_copy(update={"arguments": dict(CASH_CAP_ARGUMENTS)})
         if action_type is ActionType.PRECHECK:
             call = call.model_copy(update={"arguments": _canonical_precheck(call.arguments)})
         missing = [
@@ -4316,12 +4352,18 @@ When the source was changed, the engine refuses the action under R01, exactly as
             return {"deactivated": {"standing_mandate_id": standing.id, "new_mandate_id": version.id}}
         if action.type is ActionType.PRECHECK:
             context = {"user_id": user_id, **{name: arguments[name] for name in PRECHECK_CONTEXT if name in arguments}}
-            result = self._router.precheck(
-                str(arguments.get("action_kind", "")),
-                str(arguments.get("provider", "")),
-                context,
-            )
-            return {"precheck": result.model_dump(mode="json")}
+            kind = str(arguments.get("action_kind", ""))
+            cards = self._chinese_cards.get(user_id, [])
+            if kind == CASH_CAP_ARGUMENTS["action_kind"]:
+                context["cards"] = cards
+            result = self._router.precheck(kind, str(arguments.get("provider", "")), context)
+            outcome: dict[str, Any] = {"precheck": result.model_dump(mode="json")}
+            if kind == CASH_CAP_ARGUMENTS["action_kind"]:
+                status = cash_cap_status(cards)
+                outcome["cards"] = [
+                    {name: str(value) for name, value in card.items()} for card in status["cards"]
+                ]
+            return outcome
         if action.type is ActionType.VERIFY_LEDGER:
             return self._ledger_report(user_id, action.requested_at)
         return {"error": f"No runner for {action.type.value}."}
@@ -6481,6 +6523,8 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             plans={USER: _plan(fixtures)},
             inbound_receipts={USER: inbound},
             anchor=LocalSignedAnchor(anchors_path),
+            # A scenario's own Chinese cards replace the demo fixture's, which are a fixture too.
+            chinese_cards={USER: fixtures.get("chinese_cards", load_suite(DEMO_FIXTURE).get("chinese_cards") or [])},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
@@ -6959,6 +7003,7 @@ def create_app(
         plans={user_id: Plan.model_validate(fixture["plan"])},
         inbound_receipts={user_id: inbound},
         anchor=anchor,
+        chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.

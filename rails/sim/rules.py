@@ -10,6 +10,9 @@ from decimal import Decimal
 from fractions import Fraction
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from contracts.schemas import INSTRUMENT_ID, NonNegativeAmount
 from rails.knowledge.loader import load_knowledge
 
 UPI_PURPOSE_ENTRY = "in_upi_paynow_purpose_001"
@@ -21,6 +24,7 @@ CN_INSTITUTION_ENTRY = "cn_edu_remit_002"
 CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
+ATM_CAP_ENTRY = "cn_atm_cap_005"
 # Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
 NO_SINGAPORE_PAGE = (
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
@@ -147,3 +151,58 @@ def structuring_refusal() -> tuple[list[str], list[str]]:
     """Why splitting across people is refused, and the documented route above the quota, by its entries."""
     ids = [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
     return [*(entry(entry_id)["statement"] for entry_id in ids), NO_SINGAPORE_PAGE], ids
+
+
+class ChineseCard(BaseModel):
+    """One Chinese bank card from a fixture, with the yuan withdrawn overseas on it so far."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    instrument_id: str = Field(pattern=f"^{INSTRUMENT_ID}$")
+    withdrawn_this_year: NonNegativeAmount
+    withdrawn_today: NonNegativeAmount
+
+
+def cash_cap_status(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    """What is left of the overseas cash cap, by cn_atm_cap_005, for the cards a fixture holds.
+
+    The annual cap counts every card of the individual together, so the year's remainder is shared by
+    every card; a card's remainder today is the smaller of its own daily remainder and that. It warns
+    when the year's remainder is at or below one card's daily cap. No figure is written here.
+    """
+    try:
+        held = [ChineseCard.model_validate(card) for card in cards]
+    except ValidationError as error:
+        raise ValueError(f"A Chinese card in the fixture is malformed: {error}") from error
+    values = entry(ATM_CAP_ENTRY)["values"]
+    annual, daily = Decimal(str(values["annual_cap"])), Decimal(str(values["per_card_daily_cap"]))
+    remaining_year = max(annual - sum((card.withdrawn_this_year for card in held), Decimal(0)), Decimal(0))
+    return {
+        "remaining_year": remaining_year,
+        "per_card_daily_cap": daily,
+        "currency": values["currency"],
+        "warn": bool(held) and remaining_year <= daily,
+        "cards": [
+            {
+                "instrument_id": card.instrument_id,
+                "remaining_year": remaining_year,
+                "remaining_today": min(max(daily - card.withdrawn_today, Decimal(0)), remaining_year),
+            }
+            for card in held
+        ],
+    }
+
+
+def cash_cap_sentences(cards: list[dict[str, Any]]) -> tuple[bool | None, list[str], list[str]]:
+    """The overseas cash precheck: ready, one sentence per card and the consequence, and the entry id."""
+    if not cards:
+        return None, ["Lifeline has no record of overseas cash withdrawals on your Chinese bank cards."], []
+    status = cash_cap_status(cards)
+    currency = status["currency"]
+    sentences = [
+        f"Card {card['instrument_id']}: {card['remaining_year']:,} {currency} left this calendar year across all "
+        f"Chinese cards, and {card['remaining_today']:,} {currency} left today. Source: {ATM_CAP_ENTRY}."
+        for card in status["cards"]
+    ]
+    sentences.append(entry(ATM_CAP_ENTRY)["values"]["consequence"])
+    return not status["warn"], sentences, [ATM_CAP_ENTRY]

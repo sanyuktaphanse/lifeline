@@ -24,6 +24,16 @@ pix_key_on_file: [landlord_sp]
 documents_on_file: [passport, ID card or Hukou book, enrollment or admission letter]
 # Fixture: whether the parents' position against China's annual foreign currency quota is known.
 quota_position_known: true
+# Fixture: the student's Chinese bank cards and the yuan withdrawn overseas on each, so far this
+# calendar year and so far today. Not real cards or withdrawals. Source: this file. The first card is
+# close to the annual cap of cn_atm_cap_005, which counts every card together: 94,500 of it is used.
+chinese_cards:
+  - instrument_id: "icbc:card_03"
+    withdrawn_this_year: "88000"
+    withdrawn_today: "0"
+  - instrument_id: "boc:card_04"
+    withdrawn_this_year: "6500"
+    withdrawn_today: "1500"
 # Fixture: a parent's transfer from China that has not arrived, which the student can trace.
 # The rail moves it through its stages by its own simulated clock. Not a real transfer.
 inbound_receipts:
