@@ -1425,6 +1425,13 @@ All times are local time.
 | `8ad4020` | 8 Oct | Scenarios T19, X15, T31 and T36, and the docs for the simulated rails |
 | `3f1597b` | 8 Oct | Rails: the UPI cap is the sender's day in India, Pix arrives as its entry says, stages dated by the clock |
 | `a06b7e2` | 8 Oct | Provenance reads both sides alike: invisible characters, grouped amounts, the model's own words |
+| `1d05f8a` | 8 Oct | X10: export_credentials refused at T3, and a reply guard for card numbers, tokens and secrets |
+| `2bd9c96` | 8 Oct | X27: flag a provider's request for documents through an outside channel |
+| `18a1cf6` | 8 Oct | X28: refuse a plan that splits one student's costs across several people's quotas |
+| `85030e9` | 8 Oct | T37: warn before the overseas cash withdrawal cap on Chinese cards |
+| `70ecb2f` | 8 Oct | T38: the arrival precheck, the inbound Wise quote, and update_plan at T1 |
+| `722c483` | 8 Oct | Docs: Stage 8 first half, the guard, the prechecks, the cash cap, the arrival and update_plan |
+| `977f729` | 8 Oct | Attacker briefs: close the breaks two independent attackers found in Stage 8 |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
