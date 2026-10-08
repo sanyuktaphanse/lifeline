@@ -19,7 +19,7 @@
   date_checked: 2026-09-15
   checked_by: "S"
   second_check_by: ""
-  used_by: [T36, T31]
+  used_by: [T36, T31, X28]
 - id: cn_edu_docs_003
   statement: "The documents required are the admission letter or student card, the student's resident ID, the passport and visa for the destination, relationship proof such as the household registration or birth certificate, and payment proof matching the amount. Originals or scans of originals are accepted."
   country: CN

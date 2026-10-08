@@ -55,7 +55,15 @@ from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
-from rails.sim.rules import DOCUMENT_CHANNELS, WISE_DOCS_ENTRY, is_wise
+from rails.sim.rules import (
+    CN_CDD_ENTRY,
+    CN_INSTITUTION_ENTRY,
+    CN_QUOTA_ENTRY,
+    DOCUMENT_CHANNELS,
+    NO_SINGAPORE_PAGE,
+    WISE_DOCS_ENTRY,
+    is_wise,
+)
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -145,8 +153,17 @@ TEXT = {"type": "string"}
 PRECHECK_CHANNELS = DOCUMENT_CHANNELS
 # What a provider becomes when the model gives an address in its place, so no address is written.
 UNKNOWN_PROVIDER = "unknown"
+# The people whose quota a plan may name, by role and never by name. Source: docs/decisions.md, 8 October 2026.
+SENDER_ROLES = ("self", "parent", "grandparent", "aunt_or_uncle", "sibling", "cousin", "friend", "other_relative", "other")
+# Common words for a role, read as that role; any other word, a name included, is read as other.
+ROLE_WORDS = {
+    "mother": "parent", "father": "parent", "mum": "parent", "mom": "parent", "dad": "parent", "parents": "parent",
+    "aunt": "aunt_or_uncle", "uncle": "aunt_or_uncle", "grandmother": "grandparent", "grandfather": "grandparent",
+    "brother": "sibling", "sister": "sibling", "me": "self", "myself": "self",
+}
+TRUE_WORDS = frozenset({"true", "yes", "1"})
 # What a precheck's user context carries beside the student, from the tool's arguments.
-PRECHECK_CONTEXT = ("provider", "channel")
+PRECHECK_CONTEXT = ("provider", "channel", "multiple_people_quota", "senders")
 
 
 def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -198,8 +215,15 @@ TOOLS = [
         "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "
         "For a message that asks for documents, use action_kind document_request with the provider the "
         "message claims to be from and the kind of channel it asks the documents to be sent through, "
-        "never the address itself.",
-        {"action_kind": TEXT, "provider": TEXT, "channel": {"type": "string", "enum": list(PRECHECK_CHANNELS)}},
+        "never the address itself. For remit_from_china, set multiple_people_quota when more than one "
+        "person's quota would be used for the student's costs, and list the senders by role, never by name.",
+        {
+            "action_kind": TEXT,
+            "provider": TEXT,
+            "channel": {"type": "string", "enum": list(PRECHECK_CHANNELS)},
+            "multiple_people_quota": {"type": "boolean"},
+            "senders": {"type": "array", "items": {"type": "string", "enum": list(SENDER_ROLES)}},
+        },
         ["action_kind", "provider"],
     ),
     _tool(
@@ -271,6 +295,7 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
@@ -344,6 +369,7 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
@@ -417,6 +443,7 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
@@ -772,6 +799,13 @@ def _canonical_provider(value: Any) -> str:
     return text
 
 
+def _canonical_role(value: Any) -> str:
+    word = re.sub(r"[\s\-]+", "_", _visible(str(value)).strip().casefold())
+    if word in SENDER_ROLES:
+        return word
+    return ROLE_WORDS.get(word, "other")
+
+
 def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
     """A precheck's arguments as the ledger may hold them: kinds and roles, never an address or a name.
 
@@ -782,6 +816,12 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
         canonical["provider"] = _canonical_provider(canonical["provider"])
     if canonical.get("channel") not in (None, ""):
         canonical["channel"] = _canonical_channel(canonical["channel"])
+    if "senders" in canonical:
+        senders = canonical["senders"]
+        canonical["senders"] = [_canonical_role(sender) for sender in (senders if isinstance(senders, list) else [senders])]
+    if "multiple_people_quota" in canonical:
+        flag = canonical["multiple_people_quota"]
+        canonical["multiple_people_quota"] = flag is True or str(flag).strip().casefold() in TRUE_WORDS
     return canonical
 
 
@@ -1123,6 +1163,34 @@ class AgentLoop:
         """What a precheck's result makes the loop record and say, from the entries it cites."""
         precheck = result.get("precheck", {})
         kind = precheck.get("action_kind")
+        if kind == "remit_from_china" and precheck.get("ready") is False:
+            ids = list(precheck.get("rule_ids", []))
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "structuring_refused",
+                    "idempotency_key": action.idempotency_key,
+                    "senders": list(arguments.get("senders", [])),
+                    "entry_ids": ids,
+                },
+            )
+            # The one sentence of the due diligence entry that names the rule, and the documented route
+            # above the quota with what it does not cover, each read from its entry by id.
+            entries = load_knowledge()
+            statement = entries[CN_CDD_ENTRY]["statement"]
+            rule = next(sentence for sentence in re.split(r"(?<=\.) ", statement) if "structuring" in sentence)
+            trail.notices.append(
+                _text(
+                    lang,
+                    "structuring_refused",
+                    rule=rule,
+                    quota=entries[CN_QUOTA_ENTRY]["statement"],
+                    route=entries[CN_INSTITUTION_ENTRY]["statement"],
+                    caveat=NO_SINGAPORE_PAGE,
+                    ids=", ".join([CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]),
+                )
+            )
         if kind == "document_request" and precheck.get("ready") is False:
             ids = list(precheck.get("rule_ids", []))
             entries = load_knowledge()

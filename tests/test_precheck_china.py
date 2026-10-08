@@ -215,3 +215,114 @@ def test_a_pasted_payment_instruction_beside_the_document_request_cannot_produce
     assert "execution" not in _kinds(s.ledger)[3:]
     assert _notes(s, "document_request_flagged")
     assert "This is not how Wise collects documents." in reply.text
+
+
+# X28, the structuring refusal.
+
+from rails.sim.rules import CN_CDD_ENTRY, CN_INSTITUTION_ENTRY, CN_QUOTA_ENTRY, NO_SINGAPORE_PAGE  # noqa: E402
+from core.agent import SENDER_ROLES  # noqa: E402
+
+
+def test_more_than_one_persons_quota_is_not_ready_and_offers_the_documented_route():
+    result = FakeRouter().precheck(
+        "remit_from_china", "cn_bank_remit_sim", {"multiple_people_quota": True, "senders": ["parent", "aunt_or_uncle"]}
+    )
+    entries = load_knowledge()
+
+    assert result.ready is False
+    assert result.rule_ids == [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
+    assert result.review_triggers == [
+        entries[CN_CDD_ENTRY]["statement"],
+        entries[CN_QUOTA_ENTRY]["statement"],
+        entries[CN_INSTITUTION_ENTRY]["statement"],
+        NO_SINGAPORE_PAGE,
+    ]
+    assert "Splitting a transfer across people is structuring." in result.review_triggers[0]
+
+
+def test_the_open_item_sentence_says_the_hsbc_entry_covers_other_countries_and_no_singapore_page_is_on_file():
+    assert "not Singapore" in NO_SINGAPORE_PAGE
+    assert "no sourced Singapore page" in NO_SINGAPORE_PAGE
+    assert CN_INSTITUTION_ENTRY in NO_SINGAPORE_PAGE
+
+
+def test_two_senders_are_more_than_one_persons_quota_even_without_the_flag():
+    result = FakeRouter().precheck("remit_from_china", "cn_bank_remit_sim", {"senders": ["parent", "parent"]})
+
+    assert result.ready is False
+
+
+def test_one_sender_keeps_the_ordinary_china_precheck():
+    plain = FakeRouter().precheck("remit_from_china", "cn_bank_remit_sim", {})
+    one = FakeRouter().precheck(
+        "remit_from_china", "cn_bank_remit_sim", {"multiple_people_quota": False, "senders": ["parent"]}
+    )
+
+    assert one == plain
+    assert plain.ready is None
+
+
+def test_the_precheck_tool_offers_the_fixed_sender_roles():
+    from core.agent import TOOLS
+
+    tool = next(tool for tool in TOOLS if tool["name"] == "precheck")
+    properties = tool["input_schema"]["properties"]
+    assert properties["senders"]["items"]["enum"] == list(SENDER_ROLES)
+    assert properties["multiple_people_quota"]["type"] == "boolean"
+
+
+AUNT = {"action_kind": "remit_from_china", "provider": "cn_bank_remit_sim", "multiple_people_quota": True, "senders": ["parent", "aunt_or_uncle"]}
+
+
+@pytest.mark.parametrize(
+    ("lang", "opening"),
+    [
+        ("en", "Lifeline will not use another person's quota for your costs."),
+        ("pt", "O Lifeline não vai usar a cota de outra pessoa para os seus custos."),
+        ("zh", "Lifeline 不会用其他人的额度来支付你的费用。"),
+    ],
+)
+def test_a_split_quota_writes_a_structuring_note_and_the_loop_refuses_in_the_students_language(lang, opening):
+    s = _setup([_call("precheck", AUNT), _say("")])
+
+    reply = s.loop.handle(USER, _user("Use my aunt's quota too", lang=lang))
+
+    assert _kinds(s.ledger) == ["proposal", "decision", "execution", "note"]
+    note = _notes(s, "structuring_refused")[0]
+    assert note["senders"] == ["parent", "aunt_or_uncle"]
+    assert note["entry_ids"] == [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
+    assert reply.text.startswith(opening)
+    assert "Splitting a transfer across people is structuring." in reply.text
+    assert CN_CDD_ENTRY in reply.text and CN_INSTITUTION_ENTRY in reply.text and CN_QUOTA_ENTRY in reply.text
+    assert NO_SINGAPORE_PAGE in reply.text
+    assert not any(e.kind == "proposal" and e.payload["action"]["type"] == "transfer" for e in s.ledger.entries())
+
+
+@pytest.mark.parametrize(
+    ("given", "roles"),
+    [
+        (["Mum", "Aunt Li Mei"], ["parent", "other"]),
+        (["mother", "aunt"], ["parent", "aunt_or_uncle"]),
+        ("Zhang Wei", ["other"]),
+        (["friend", "Chen Jing"], ["friend", "other"]),
+    ],
+)
+def test_senders_are_written_as_roles_and_never_as_names(given, roles):
+    s = _setup([_call("precheck", {**AUNT, "senders": given, "multiple_people_quota": "yes"}), _say("")])
+
+    s.loop.handle(USER, _user("use their quota"))
+
+    ledger = _ledger_text(s)
+    for name in ("Li Mei", "Zhang Wei", "Chen Jing", "Mum"):
+        assert name not in ledger
+    proposal = next(e for e in s.ledger.entries() if e.kind == "proposal")
+    assert proposal.payload["arguments"]["senders"] == roles
+    assert proposal.payload["arguments"]["multiple_people_quota"] is True
+
+
+def test_a_string_flag_is_read_as_a_flag():
+    s = _setup([_call("precheck", {**AUNT, "senders": ["parent"], "multiple_people_quota": "true"}), _say("")])
+
+    s.loop.handle(USER, _user("use my aunt's quota"))
+
+    assert _notes(s, "structuring_refused")

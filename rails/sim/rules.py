@@ -21,6 +21,12 @@ CN_INSTITUTION_ENTRY = "cn_edu_remit_002"
 CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
+# Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
+NO_SINGAPORE_PAGE = (
+    "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
+    "UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file "
+    f"for it. Source: {CN_INSTITUTION_ENTRY}."
+)
 WISE_DOCS_ENTRY = "wise_docs_channel_001"
 WISE_SCAM_ENTRY = "wise_docs_impersonation_002"
 # The kinds of channel a provider's request for documents can name, never the address itself.
@@ -130,3 +136,14 @@ def document_request(provider: str, channel: str | None) -> tuple[bool | None, l
         return True, [entry(WISE_DOCS_ENTRY)["statement"]], [WISE_DOCS_ENTRY]
     ids = [WISE_DOCS_ENTRY, WISE_SCAM_ENTRY]
     return False, [entry(entry_id)["statement"] for entry_id in ids], ids
+
+
+def several_quotas(user_context: dict[str, Any]) -> bool:
+    """Whether a plan uses more than one person's quota for one student: said so, or more than one sender."""
+    return user_context.get("multiple_people_quota") is True or len(user_context.get("senders") or []) > 1
+
+
+def structuring_refusal() -> tuple[list[str], list[str]]:
+    """Why splitting across people is refused, and the documented route above the quota, by its entries."""
+    ids = [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
+    return [*(entry(entry_id)["statement"] for entry_id in ids), NO_SINGAPORE_PAGE], ids

@@ -18,6 +18,8 @@ from rails.sim.rules import (
     document_request,
     entry,
     no_duration,
+    several_quotas,
+    structuring_refusal,
     upi_refusals,
 )
 
@@ -144,6 +146,18 @@ class FakeRouter(Router):
     def precheck(
         self, action_kind: str, provider: str, user_context: dict[str, Any]
     ) -> PrecheckResult:
+        if action_kind == "remit_from_china" and several_quotas(user_context):
+            # Splitting one student's costs across several people's quotas is structuring; the
+            # documented route above the quota is offered instead, with what it does not cover.
+            triggers, rule_ids = structuring_refusal()
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=False,
+                rule_ids=rule_ids,
+            )
         if action_kind == "remit_from_china":
             # What the entries say the Chinese side will ask for when funding the student, and the
             # Chinese side's quota and identity rules. Nothing else, and no date.
