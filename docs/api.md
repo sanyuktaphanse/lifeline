@@ -847,6 +847,65 @@ Response `200`:
   ]
 }
 ```
+
+For the overseas cash withdrawal cap on Chinese cards, `action_kind` `overseas_cash` reads the student's Chinese cards from the fixture, never from the request, and the caps and the consequence from `cn_atm_cap_005`. The annual cap counts every card together, so each card reports the same year's remainder. `ready` is false when the year's remainder is at or below one card's daily cap; with no cards on file it is null and the one trigger says Lifeline has no record. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
+```
+
+Response `200` with the demo fixture:
+
+```json
+{
+  "provider": "chinese_bank_cards",
+  "action_kind": "overseas_cash",
+  "documents_likely": [],
+  "review_triggers": [
+    "Card icbc:card_03: 5,500 CNY left this calendar year across all Chinese cards, and 5,500 CNY left today. Source: cn_atm_cap_005.",
+    "Card boc:card_04: 5,500 CNY left this calendar year across all Chinese cards, and 5,500 CNY left today. Source: cn_atm_cap_005.",
+    "Exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year."
+  ],
+  "ready": false,
+  "rule_ids": [
+    "cn_atm_cap_005"
+  ]
+}
+```
+
+For a foreign student arriving in China, `action_kind` `arrive_in_china` returns the foreign card wallet limits from `cn_wallet_foreign_006`, the Wise route into China from `cn_wise_in_007` quoted whole with the sentence that it is not this student's route, and that no entry covers cash on a foreign card in China. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "arrive_in_china", "provider": "alipay"}
+```
+
+Response `200`:
+
+```json
+{
+  "provider": "alipay",
+  "action_kind": "arrive_in_china",
+  "documents_likely": [],
+  "review_triggers": [
+    "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars, raised from 1,000 and 10,000 US dollars. The People's Bank announced the change on 1 March 2024.",
+    "Wise sends CNY into China to Alipay, WeChat, and UnionPay for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay.",
+    "That route is for recipients with a Chinese national ID, so it is not this student's route. Source: cn_wise_in_007.",
+    "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
+  ],
+  "ready": null,
+  "rule_ids": [
+    "cn_wallet_foreign_006",
+    "cn_wise_in_007"
+  ]
+}
+```
+
+`document_request` and the structuring check of `remit_from_china` need a channel and the senders, which `PrecheckRequest` does not carry, so over this endpoint a Wise document request is always flagged as not ready and `remit_from_china` gives its ordinary answer. In chat the model passes them, and the loop writes them as fixed kinds and roles. A quote on `SG>CN` returns one Wise route whose `rule_id` is `cn_wise_in_007`, which lane C can show as the inbound route; the demo mandate does not allow the corridor, so a transfer on it is refused under R05.
+
+### Ledger notes from Stage 8
+
+`GET /ledger/{user_id}` can now hold four more note kinds: `redaction`, with `classes`, when a reply was cleaned of a card number, a confirmation token or a secret; `document_request_flagged`, with `claimed_provider`, `channel` and `entry_ids`; `structuring_refused`, with `senders` by role and `entry_ids`; and `cash_cap_warning`, with `remaining_year`, `per_card_daily_cap` and `entry_id`. A plan update is a `proposal`, a `decision` at T1 and an `execution` whose `result.plan_updated` holds the fields changed.
+
 ## Standing mandates
 
 A standing mandate is a recurring transfer the student confirms once, such as monthly rent. It is set up through `/chat` and `/confirm` like any T2 action, with the warning key `warn.standing.new`. Its runs happen on their own:
