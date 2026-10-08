@@ -19,7 +19,7 @@
   date_checked: 2026-09-15
   checked_by: "S"
   second_check_by: ""
-  used_by: [T36, T31]
+  used_by: [T36, T31, X28]
 - id: cn_edu_docs_003
   statement: "The documents required are the admission letter or student card, the student's resident ID, the passport and visa for the destination, relationship proof such as the household registration or birth certificate, and payment proof matching the amount. Originals or scans of originals are accepted."
   country: CN
@@ -53,7 +53,12 @@
   date_checked: 2026-09-15
   checked_by: "S"
   second_check_by: ""
-  used_by: [T37]
+  used_by: [T37, precheck.overseas_cash]
+  values:
+    annual_cap: 100000
+    per_card_daily_cap: 10000
+    currency: CNY
+    consequence: "Exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year."
 - id: cn_wallet_foreign_006
   statement: "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars, raised from 1,000 and 10,000 US dollars. The People's Bank announced the change on 1 March 2024."
   country: CN
@@ -64,7 +69,11 @@
   date_checked: 2026-09-15
   checked_by: "S"
   second_check_by: ""
-  used_by: [T38]
+  used_by: [T38, precheck.arrive_in_china]
+  values:
+    single_transaction_limit: 5000
+    annual_limit: 50000
+    currency: USD
 - id: cn_wise_in_007
   statement: "Wise sends CNY into China to Alipay, WeChat, and UnionPay for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay."
   country: CN
@@ -75,7 +84,12 @@
   date_checked: 2026-09-15
   checked_by: "S"
   second_check_by: ""
-  used_by: [T36]
+  used_by: [T36, T38, precheck.arrive_in_china, router.SG>CN]
+  values:
+    alipay_per_transfer: 50000
+    unionpay_per_transfer: 33000
+    currency: CNY
+    recipient_condition: "a Chinese national ID"
 - id: cn_wise_out_008
   statement: "Wise sends money out of China only for foreigners with a Chinese tax record, up to 100,000 yuan per transfer, with an annual total tied to post tax income. Alipay does not let non mainland users send money abroad."
   country: CN

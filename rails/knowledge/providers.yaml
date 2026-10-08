@@ -1,0 +1,27 @@
+- id: wise_docs_channel_001
+  statement: "Wise's help article on verifying an address says Wise will ask the customer to upload a high-quality photo or scan of a document, and that the customer can check their verification status at any time by going to the Verification tab in their account settings."
+  country: "all"
+  rail: wise
+  kind: documents
+  source_url: "https://wise.com/help/articles/2949804"
+  source_type: operator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [X27, precheck.document_request]
+  values:
+    provider: Wise
+    collects_through: [upload, Verification tab]
+  note: "Claude Code opened the page on 8 October 2026. The article is titled How do I verify my address?, so the upload sentence is about address verification; it is the only page on file for how Wise collects documents."
+- id: wise_docs_impersonation_002
+  statement: "Wise says it will never send clickable links asking you to make payments or provide personal information, and will never pressure you to act immediately. Wise says to contact Wise directly through official channels using the Wise website or app, and that if a message claims to be from Wise and includes any of the things Wise will never do, it is likely a scam."
+  country: "all"
+  rail: wise
+  kind: rule
+  source_url: "https://wise.com/sg/blog/impersonation-scams"
+  source_type: operator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [X27, precheck.document_request]
+  note: "Claude Code opened the page on 8 October 2026. It is the Singapore blog post Impersonation scams explained, dated 3 February 2026 on the page. The page lists asking for a password and asking for login details over a phone call among the things Wise will never do; the statement keeps only the sentences about links, pressure and checking a request."

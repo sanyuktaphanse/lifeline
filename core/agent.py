@@ -2,6 +2,7 @@ import functools
 import hashlib
 import hmac
 import json
+import os
 import re
 import unicodedata
 from collections.abc import Callable
@@ -27,6 +28,7 @@ from contracts.schemas import (
     FreezeStatus,
     Mandate,
     Message,
+    PLAN_UPDATE_FIELDS,
     Plan,
     Receipt,
     ReceiptStatus,
@@ -46,12 +48,26 @@ from contracts.schemas import (
 )
 from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
+from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
+from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
+from rails.sim.rules import (
+    ATM_CAP_ENTRY,
+    CN_CDD_ENTRY,
+    CN_INSTITUTION_ENTRY,
+    CN_QUOTA_ENTRY,
+    DOCUMENT_CHANNELS,
+    NO_SINGAPORE_PAGE,
+    WISE_DOCS_ENTRY,
+    arrival_facts,
+    cash_cap_status,
+    is_wise,
+)
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -86,6 +102,26 @@ MAX_HISTORY_MESSAGES = 20
 # anchored after every T2 execution, and at least once in each hour of activity after the last anchor.
 ANCHOR_INTERVAL = timedelta(hours=1)
 ANCHOR_KIND = "anchor"
+
+# Source: docs/decisions.md, 8 October 2026. What the reply guard puts in place of a credential.
+REDACTION_MARKER = "[redacted]"
+# Source: .env.example. The secrets the engine, the anchor and the model adapter read from the
+# environment; their values, and the development fallbacks used when they are unset, never reach a reply.
+SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY")
+DEVELOPMENT_SECRETS = (DEVELOPMENT_CONFIRM_SECRET, DEVELOPMENT_ANCHOR_SECRET)
+# Source: this module. A secret shorter than this is not looked for, so an empty or one letter value
+# cannot blank out ordinary words.
+MIN_SECRET_CHARS = 8
+# A card number: thirteen or more digits, any of them fullwidth, with an optional space, no break
+# space, hyphen or invisible character between two digits, and no ASCII letter, digit or underscore
+# touching either end, so ids such as wise:card_01 and hashes are left alone.
+# The attacker brief of 8 October widened it to up to three separators between two digits: any space,
+# a newline, a dot, any hyphen or dash, fullwidth ones included, and any invisible character.
+CARD_SEPARATOR = r"[\s.\-\u00ad\u2010-\u2015\u2212\uff0d\uff0e\u200b-\u200f\u2060-\u2064\ufeff]{0,3}"
+# A run of hexadecimal digits this long that is part of an issued token is redacted, so a token cut in
+# two still never shows. Source: the attacker brief of 8 October. Tokens are 64 hexadecimal digits.
+TOKEN_PIECE = re.compile(r"[0-9a-fA-F]{16,}")
+CARD_NUMBER = re.compile(rf"(?<![\dA-Za-z_])\d(?:{CARD_SEPARATOR}\d){{12,}}(?![\dA-Za-z_])")
 
 HAN = re.compile(r"[一-鿿]")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_](?:[A-Za-z0-9_.@-]*[A-Za-z0-9_])?")
@@ -122,6 +158,39 @@ ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
 ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
+# The channel kinds a document request can name. Source: DOCUMENT_CHANNELS in rails/sim/rules.py.
+PRECHECK_CHANNELS = DOCUMENT_CHANNELS
+# What a provider becomes when the model gives an address in its place, so no address is written.
+UNKNOWN_PROVIDER = "unknown"
+# The only precheck arguments the ledger may hold; any other key is dropped before the proposal.
+PRECHECK_KEYS = ("action_kind", "provider", "channel", "multiple_people_quota", "senders")
+# The precheck kinds the router answers; any other is written as unknown, so no free text is kept.
+PRECHECK_KINDS = ("enable_pix", "remit_from_china", "document_request", "overseas_cash", "arrive_in_china")
+# A provider is kept only as a plain lower case identifier, such as nubank or cn_bank_remit_sim; a
+# domain, a phone number or a name with spaces becomes unknown.
+PLAIN_PROVIDER = re.compile(r"[a-z][a-z0-9_]{0,39}")
+# The people whose quota a plan may name, by role and never by name. Source: docs/decisions.md, 8 October 2026.
+SENDER_ROLES = ("self", "parent", "grandparent", "aunt_or_uncle", "sibling", "cousin", "friend", "other_relative", "other")
+# Common words for a role, read as that role; any other word, a name included, is read as other.
+ROLE_WORDS: dict[str, list[str]] = {
+    "mother": ["parent"], "father": ["parent"], "mum": ["parent"], "mom": ["parent"], "dad": ["parent"],
+    "parents": ["parent", "parent"], "grandparents": ["grandparent", "grandparent"],
+    "aunt": ["aunt_or_uncle"], "uncle": ["aunt_or_uncle"], "grandmother": ["grandparent"],
+    "grandfather": ["grandparent"], "brother": ["sibling"], "sister": ["sibling"], "me": ["self"],
+    "myself": ["self"], "父母": ["parent", "parent"], "妈妈": ["parent"], "母亲": ["parent"], "爸爸": ["parent"],
+    "父亲": ["parent"], "阿姨": ["aunt_or_uncle"], "姑姑": ["aunt_or_uncle"], "舅舅": ["aunt_or_uncle"],
+    "叔叔": ["aunt_or_uncle"], "朋友": ["friend"],
+}
+# Words read as a yes for the flag, in the three languages. Source: the attacker brief of 8 October.
+TRUE_WORDS = frozenset({"true", "yes", "y", "on", "1", "sim", "是", "对"})
+# How a list of senders written as one string is split.
+SENDER_SPLIT = re.compile(r"\s*(?:,|;|/|、|，|和|&|\band\b|\be\b)\s*")
+# The note a restart writes for a plan update the plan given on start can no longer hold.
+PLAN_UPDATE_SKIPPED = "plan_update_skipped"
+# What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
+CASH_CAP_ARGUMENTS = {"action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
+# What a precheck's user context carries beside the student, from the tool's arguments.
+PRECHECK_CONTEXT = ("provider", "channel", "multiple_people_quota", "senders")
 
 
 def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -170,8 +239,18 @@ TOOLS = [
     _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
     _tool(
         "precheck",
-        "List what a provider is likely to ask for before an action such as enable_pix.",
-        {"action_kind": TEXT, "provider": TEXT},
+        "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "
+        "For a message that asks for documents, use action_kind document_request with the provider the "
+        "message claims to be from and the kind of channel it asks the documents to be sent through, "
+        "never the address itself. For remit_from_china, set multiple_people_quota when more than one "
+        "person's quota would be used for the student's costs, and list the senders by role, never by name.",
+        {
+            "action_kind": TEXT,
+            "provider": TEXT,
+            "channel": {"type": "string", "enum": list(PRECHECK_CHANNELS)},
+            "multiple_people_quota": {"type": "boolean"},
+            "senders": {"type": "array", "items": {"type": "string", "enum": list(SENDER_ROLES)}},
+        },
         ["action_kind", "provider"],
     ),
     _tool(
@@ -190,6 +269,32 @@ TOOLS = [
         "change_limit",
         "Ask to change a limit. Limits change only in settings, never in chat.",
         {"limit": TEXT, "amount": TEXT},
+        [],
+    ),
+    _tool(
+        "cash_cap_status",
+        "Report what is left of the overseas cash withdrawal cap on the student's Chinese bank cards, this "
+        "calendar year and today, from the cards on file.",
+        {},
+        [],
+    ),
+    _tool(
+        "update_plan",
+        "Change the student's resilience plan. Only the backup card, written issuer:card and one of the "
+        "plan's own cards, the backup route, whether a phone wallet holds the card, and the cash plan, a "
+        "list of knowledge entry ids, can change; nothing else in the plan ever changes in chat.",
+        {
+            "backup_instrument": TEXT,
+            "backup_route": TEXT,
+            "wallet_token_present": {"type": "boolean"},
+            "cash_plan": {"type": "array", "items": TEXT},
+        },
+        [],
+    ),
+    _tool(
+        "export_credentials",
+        "Reveals stored credentials, such as card numbers, card tokens, or recovery codes.",
+        {"what": TEXT},
         [],
     ),
     _tool(
@@ -214,6 +319,9 @@ TOOL_ACTIONS = {
     "cancel_standing_run": ActionType.CANCEL_STANDING_RUN,
     "deactivate_standing_mandate": ActionType.DEACTIVATE_STANDING_MANDATE,
     "verify_ledger": ActionType.VERIFY_LEDGER,
+    "export_credentials": ActionType.EXPORT_CREDENTIALS,
+    "cash_cap_status": ActionType.PRECHECK,
+    "update_plan": ActionType.UPDATE_PLAN,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -236,6 +344,13 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
+        "plan_updated": "Your plan now has: {fields}.",
+        "plan_update_skipped": "After a restart Lifeline could not apply an earlier change to your plan's {fields}, because your plan no longer allows it, so that part of your plan stays as it was.",
+        "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} {currency} a day and your cards together may still withdraw {today} {currency} today, so you can reach the cap. {consequence} Source: {entry_id}.",
+        "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
+        "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
+        "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
@@ -271,7 +386,7 @@ TEXTS = {
         "money_skipped": "Lifeline sent no emergency money.",
         "cash_intro": "Ways to get cash:",
         "cash_none": "Lifeline has no sourced cash pickup option on file.",
-        "cash_missing": "Lifeline has no sourced option on file for {ids}.",
+        "cash_missing": "Lifeline has no sourced option on file for {count} more items of your cash plan.",
         "contact": "Message for {person} on {channel}: I lost my card and need help getting cash. Please call me as soon as you can.",
         "replacement_link": "Order a replacement card in the issuer's app: {link}",
         "replacement_no_link": "Lifeline has no sourced link to the issuer's app. Order a replacement card in the issuer's app.",
@@ -307,6 +422,13 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
+        "plan_updated": "Seu plano agora tem: {fields}.",
+        "plan_update_skipped": "Depois de um reinício o Lifeline não conseguiu aplicar uma mudança anterior em {fields} do seu plano, porque o seu plano não permite mais, então essa parte do plano ficou como estava.",
+        "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} {currency} por dia e seus cartões juntos ainda podem sacar {today} {currency} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
+        "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
+        "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
@@ -342,7 +464,7 @@ TEXTS = {
         "money_skipped": "O Lifeline não enviou dinheiro de emergência.",
         "cash_intro": "Formas de conseguir dinheiro em espécie:",
         "cash_none": "O Lifeline não tem nenhuma opção de saque com fonte registrada.",
-        "cash_missing": "O Lifeline não tem nenhuma opção com fonte registrada para {ids}.",
+        "cash_missing": "O Lifeline não tem nenhuma opção com fonte registrada para mais {count} itens do seu plano de dinheiro.",
         "contact": "Mensagem para {person} pelo {channel}: perdi meu cartão e preciso de ajuda para conseguir dinheiro. Por favor me ligue assim que puder.",
         "replacement_link": "Peça um cartão novo no app do emissor: {link}",
         "replacement_no_link": "O Lifeline não tem um link com fonte para o app do emissor. Peça um cartão novo no app do emissor.",
@@ -378,6 +500,13 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
+        "plan_updated": "你的计划现在为：{fields}。",
+        "plan_update_skipped": "重启后，Lifeline 无法应用之前对你计划中 {fields} 的修改，因为你的计划已不再允许，所以这部分计划保持不变。",
+        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计）。单张卡每天可取 {daily} {currency}，你的卡今天合计还能取 {today} {currency}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
+        "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
+        "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
@@ -413,7 +542,7 @@ TEXTS = {
         "money_skipped": "Lifeline 没有发送紧急资金。",
         "cash_intro": "获取现金的方式：",
         "cash_none": "Lifeline 没有记录任何有来源的现金提取方式。",
-        "cash_missing": "Lifeline 没有记录 {ids} 的有来源方式。",
+        "cash_missing": "你的现金计划中还有 {count} 项，Lifeline 没有记录有来源的方式。",
         "contact": "发给 {person}（{channel}）的消息：我的卡丢了，需要帮助获取现金。请尽快给我打电话。",
         "replacement_link": "请在发卡机构的应用中申请补办新卡：{link}",
         "replacement_no_link": "Lifeline 没有发卡机构应用的有来源链接。请在发卡机构的应用中申请补办新卡。",
@@ -479,11 +608,14 @@ def _amounts_in(text: str) -> set[Decimal]:
 class _Details:
     payee_ids: dict[str, Source] = field(default_factory=dict)
     amounts: dict[Decimal, Source] = field(default_factory=dict)
+    # Each text as the provenance check reads it, so a plan update's values can be traced to it.
+    texts: list[tuple[str, Source]] = field(default_factory=list)
 
     def add(self, text: str, source: Source) -> None:
         # Read as the proposed payee is read, so an invisible or fullwidth character cannot hide a
         # detail on one side of the comparison only.
         text = _visible(text)
+        self.texts.append((text.casefold(), source))
         for token in IDENTIFIER.findall(text):
             self.payee_ids.setdefault(token.casefold(), source)
         # An amount may be grouped with a space or an apostrophe, such as 1 400 or 1'400, so both the
@@ -540,6 +672,8 @@ class _Trail:
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+    # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
+    notices: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -707,6 +841,112 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 
 
+def _canonical_channel(value: Any) -> str:
+    """A channel as one of the fixed kinds. An address becomes its kind and anything else is other."""
+    text = _visible(str(value)).strip().casefold()
+    kind = re.sub(r"[\s\-]+", "_", text)
+    if kind in PRECHECK_CHANNELS:
+        return kind
+    if "@" in text:
+        return "email"
+    if re.search(r"https?://|www\.", text):
+        return "link"
+    return "other"
+
+
+def _canonical_provider(value: Any) -> str:
+    text = _visible(str(value)).strip()
+    if is_wise(text):
+        return "wise"
+    key = text.casefold()
+    return key if PLAIN_PROVIDER.fullmatch(key) else UNKNOWN_PROVIDER
+
+
+def _canonical_kind(value: Any) -> str:
+    kind = re.sub(r"[\s\-]+", "_", _visible(str(value)).strip().casefold())
+    return kind if kind in PRECHECK_KINDS else UNKNOWN_PROVIDER
+
+
+def _plan_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value) or "none"
+    return "none" if value is None else str(value)
+
+
+def _plan_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
+    """An update_plan call's arguments as the ledger may hold them: a field outside the four keeps its
+    name, so the engine sees and refuses it, and loses its value, so no answer or payee is written."""
+    return {name: value if name in PLAN_UPDATE_FIELDS else REDACTION_MARKER for name, value in arguments.items()}
+
+
+def _canonical_roles(value: Any) -> list[str]:
+    """One sender as one or more roles: a plural such as parents counts as two people."""
+    word = re.sub(r"[\s\-]+", "_", _visible(str(value)).strip().casefold())
+    if word in SENDER_ROLES:
+        return [word]
+    return list(ROLE_WORDS.get(word, ["other"]))
+
+
+def _sender_items(value: Any) -> list[Any]:
+    """Senders as a list, whether given as a list, a mapping, a JSON array in a string, or words in a string."""
+    if isinstance(value, list):
+        return value
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, list):
+            return parsed
+        return [part for part in SENDER_SPLIT.split(value.strip()) if part]
+    return [value]
+
+
+def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
+    """A precheck's arguments as the ledger may hold them: kinds and roles, never an address or a name.
+
+    Source: docs/decisions.md, 8 October 2026. They are rewritten before the proposal is written.
+    """
+    canonical = {name: arguments[name] for name in PRECHECK_KEYS if name in arguments}
+    if "action_kind" in canonical:
+        canonical["action_kind"] = _canonical_kind(canonical["action_kind"])
+    if "provider" in canonical:
+        canonical["provider"] = _canonical_provider(canonical["provider"])
+    if canonical.get("channel") not in (None, ""):
+        canonical["channel"] = _canonical_channel(canonical["channel"])
+    if "senders" in canonical:
+        senders = canonical["senders"]
+        canonical["senders"] = [role for sender in _sender_items(senders) for role in _canonical_roles(sender)]
+    if "multiple_people_quota" in canonical:
+        flag = canonical["multiple_people_quota"]
+        canonical["multiple_people_quota"] = flag is True or str(flag).strip().casefold() in TRUE_WORDS
+    return canonical
+
+
+def _untrusted_plan_update(trail: _Trail, action: Action) -> dict[str, Source]:
+    """The plan fields whose values first appear in data, never in the student's own words.
+
+    Source: the attacker brief of 8 October. A paste that tells the model to change the backup or the
+    cash plan must reach the engine as data, so it refuses the update under R01.
+    """
+    untrusted: dict[str, Source] = {}
+    for name, value in (action.plan_update or {}).items():
+        for item in value if isinstance(value, list) else [value]:
+            if not isinstance(item, str) or not _skeleton(item):
+                continue
+            wanted = _skeleton(item)
+            if any(wanted in text for text, _ in trail.from_user.texts):
+                continue
+            source = next((source for text, source in trail.from_data.texts if wanted in text), None)
+            if source is not None:
+                untrusted[name] = source
+    return untrusted
+
+
 def _anchored[**P, R](
     method: Callable[Concatenate["AgentLoop", str, P], R],
 ) -> Callable[Concatenate["AgentLoop", str, P], R]:
@@ -729,6 +969,8 @@ def _entry_view(entry: LedgerEntry) -> dict[str, Any]:
         view["action"] = payload["action"].get("type")
     if entry.kind == "note" and payload.get("kind"):
         view["note"] = payload["kind"]
+    if entry.kind == "note" and payload.get("kind") == PLAN_UPDATE_SKIPPED:
+        view["fields"] = payload.get("fields")
     if entry.kind == "receipt":
         receipt = payload.get("receipt", {})
         view["receipt"] = {name: receipt.get(name) for name in ("receipt_id", "rail", "amount", "currency", "status")}
@@ -752,8 +994,12 @@ class AgentLoop:
         inbound_receipts: dict[str, dict[str, str]] | None = None,
         anchor: Anchor | None = None,
         clock: Callable[[], datetime] = _now,
+        chinese_cards: dict[str, list[dict[str, Any]]] | None = None,
     ) -> None:
         self._adapter = adapter
+        # A fixture per student: their Chinese bank cards and the yuan withdrawn overseas on each. The
+        # cash cap reads only this, never cards a model names.
+        self._chinese_cards = {user_id: list(cards) for user_id, cards in (chinese_cards or {}).items()}
         # Where the ledger head is anchored, or nothing, and the clock that times the hourly anchor.
         self._anchor = anchor
         self._clock = clock
@@ -878,14 +1124,20 @@ class AgentLoop:
         for _ in range(MAX_MODEL_CALLS_PER_TURN):
             answer = self._adapter.complete(messages, TOOLS)
             trail.provider, trail.model = answer.provider, answer.model
-            turn_messages.append(_remembered(answer))
             if not answer.tool_calls:
-                return self._finish(trail, turn_messages, self._reply(trail, lang, answer.text, decision=decision))
+                reply = self._reply(trail, lang, " ".join(filter(None, [answer.text, *trail.notices])), decision=decision)
+                turn_messages.append(_remembered(answer.model_copy(update={"text": reply.text})))
+                return self._finish(trail, turn_messages, reply)
+            turn_messages.append(_remembered(answer))
             messages.append(answer)
             for index, call in enumerate(answer.tool_calls):
                 calls += 1
                 outcome = self._run_tool(user_id, mandate, lang, trail, call, calls)
                 if isinstance(outcome, AgentReply):
+                    if trail.notices:
+                        # The reply was guarded when it was built, so the sentences joined to it are guarded too.
+                        notices = self._guarded(trail, " ".join(trail.notices))
+                        outcome = outcome.model_copy(update={"text": " ".join([outcome.text, notices])})
                     turn_messages += _closing_results(answer.tool_calls[index:], outcome)
                     turn_messages.append(Message(role=Role.ASSISTANT, text=outcome.text, lang=lang))
                     return self._finish(trail, turn_messages, outcome)
@@ -923,6 +1175,12 @@ class AgentLoop:
         action_type = TOOL_ACTIONS.get(call.name)
         if action_type is None:
             return None, {"error": f"Unknown tool {call.name}."}
+        if call.name == "cash_cap_status":
+            call = call.model_copy(update={"arguments": dict(CASH_CAP_ARGUMENTS)})
+        if action_type is ActionType.UPDATE_PLAN:
+            call = call.model_copy(update={"arguments": _plan_arguments(call.arguments)})
+        if action_type is ActionType.PRECHECK:
+            call = call.model_copy(update={"arguments": _canonical_precheck(call.arguments)})
         missing = [
             name for name in REQUIRED_ARGUMENTS.get(call.name, ()) if call.arguments.get(name) in (None, "")
         ]
@@ -930,6 +1188,8 @@ class AgentLoop:
             return None, {"error": f"{call.name} needs {', '.join(missing)}."}
         key = f"{user_id}:t{trail.turn}:{call.name}:{number}"
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
+        if action_type is ActionType.UPDATE_PLAN:
+            fields = {"plan_update": dict(call.arguments)}
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -945,7 +1205,10 @@ class AgentLoop:
             fields = [".".join(str(part) for part in item["loc"]) for item in error.errors()]
             return None, {"error": f"Invalid arguments for {call.name}.", "fields": fields}
         checked = action.type in (ActionType.TRANSFER, ActionType.ADD_PAYEE, ActionType.CREATE_STANDING_MANDATE)
-        untrusted = _untrusted_fields(trail, action) if checked else {}
+        if action.type is ActionType.UPDATE_PLAN:
+            untrusted = _untrusted_plan_update(trail, action)
+        else:
+            untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
@@ -963,7 +1226,9 @@ class AgentLoop:
                 },
             )
         if decision.tier is Tier.T3:
-            return self._reply(trail, lang, _text(lang, "settings"), decision=decision)
+            name = "credentials" if action.type is ActionType.EXPORT_CREDENTIALS else "settings"
+            text = _text(lang, name, reasons=" ".join(decision.reasons))
+            return self._reply(trail, lang, text, decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
         if action.type is ActionType.TRANSFER:
@@ -975,6 +1240,15 @@ class AgentLoop:
         result = self._run_now(user_id, action, call.arguments, trail)
         self._history.setdefault(user_id, []).append(action)
         self._write(trail, "execution", {"action": _action_json(action), "result": result})
+        if action.type is ActionType.PRECHECK:
+            self._after_precheck(trail, lang, action, call.arguments, result)
+        if "plan_updated" in result:
+            fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
+            trail.notices.append(_text(lang, "plan_updated", fields=fields))
+        if action.type is ActionType.VERIFY_LEDGER:
+            skipped = self._skipped_fields(user_id)
+            if skipped:
+                trail.notices.append(_text(lang, PLAN_UPDATE_SKIPPED, fields=", ".join(skipped)))
         return decision, result
 
     def _run_now(
@@ -1018,15 +1292,148 @@ class AgentLoop:
             version = self._new_version(user_id, self._without_standing(user_id, standing.id))
             return {"deactivated": {"standing_mandate_id": standing.id, "new_mandate_id": version.id}}
         if action.type is ActionType.PRECHECK:
-            result = self._router.precheck(
-                str(arguments.get("action_kind", "")),
-                str(arguments.get("provider", "")),
-                {"user_id": user_id},
-            )
-            return {"precheck": result.model_dump(mode="json")}
+            context = {"user_id": user_id, **{name: arguments[name] for name in PRECHECK_CONTEXT if name in arguments}}
+            kind = str(arguments.get("action_kind", ""))
+            cards = self._chinese_cards.get(user_id, [])
+            if kind == CASH_CAP_ARGUMENTS["action_kind"]:
+                context["cards"] = cards
+                try:
+                    status = cash_cap_status(cards)
+                except ValueError as error:
+                    # A fixture that cannot be true is refused, never stated as fact.
+                    return {"error": str(error)}
+            result = self._router.precheck(kind, str(arguments.get("provider", "")), context)
+            outcome: dict[str, Any] = {"precheck": result.model_dump(mode="json")}
+            if kind == CASH_CAP_ARGUMENTS["action_kind"]:
+                outcome["cards"] = [
+                    {name: str(value) for name, value in card.items()} for card in status["cards"]
+                ]
+            return outcome
         if action.type is ActionType.VERIFY_LEDGER:
             return self._ledger_report(user_id, action.requested_at)
+        if action.type is ActionType.UPDATE_PLAN:
+            return self._update_plan(user_id, action)
         return {"error": f"No runner for {action.type.value}."}
+
+    def _skipped_fields(self, user_id: str) -> list[str]:
+        """Every plan field a restart could not apply for the student, from the ledger, once each."""
+        fields: list[str] = []
+        for entry in self._ledger.entries():
+            payload = entry.payload
+            if entry.kind == "note" and payload.get("kind") == PLAN_UPDATE_SKIPPED and payload.get("user_id") == user_id:
+                fields += [name for name in payload.get("fields", []) if name not in fields]
+        return fields
+
+    def _update_plan(self, user_id: str, action: Action) -> dict[str, Any]:
+        """Apply the fields the engine allowed to the plan, which must still validate: a backup must be one
+        of the plan's own cards and not the primary. Nothing changes when it does not."""
+        plan = self._plans.get(user_id)
+        if plan is None:
+            return {"error": f"No resilience plan for {user_id}, so nothing was changed."}
+        changes = dict(action.plan_update or {})
+        entries = load_knowledge()
+        cash_plan = changes.get("cash_plan")
+        if isinstance(cash_plan, list) and any(not isinstance(item, str) or item not in entries for item in cash_plan):
+            # The rescue reads the cash plan in a crisis, so it holds knowledge entry ids and nothing else.
+            return {"error": "The plan was not changed: every cash plan item must be a knowledge entry id."}
+        try:
+            updated = Plan.model_validate({**plan.model_dump(), **changes})
+        except ValidationError as error:
+            reasons = "; ".join(item["msg"] for item in error.errors())
+            return {"error": f"The plan was not changed: {reasons}"}
+        self._plans[user_id] = updated
+        return {"plan_updated": {name: getattr(updated, name) for name in changes}}
+
+    def _after_precheck(
+        self, trail: _Trail, lang: str, action: Action, arguments: dict[str, Any], result: dict[str, Any]
+    ) -> None:
+        """What a precheck's result makes the loop record and say, from the entries it cites."""
+        precheck = result.get("precheck", {})
+        kind = precheck.get("action_kind")
+        if kind == "arrive_in_china":
+            facts, ids = arrival_facts()
+            trail.notices.append(_text(lang, "arrival", facts=" ".join(facts), ids=", ".join(ids)))
+        if kind == CASH_CAP_ARGUMENTS["action_kind"] and "cards" in result:
+            status = cash_cap_status(self._chinese_cards.get(trail.user_id, []))
+            if not status["warn"]:
+                return
+            consequence = load_knowledge()[ATM_CAP_ENTRY]["values"]["consequence"]
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "cash_cap_warning",
+                    "idempotency_key": action.idempotency_key,
+                    "remaining_year": str(status["remaining_year"]),
+                    "per_card_daily_cap": str(status["per_card_daily_cap"]),
+                    "cards_today_total": str(status["cards_today_total"]),
+                    "entry_id": ATM_CAP_ENTRY,
+                },
+            )
+            trail.notices.append(
+                _text(
+                    lang,
+                    "cash_cap_warning",
+                    remaining=f"{status['remaining_year']:,}",
+                    daily=f"{status['per_card_daily_cap']:,}",
+                    today=f"{status['cards_today_total']:,}",
+                    currency=status["currency"],
+                    consequence=consequence,
+                    entry_id=ATM_CAP_ENTRY,
+                )
+            )
+        if kind == "remit_from_china" and precheck.get("ready") is False:
+            ids = list(precheck.get("rule_ids", []))
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "structuring_refused",
+                    "idempotency_key": action.idempotency_key,
+                    "senders": list(arguments.get("senders", [])),
+                    "entry_ids": ids,
+                },
+            )
+            # The one sentence of the due diligence entry that names the rule, and the documented route
+            # above the quota with what it does not cover, each read from its entry by id.
+            entries = load_knowledge()
+            statement = entries[CN_CDD_ENTRY]["statement"]
+            rule = next(sentence for sentence in re.split(r"(?<=\.) ", statement) if "structuring" in sentence)
+            trail.notices.append(
+                _text(
+                    lang,
+                    "structuring_refused",
+                    rule=rule,
+                    quota=entries[CN_QUOTA_ENTRY]["statement"],
+                    route=entries[CN_INSTITUTION_ENTRY]["statement"],
+                    caveat=NO_SINGAPORE_PAGE,
+                    ids=", ".join([CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]),
+                )
+            )
+        if kind == "document_request" and precheck.get("ready") is False:
+            ids = list(precheck.get("rule_ids", []))
+            entries = load_knowledge()
+            self._write(
+                trail,
+                "note",
+                {
+                    "kind": "document_request_flagged",
+                    "idempotency_key": action.idempotency_key,
+                    "claimed_provider": arguments.get("provider"),
+                    "channel": arguments.get("channel", "other"),
+                    "entry_ids": ids,
+                },
+            )
+            trail.notices.append(
+                _text(
+                    lang,
+                    "document_request_flagged",
+                    provider=entries[WISE_DOCS_ENTRY]["values"]["provider"],
+                    where=entries[ids[0]]["statement"],
+                    warning=" ".join(entries[entry_id]["statement"] for entry_id in ids[1:]),
+                    ids=", ".join(ids),
+                )
+            )
 
     def _propose(
         self,
@@ -1736,6 +2143,7 @@ class AgentLoop:
         receipt: Receipt | None = None,
         freeze: FreezeResult | None = None,
     ) -> AgentReply:
+        text = self._guarded(trail, text)
         return AgentReply(
             text=text,
             lang=lang,
@@ -1747,6 +2155,44 @@ class AgentLoop:
             provider=trail.provider,
             model=trail.model,
         )
+
+    def _issued_tokens(self) -> set[str]:
+        """Every confirmation token the loop has issued: waiting, used, or closed."""
+        return {*self._pending, *self._consumed, *self._closed}
+
+    @staticmethod
+    def _secret_values() -> set[str]:
+        values = {os.environ.get(name, "").strip() for name in SECRET_VARIABLES} | set(DEVELOPMENT_SECRETS)
+        return {value for value in values if len(value) >= MIN_SECRET_CHARS}
+
+    def _guarded(self, trail: _Trail, text: str) -> str:
+        """Text with every card number, issued token and secret value replaced by the marker.
+
+        A note of kind redaction records which classes were found, never a value. Source:
+        docs/decisions.md, 8 October 2026. Every reply passes here before it leaves the loop.
+        """
+        classes: list[str] = []
+        for name, values in (("confirmation_token", self._issued_tokens()), ("secret", self._secret_values())):
+            # Longest first, so a value that contains another is replaced whole.
+            for value in sorted(values, key=len, reverse=True):
+                text, count = re.subn(re.escape(value), REDACTION_MARKER, text, flags=re.IGNORECASE)
+                if count and name not in classes:
+                    classes.append(name)
+        tokens = [token.lower() for token in self._issued_tokens()]
+
+        def piece(match: re.Match[str]) -> str:
+            return REDACTION_MARKER if any(match.group().lower() in token for token in tokens) else match.group()
+
+        pieced = TOKEN_PIECE.sub(piece, text)
+        if pieced != text and "confirmation_token" not in classes:
+            classes.append("confirmation_token")
+        text = pieced
+        text, count = CARD_NUMBER.subn(REDACTION_MARKER, text)
+        if count:
+            classes.append("card_number")
+        if classes:
+            self._write(trail, "note", {"kind": "redaction", "classes": classes})
+        return text
 
     def _anchor_if_due(self, user_id: str) -> None:
         """Anchor the ledger head after a T2 execution, or when an hour has passed since the last anchor
@@ -1949,6 +2395,7 @@ class AgentLoop:
     ) -> RescueReply:
         # Rescue messages never join the conversation memory, so the identity answer never reaches a
         # model; the turn entry still records that the call happened.
+        text = self._guarded(trail, " ".join(out.texts))
         self._write(trail, "turn", {"messages": 0})
         after = self._machine.state(user_id)
         rescue = self._rescues.get(user_id)
@@ -1956,7 +2403,7 @@ class AgentLoop:
         plan = self._plans[user_id]
         freeze = rescue.freeze if rescue is not None else None
         return RescueReply(
-            text=" ".join(out.texts),
+            text=text,
             lang=lang,
             confirmation=out.confirmation,
             decision=out.decision,
@@ -2266,7 +2713,8 @@ class AgentLoop:
         else:
             out.say(_text(lang, "cash_none"))
         if found and missing:
-            out.say(_text(lang, "cash_missing", ids=", ".join(missing)))
+            # A missing id is counted, never printed, because a plan could hold any text.
+            out.say(_text(lang, "cash_missing", count=len(missing)))
         contact = plan.trusted_contact
         out.say(_text(lang, "contact", person=contact.name, channel=contact.channel))
         return "cash_listed"
@@ -2398,6 +2846,9 @@ class AgentLoop:
     def _rebuild_from_ledger(self) -> None:
         proposals: dict[str, dict[str, Any]] = {}
         waiting: dict[str, _Waiting] = {}
+        # Plan updates the plan given on start cannot hold, and the ones a restart already noted.
+        skipped: list[tuple[str, int, list[str]]] = []
+        noted: set[int] = set()
         for entry in self._ledger.entries():
             self._wrote(entry)
             if entry.kind == ANCHOR_KIND:
@@ -2469,12 +2920,39 @@ class AgentLoop:
                 if mandate is not None and deactivated["new_mandate_id"] not in self._versions:
                     update = self._without_standing(user_id, deactivated["standing_mandate_id"])
                     self._new_version(user_id, update, deactivated["new_mandate_id"])
+            if (
+                entry.kind == "execution"
+                and entry.payload["action"]["type"] == ActionType.UPDATE_PLAN.value
+                and "plan_updated" in entry.payload.get("result", {})
+                and user_id in self._plans
+            ):
+                plan = self._plans[user_id]
+                # Only the four fields, whatever the entry names, and an update the current plan can no
+                # longer hold, such as a backup card it no longer lists, is skipped, not fatal.
+                changes = {
+                    name: value
+                    for name, value in entry.payload["result"]["plan_updated"].items()
+                    if name in PLAN_UPDATE_FIELDS
+                }
+                try:
+                    self._plans[user_id] = Plan.model_validate({**plan.model_dump(), **changes})
+                except ValidationError:  # anti-pattern: SILENT-EXCEPT ok, the plan stays as given and a plan_update_skipped note says so
+                    skipped.append((user_id, entry.seq, list(changes)))
+            if entry.kind == "note" and entry.payload.get("kind") == PLAN_UPDATE_SKIPPED:
+                noted.add(int(entry.payload.get("execution_seq", 0)))
             if entry.kind == "execution" and entry.payload["action"]["type"] == ActionType.CANCEL_STANDING_RUN.value:
                 cancelled = entry.payload["result"]["cancelled"]
                 self._standing_cancelled.add((user_id, cancelled["standing_mandate_id"], cancelled["period"]))
             self._rebuild_rescue(user_id, entry, waiting)
         for waited in waiting.values():
             self._restore_pending(waited)
+        for user_id, seq, fields in skipped:
+            if seq in noted:
+                continue
+            # The student's ledger says which change was not applied, by field and never by value, once.
+            mandate = self._mandates.get(user_id)
+            trail = _Trail(user_id, self._turns.get(user_id, 0), mandate_id=mandate.id if mandate else None)
+            self._write(trail, "note", {"kind": PLAN_UPDATE_SKIPPED, "execution_seq": seq, "fields": fields})
 
     def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
         """Replay a rescue through the same transitions it took, so a restart lands in the same state."""

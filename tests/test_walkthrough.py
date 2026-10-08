@@ -68,3 +68,80 @@ def test_the_walkthrough_covers_the_simulated_rails():
         "rails/sim/cn_bank_remit.py",
         "rails/inbound.py",
     } <= files
+
+
+YAML_HEADING = re.compile(r"^#{2,4} .*`(?P<path>[\w/.]+\.yaml)`")
+
+
+def yaml_excerpts() -> list[tuple[str, int, str]]:
+    """Every YAML excerpt under a heading that names a YAML file, with the file and the line it starts on."""
+    found: list[tuple[str, int, str]] = []
+    current: str | None = None
+    block: list[str] | None = None
+    start = 0
+    for number, line in enumerate(WALKTHROUGH.read_text(encoding="utf-8").splitlines(), start=1):
+        if block is not None:
+            if line.startswith("```"):
+                if current is not None:
+                    found.append((current, start, "\n".join(block)))
+                block = None
+            else:
+                block.append(line)
+            continue
+        heading = YAML_HEADING.match(line)
+        if heading:
+            current = heading["path"]
+        elif line.startswith("#"):
+            current = None
+        elif line.startswith("```yaml"):
+            block, start = [], number
+    return found
+
+
+STAGE_8A_FILES = {
+    "tests/test_reply_guard.py",
+    "tests/test_precheck_china.py",
+    "tests/test_plan_update.py",
+    "tests/test_attack_one.py",
+    "tests/test_attack_two.py",
+}
+STAGE_8A_YAML = {
+    "rails/knowledge/providers.yaml",
+    "suites/scenarios/X10.yaml",
+    "suites/scenarios/X27.yaml",
+    "suites/scenarios/X28.yaml",
+    "suites/scenarios/T37.yaml",
+    "suites/scenarios/T38.yaml",
+}
+
+
+def test_the_walkthrough_covers_stage_8a():
+    files = {path for path, _, _ in excerpts()}
+    agent = [excerpt for path, _, excerpt in excerpts() if path == "core/agent.py"]
+
+    assert STAGE_8A_FILES <= files
+    assert STAGE_8A_YAML <= {path for path, _, _ in yaml_excerpts()}
+    for name in (
+        "def _guarded",
+        "CARD_NUMBER = ",
+        "def _canonical_precheck",
+        "def _sender_items",
+        "def _after_precheck",
+        "def _untrusted_plan_update",
+        "def _update_plan",
+        "def _skipped_fields",
+    ):
+        assert any(name in excerpt for excerpt in agent), name
+    text = WALKTHROUGH.read_text(encoding="utf-8")
+    for heading in ("The reply guard, `core/agent.py`", "The precheck argument mapping, `core/agent.py`", "Updating the plan, `core/agent.py`"):
+        assert f"### {heading}" in text, heading
+
+
+def test_every_yaml_excerpt_under_a_yaml_heading_is_copied_exactly():
+    stale = [
+        f"line {start}: {path}: {text.splitlines()[0]!r}"
+        for path, start, text in yaml_excerpts()
+        if text not in (ROOT / path).read_text(encoding="utf-8")
+    ]
+
+    assert stale == []

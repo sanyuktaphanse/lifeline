@@ -55,6 +55,7 @@ class ActionType(str, Enum):
     REROUTE_TO_BACKUP = "reroute_to_backup"
     NOTIFY_FAMILY = "notify_family"
     VERIFY_LEDGER = "verify_ledger"
+    UPDATE_PLAN = "update_plan"
 
 
 class RouteStatus(str, Enum):
@@ -120,6 +121,15 @@ class Action(BaseModel):
     standing_mandate_id: str | None = None
     standing_terms: StandingTerms | None = None
     confirmation_token: str | None = None
+    # The plan fields an update_plan action would change, by name. The engine refuses any name outside
+    # PLAN_UPDATE_FIELDS. Source: docs/decisions.md, 8 October 2026.
+    plan_update: dict[str, Any] | None = None
+
+
+# The only fields of the resilience plan that update_plan may change. The identity check, the
+# allowance and the emergency payee, corridor and purpose, and the trusted contact are never among
+# them. Source: docs/decisions.md, 8 October 2026.
+PLAN_UPDATE_FIELDS = ("backup_instrument", "backup_route", "wallet_token_present", "cash_plan")
 
 
 class StandingMandate(BaseModel):

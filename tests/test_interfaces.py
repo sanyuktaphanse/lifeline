@@ -102,7 +102,7 @@ def test_engine_and_check_wrapper_give_the_same_decision():
 
 
 # Pinned so that adding or retiering an action type is a change someone has to make here on purpose.
-# Source: docs/decisions.md, 18 September 2026 and 8 October 2026.
+# Source: docs/decisions.md, 18 September 2026 and 8 October 2026, the second record of which adds update_plan.
 FROZEN_ACTION_TIERS = {
     "transfer": "T2",
     "read_balance": "T0",
@@ -123,6 +123,7 @@ FROZEN_ACTION_TIERS = {
     "reroute_to_backup": "T1",
     "notify_family": "T1",
     "verify_ledger": "T0",
+    "update_plan": "T1",
 }
 
 
@@ -143,3 +144,10 @@ def test_route_and_trace_result_carry_the_pinned_fields():
         assert Route.model_fields[name].default is None
     assert TraceResult.model_fields["typical_duration_hours"].default is None
     assert not TraceResult.model_fields["typical_duration_hours"].is_required()
+
+
+def test_action_carries_an_optional_plan_update_and_the_plan_names_the_fields_it_may_change():
+    from contracts.schemas import PLAN_UPDATE_FIELDS, Action
+
+    assert Action.model_fields["plan_update"].default is None
+    assert PLAN_UPDATE_FIELDS == ("backup_instrument", "backup_route", "wallet_token_present", "cash_plan")

@@ -5,6 +5,8 @@ from typing import Any
 from contracts.interfaces import Router
 from contracts.schemas import PrecheckResult, Route, RouteStatus
 from rails.sim.rules import (
+    WISE_INBOUND_ENTRY,
+    arrival_facts,
     CN_CDD_ENTRY,
     CN_FUNDING_ENTRY,
     CN_QUOTA_ENTRY,
@@ -13,10 +15,14 @@ from rails.sim.rules import (
     TUITION,
     UPI_CAP_ENTRY,
     UPI_PURPOSE_ENTRY,
+    cash_cap_sentences,
     cn_documents,
     cn_purpose_refusals,
+    document_request,
     entry,
     no_duration,
+    several_quotas,
+    structuring_refusal,
     upi_refusals,
 )
 
@@ -36,6 +42,9 @@ CENT = Decimal("0.01")
 # allowance. Not a published Wise fee or arrival time.
 WISE_DOMESTIC_FEE = Decimal("0")
 WISE_DOMESTIC_HOURS = 1
+# Fixture: the Wise route from Singapore into China. Its rule is cn_wise_in_007; no entry gives its fee
+# or its arrival time, so both are this file's fixtures.
+WISE_SG_CN_HOURS = 24
 
 
 class FakeRouter(Router):
@@ -99,6 +108,24 @@ class FakeRouter(Router):
                     purpose=purpose,
                 )
             ]
+        if corridor == "SG>CN":
+            # The entry's limits are in yuan and the quote is in Singapore dollars, and no rate is sourced,
+            # so the route names its entry and the precheck states the limits.
+            return [
+                self._route(
+                    "wise",
+                    corridor,
+                    amount,
+                    "SGD",
+                    "CNY",
+                    quoted_at,
+                    fee=WISE_FEE,
+                    arrival_hours=WISE_SG_CN_HOURS,
+                    simulated=False,
+                    rule_id=WISE_INBOUND_ENTRY,
+                    purpose=purpose,
+                )
+            ]
         if corridor == "IN>SG":
             # The router knows no earlier transfer, so it checks the cap for this amount alone; the
             # rail checks the day's total when it pays.
@@ -143,6 +170,18 @@ class FakeRouter(Router):
     def precheck(
         self, action_kind: str, provider: str, user_context: dict[str, Any]
     ) -> PrecheckResult:
+        if action_kind == "remit_from_china" and several_quotas(user_context):
+            # Splitting one student's costs across several people's quotas is structuring; the
+            # documented route above the quota is offered instead, with what it does not cover.
+            triggers, rule_ids = structuring_refusal()
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=False,
+                rule_ids=rule_ids,
+            )
         if action_kind == "remit_from_china":
             # What the entries say the Chinese side will ask for when funding the student, and the
             # Chinese side's quota and identity rules. Nothing else, and no date.
@@ -157,6 +196,38 @@ class FakeRouter(Router):
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
+        if action_kind == "arrive_in_china":
+            triggers, rule_ids = arrival_facts()
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=None,
+                rule_ids=rule_ids,
+            )
+        if action_kind == "overseas_cash":
+            ready, triggers, rule_ids = cash_cap_sentences(list(user_context.get("cards") or []))
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=ready,
+                rule_ids=rule_ids,
+            )
+        if action_kind == "document_request":
+            ready, triggers, rule_ids = document_request(
+                str(user_context.get("provider", provider)), user_context.get("channel")
+            )
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=ready,
+                rule_ids=rule_ids,
             )
         if action_kind != "enable_pix":
             return PrecheckResult(

@@ -769,3 +769,77 @@ def test_without_sim_rails_the_demo_parents_transfer_is_not_seeded():
 
     assert "cn_bank_remit_sim" not in client.app.state.loop._rails
     assert client.post("/trace", json={"user_id": USER, "receipt_id": "cn_bank_remit_sim-in-0001"}).status_code == 404
+
+
+def test_chat_reads_the_demo_fixtures_chinese_cards_for_the_cash_cap():
+    client = _client([_call("cash_cap_status", {}), Message(role=Role.ASSISTANT, text="", provider="fake", model="fake-model")])
+
+    reply = client.post("/chat", json={"user_id": USER, "text": "How much cash can I still take out abroad?"}).json()
+
+    assert "cn_atm_cap_005" in reply["text"]
+    assert "5,500 CNY" in reply["text"]
+    assert _trail_kinds(client) == ["proposal", "decision", "execution", "note"]
+
+
+def _precheck_over_http(body: dict) -> tuple[TestClient, dict]:
+    client = _client()
+    response = client.post("/precheck", json={"user_id": USER, **body})
+    assert response.status_code == 200, response.text
+    return client, response.json()
+
+
+def _ledger_text_over_http(client: TestClient) -> str:
+    return json.dumps(client.get(f"/ledger/{USER}").json(), ensure_ascii=False)
+
+
+def test_precheck_over_http_flags_a_wise_document_request_sent_to_an_address():
+    address = "verify-team@wise-docs-check.com"
+    client, result = _precheck_over_http({"action_kind": "document_request", "provider": "Wise", "channel": address})
+
+    assert result["ready"] is False
+    assert result["rule_ids"] == ["wise_docs_channel_001", "wise_docs_impersonation_002"]
+    assert address not in _ledger_text_over_http(client)
+    entries = client.get(f"/ledger/{USER}").json()
+    proposal = next(e for e in entries if e["kind"] == "proposal")
+    assert proposal["payload"]["arguments"]["channel"] == "email"
+    notes = [e["payload"] for e in entries if e["kind"] == "note"]
+    assert [note["kind"] for note in notes] == ["document_request_flagged"]
+
+
+def test_precheck_over_http_accepts_an_upload_in_the_providers_own_app():
+    client, result = _precheck_over_http(
+        {"action_kind": "document_request", "provider": "wise", "channel": "provider_app_upload"}
+    )
+
+    assert result["ready"] is True
+    assert result["rule_ids"] == ["wise_docs_channel_001"]
+
+
+@pytest.mark.parametrize("senders", [["Mum", "Aunt Li Mei"], "Mum and Aunt Li Mei"])
+def test_precheck_over_http_runs_the_structuring_check_and_writes_roles_never_names(senders):
+    client, result = _precheck_over_http(
+        {"action_kind": "remit_from_china", "provider": "cn_bank_remit_sim", "senders": senders}
+    )
+
+    assert result["ready"] is False
+    assert result["rule_ids"] == ["cn_cdd_004", "cn_fx_quota_001", "cn_edu_remit_002"]
+    ledger = _ledger_text_over_http(client)
+    assert "Li Mei" not in ledger and "Mum" not in ledger
+    proposal = next(e for e in client.get(f"/ledger/{USER}").json() if e["kind"] == "proposal")
+    assert proposal["payload"]["arguments"]["senders"] == ["parent", "other"]
+
+
+def test_a_raw_address_or_name_given_as_the_provider_over_http_never_reaches_the_ledger():
+    client, _ = _precheck_over_http(
+        {"action_kind": "remit_from_china", "provider": "Aunt Li Mei, +86 138 0013 8000", "senders": ["parent"]}
+    )
+
+    ledger = _ledger_text_over_http(client)
+    assert "Li Mei" not in ledger and "+86 138 0013 8000" not in ledger
+
+
+def test_precheck_over_http_without_channel_or_senders_is_unchanged():
+    _, result = _precheck_over_http({"action_kind": "remit_from_china", "provider": "cn_bank_remit_sim"})
+
+    assert result["ready"] is None
+    assert result["rule_ids"] == ["cn_boc_anxin_009", "cn_fx_quota_001", "cn_cdd_004"]

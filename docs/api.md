@@ -812,6 +812,15 @@ Response `200`:
 
 An `action_kind` the router knows nothing about returns empty lists and `ready` null, not an error.
 
+Two optional fields carry what the chat tool carries, so the app can run the document request flag and the structuring check without the model:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `channel` | text, optional | For `document_request`, the channel the message asks the documents to be sent through. Send the kind, one of `provider_app_upload`, `provider_website_upload`, `email`, `chat`, `link`, `phone`, `post` or `other`; anything else is mapped to a kind before anything is written, an address with an at sign to `email`, a web address to `link`, and the rest to `other` |
+| `senders` | list of text, or one text, optional | For `remit_from_china`, the people whose quota would pay for the student, by role: `self`, `parent`, `grandparent`, `aunt_or_uncle`, `sibling`, `cousin`, `friend`, `other_relative` or `other`. Common words are read as their role, such as `mother` as `parent` and `parents` as two parents; a name becomes `other`. One text is split on commas and the word and |
+
+The loop maps the action kind, the provider, the channel and every sender to these fixed values before the proposal is written, so a raw address or a name sent in any field never reaches the ledger. The response's `provider` is the mapped one.
+
 
 For money from China, `action_kind` `remit_from_china` returns only what knowledge entries say: the Bank of China checklist for funding the student's own account as the documents, and as the review triggers the Chinese side's annual quota, its identity rule, and that no duration is on file. `rule_ids` names the entries. Request:
 
@@ -847,6 +856,120 @@ Response `200`:
   ]
 }
 ```
+
+For the overseas cash withdrawal cap on Chinese cards, `action_kind` `overseas_cash` reads the student's Chinese cards from the fixture, never from the request, and the caps and the consequence from `cn_atm_cap_005`. The annual cap counts every card together, so each card reports the same year's remainder. `ready` is false when the year's remainder is at or below one card's daily cap or what all the cards together may still take today; with no cards on file it is null and the one trigger says Lifeline has no record. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "overseas_cash", "provider": "chinese_bank_cards"}
+```
+
+Response `200` with the demo fixture:
+
+```json
+{
+  "provider": "chinese_bank_cards",
+  "action_kind": "overseas_cash",
+  "documents_likely": [],
+  "review_triggers": [
+    "Card icbc:card_03: 5,500 CNY left this calendar year across all Chinese cards, and 5,500 CNY left today. Source: cn_atm_cap_005.",
+    "Card boc:card_04: 5,500 CNY left this calendar year across all Chinese cards, and 5,500 CNY left today. Source: cn_atm_cap_005.",
+    "Exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year."
+  ],
+  "ready": false,
+  "rule_ids": [
+    "cn_atm_cap_005"
+  ]
+}
+```
+
+For a foreign student arriving in China, `action_kind` `arrive_in_china` returns the foreign card wallet limits from `cn_wallet_foreign_006`, the Wise route into China from `cn_wise_in_007` quoted whole with the sentence that it is not this student's route, and that no entry covers cash on a foreign card in China. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "arrive_in_china", "provider": "alipay"}
+```
+
+Response `200`:
+
+```json
+{
+  "provider": "alipay",
+  "action_kind": "arrive_in_china",
+  "documents_likely": [],
+  "review_triggers": [
+    "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars, raised from 1,000 and 10,000 US dollars. The People's Bank announced the change on 1 March 2024.",
+    "Wise sends CNY into China to Alipay, WeChat, and UnionPay for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay.",
+    "That route is for recipients with a Chinese national ID, so it is not this student's route. Source: cn_wise_in_007.",
+    "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
+  ],
+  "ready": null,
+  "rule_ids": [
+    "cn_wallet_foreign_006",
+    "cn_wise_in_007"
+  ]
+}
+```
+
+A message claiming to be from Wise that asks for documents by email. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "document_request", "provider": "Wise", "channel": "verify-team@wise-docs-check.com"}
+```
+
+Response `200`. The ledger's proposal holds `"channel": "email"` and `"provider": "wise"`, never the address, and a `document_request_flagged` note follows the execution:
+
+```json
+{
+  "provider": "wise",
+  "action_kind": "document_request",
+  "documents_likely": [],
+  "review_triggers": [
+    "Wise's help article on verifying an address says Wise will ask the customer to upload a high-quality photo or scan of a document, and that the customer can check their verification status at any time by going to the Verification tab in their account settings.",
+    "Wise says it will never send clickable links asking you to make payments or provide personal information, and will never pressure you to act immediately. Wise says to contact Wise directly through official channels using the Wise website or app, and that if a message claims to be from Wise and includes any of the things Wise will never do, it is likely a scam."
+  ],
+  "ready": false,
+  "rule_ids": [
+    "wise_docs_channel_001",
+    "wise_docs_impersonation_002"
+  ]
+}
+```
+
+With `"channel": "provider_app_upload"` the same request returns `ready` true and only `wise_docs_channel_001`, and no note is written.
+
+A student's costs from China paid with the mother's and an aunt's quota. Request:
+
+```json
+{"user_id": "student_001", "action_kind": "remit_from_china", "provider": "cn_bank_remit_sim", "senders": ["mother", "aunt"]}
+```
+
+Response `200`. The ledger's proposal holds `"senders": ["parent", "aunt_or_uncle"]`, and a `structuring_refused` note with the same roles follows the execution:
+
+```json
+{
+  "provider": "cn_bank_remit_sim",
+  "action_kind": "remit_from_china",
+  "documents_likely": [],
+  "review_triggers": [
+    "From 1 January 2026, cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification under the joint due diligence measures of the People's Bank, the financial regulator, and the securities regulator. Splitting a transfer across people is structuring.",
+    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting.",
+    "Tuition and living costs above the quota can be remitted with documents without consuming the quota. The payment goes to the institution's account, the daily cap is 50,000 US dollars equivalent, and more than two weeks should be allowed.",
+    "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file for it. Source: cn_edu_remit_002."
+  ],
+  "ready": false,
+  "rule_ids": [
+    "cn_cdd_004",
+    "cn_fx_quota_001",
+    "cn_edu_remit_002"
+  ]
+}
+```
+
+With one sender, or none, `remit_from_china` gives its ordinary answer shown above. A request whose body fails validation is answered with `422`, and that answer echoes the body back to the caller, as open item 79 records; it is never written to the ledger. A quote on `SG>CN` returns one Wise route whose `rule_id` is `cn_wise_in_007`, which lane C can show as the inbound route; the demo mandate does not allow the corridor, so a transfer on it is refused under R05.
+
+### Ledger notes from Stage 8
+
+`GET /ledger/{user_id}` can now hold four more note kinds: `redaction`, with `classes`, when a reply was cleaned of a card number, a confirmation token or a secret; `document_request_flagged`, with `claimed_provider`, `channel` and `entry_ids`; `structuring_refused`, with `senders` by role and `entry_ids`; and `cash_cap_warning`, with `remaining_year`, `per_card_daily_cap`, `cards_today_total` and `entry_id`. A plan update is a `proposal`, a `decision` at T1 and an `execution` whose `result.plan_updated` holds the fields changed.
+
 ## Standing mandates
 
 A standing mandate is a recurring transfer the student confirms once, such as monthly rent. It is set up through `/chat` and `/confirm` like any T2 action, with the warning key `warn.standing.new`. Its runs happen on their own:
