@@ -3548,6 +3548,11 @@ DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
 # a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
 DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+# The word a cancel may name in place of a receipt id: the student's most recent receipt, resolved in code.
+LATEST = "latest"
+# The words for that in the student's own turn, in the three languages. A cancel of "latest" is trusted only
+# when the student's own words this turn say it; when only data says it, it is data. Source: docs/decisions.md.
+LATEST_WORDS = re.compile(r"\b(?:latest|last|most recent|newest|[úu]ltim[oa]|recente)\b|最近|最后|上一笔|刚才")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -3691,8 +3696,9 @@ TOOLS = [
     ),
     _tool(
         "cancel_transfer",
-        "Cancel one of the student's own transfers that is still pending, by receipt id. Nothing changes until "
-        "the student confirms it, and a transfer that has moved on cannot be cancelled.",
+        "Cancel one of the student's own transfers that is still pending, by receipt id, or by the word latest for "
+        "their most recent transfer. Nothing changes until the student confirms it, and a transfer that has moved "
+        "on cannot be cancelled.",
         {"receipt_id": TEXT},
         ["receipt_id"],
     ),
@@ -3794,6 +3800,7 @@ TEXTS = {
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
+        "no_receipt_to_cancel": "You have no transfer of your own that Lifeline could cancel.",
         "cancelled": "Done. Transfer {receipt_id} was cancelled and returned. It still counts toward today's limit.",
         "cancel_not_supported": "Transfer {receipt_id} could not be cancelled: {reason}",
         "cancel_failed": "Lifeline could not cancel transfer {receipt_id}: {reason}",
@@ -3877,6 +3884,7 @@ TEXTS = {
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
+        "no_receipt_to_cancel": "Você não tem nenhuma transferência sua que o Lifeline possa cancelar.",
         "cancelled": "Pronto. A transferência {receipt_id} foi cancelada e devolvida. Ela ainda conta para o limite de hoje.",
         "cancel_not_supported": "A transferência {receipt_id} não pôde ser cancelada: {reason}",
         "cancel_failed": "O Lifeline não conseguiu cancelar a transferência {receipt_id}: {reason}",
@@ -3960,6 +3968,7 @@ TEXTS = {
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
+        "no_receipt_to_cancel": "你没有任何可以由 Lifeline 取消的本人转账。",
         "cancelled": "已完成。转账 {receipt_id} 已取消并退回。它仍计入今天的限额。",
         "cancel_not_supported": "转账 {receipt_id} 无法取消：{reason}",
         "cancel_failed": "Lifeline 无法取消转账 {receipt_id}：{reason}",
@@ -4126,6 +4135,8 @@ class _Trail:
     from_data: _Details = field(default_factory=_Details)
     # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
     notices: list[str] = field(default_factory=list)
+    # What the student typed in this turn, read as the provenance check reads it.
+    said: str = ""
 
 
 @dataclass
@@ -4440,6 +4451,8 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
         # The memory keeps the language the loop answered in, so a note written later, with no turn to
         # detect it from, is in the student's language. Source: docs/decisions.md, 8 October 2026.
         student = student.model_copy(update={"lang": lang})
+        if _from_student(student):
+            trail.said = DASHES.sub("-", _visible(student.text)).casefold()
         turn_messages = [_remembered(student)] + ([_remembered(pasted)] if pasted is not None else [])
         history = self._conversations.get(user_id, [])
         for earlier in [*history, *turn_messages]:
@@ -4536,10 +4549,17 @@ A conversation turn takes the next turn number and starts a trail. The student's
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
+        if latest:
+            # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
+            fields.pop("receipt_id", None)
+            resolved = self._latest_receipt(user_id)
+            if resolved is not None:
+                fields["receipt_id"] = resolved
         if action_type is ActionType.CANCEL_TRANSFER:
             # The loop names the student's own transfer behind the receipt, never the model; None when the
             # student's ledger holds no such receipt, which the engine refuses.
-            fields["cancel_of"] = self._own_transfer(user_id, str(call.arguments.get("receipt_id", "")))[0]
+            fields["cancel_of"] = self._own_transfer(user_id, str(fields.get("receipt_id", "")))[0]
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -4562,6 +4582,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
         )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
+        elif latest:
+            untrusted = _untrusted_latest(trail)
         else:
             untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
@@ -4700,7 +4722,10 @@ When the source was changed, the engine refuses the action under R01, exactly as
         token = decision.confirmation_token
         warning_key = decision.warning_key
         if not decision.allowed or not decision.requires_confirmation or not token or not warning_key:
-            return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
+            text = self._refusal(lang, decision)
+            if action.type is ActionType.CANCEL_TRANSFER and not action.receipt_id:
+                text = f"{_text(lang, 'no_receipt_to_cancel')} {text}"
+            return self._reply(trail, lang, text, decision=decision)
         pending = PendingConfirmation(
             user_id=user_id,
             action=action,
@@ -5249,7 +5274,8 @@ When no confirmation waits under the token for this student, and when a waiting 
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
-        if receipt is None:
+        if not isinstance(receipt, Receipt):
+            # Each rail's reason is in its rail error note, as for a transfer the student confirmed.
             return StandingEvent(kind="rail_failed", decision=decision, **event)
         return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
 ```
@@ -5262,21 +5288,26 @@ When no confirmation waits under the token for this student, and when a waiting 
     ) -> AgentReply:
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
+        if isinstance(receipt, RailError):
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(receipt)), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 
     def _pay(
         self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
-    ) -> Receipt | None:
+    ) -> Receipt | RailError | None:
+        """Pay on the cheapest route, then the next; the receipt, the last rail's error, or None with no route."""
         routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
         failed: set[str] = set()
+        last: RailError | None = None
         while (route := self._choose(routes, failed)) is not None:
             receipt = self._pay_on_route(user_id, trail, action, route, mandate_ref, token)
             if not isinstance(receipt, RailError):
                 return receipt
             failed.add(route.rail)
-        return None
+            last = receipt
+        return last
 
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
@@ -6309,7 +6340,7 @@ A cancel is a T2 action like a freeze, with one difference: the engine has to kn
         return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
 ```
 
-`_own_transfer` reads the student's own `receipt` entries and returns the idempotency key of the transfer behind the receipt and the rail that issued it. A receipt sent to the student is seeded into its rail on every start and never written to the ledger, so it is never found, and neither is another student's. `_run_tool` puts the key in `Action.cancel_of` before the proposal is written, whatever the model passed, and the engine refuses under R04 a cancel whose `cancel_of` is not an executed transfer in this student's history. After the student confirms, `_carry_out` calls `_cancel`, which asks the rail, writes the whole `CancelResult` in the execution entry and a `cancel_result` note, and says the outcome: done, or the rail's own reason when it would not or could not cancel.
+`_own_transfer` reads the student's own `receipt` entries and returns the idempotency key of the transfer behind the receipt and the rail that issued it. A receipt sent to the student is seeded into its rail on every start and never written to the ledger, so it is never found, and neither is another student's. When the model passes the word `latest`, `_latest_receipt` first resolves it to the student's most recent receipt, and `_untrusted_latest` reads its provenance from the word in the student's own turn. `_run_tool` puts the key in `Action.cancel_of` before the proposal is written, whatever the model passed, and the engine refuses under R04 a cancel whose `cancel_of` is not an executed transfer in this student's history. After the student confirms, `_carry_out` calls `_cancel`, which asks the rail, writes the whole `CancelResult` in the execution entry and a `cancel_result` note, and says the outcome: done, or the rail's own reason when it would not or could not cancel.
 
 ### The rescue, `core/agent.py`
 
@@ -9084,8 +9115,16 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_three.py` | `test_the_monthly_summary_never_reports_an_empty_month_for_a_month_spelled_in_other_digits` | The monthly summary never reports an empty month for a month spelled in other digits |
 | `test_attack_three.py` | `test_a_cancelled_transfer_is_not_reported_as_sent_in_the_monthly_note` | A cancelled transfer is not reported as sent in the monthly note |
 | `test_attack_three.py` | `test_a_standing_run_that_was_cancelled_is_not_counted_as_run_or_sent` | A standing run that was cancelled is not counted as run or sent |
+| `test_agent.py` | `test_a_scheduled_standing_run_the_rail_refuses_records_the_rails_reason_in_its_ledger_note` | A scheduled standing run the rail refuses records the rails reason in its ledger note |
+| `test_agent.py` | `test_a_standing_run_paid_from_chat_that_the_rail_refuses_gives_the_rails_reason` | A standing run paid from chat that the rail refuses gives the rails reason |
+| `test_cancel.py` | `test_latest_resolves_to_the_students_most_recent_receipt_before_the_proposal` | Latest resolves to the students most recent receipt before the proposal |
+| `test_cancel.py` | `test_latest_is_read_in_any_case` | Latest is read in any case |
+| `test_cancel.py` | `test_latest_from_a_paste_is_data_and_refused_under_r01` | Latest from a paste is data and refused under r01 |
+| `test_cancel.py` | `test_latest_from_a_tool_result_is_data_and_refused_under_r01` | Latest from a tool result is data and refused under r01 |
+| `test_cancel.py` | `test_latest_with_no_receipt_gets_the_honest_reply` | Latest with no receipt gets the honest reply |
+| `test_cancel.py` | `test_latest_never_reaches_another_students_receipt` | Latest never reaches another students receipt |
 
-In all, 95 parametrized tests add 255 extra runs, which is how 808 test functions become 1063 tests.
+In all, 96 parametrized tests add 258 extra runs, which is how 816 test functions become 1074 tests.
 
 ## The Stage 8a tests
 

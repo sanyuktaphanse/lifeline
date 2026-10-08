@@ -1547,7 +1547,7 @@ Response `200`, with the token and the times replaced by placeholders:
 
 ## Cancels and the monthly note
 
-`AgentReply` carries `cancel`, null unless the reply is the outcome of a confirmed cancel: `{"status": "done" | "not_supported" | "failed", "deep_link": ..., "reason": ...}`, the same shape as `freeze`. A cancel is proposed in chat with the receipt id the student types and confirmed through `POST /confirm` like any T2 action; only a receipt in the student's own ledger can be cancelled, never one sent to them. The ledger can now hold a `cancel_result` note, with `receipt_id`, `rail`, `status` and `reason`, and a `monthly_note`, with `month`, `lang`, `text` and `summary`, which the scheduler writes once at the start of each month for the month that ended; the app shows it, and nothing is sent. `POST /standing/run_due` writes it too, for the time it is given.
+`AgentReply` carries `cancel`, null unless the reply is the outcome of a confirmed cancel: `{"status": "done" | "not_supported" | "failed", "deep_link": ..., "reason": ...}`, the same shape as `freeze`. A cancel is proposed in chat with the receipt id the student types, or with "cancel my last transfer", which the loop resolves to the student's most recent receipt, and confirmed through `POST /confirm` like any T2 action; only a receipt in the student's own ledger can be cancelled, never one sent to them. The ledger can now hold a `cancel_result` note, with `receipt_id`, `rail`, `status` and `reason`, and a `monthly_note`, with `month`, `lang`, `text` and `summary`, which the scheduler writes once at the start of each month for the month that ended; the app shows it, and nothing is sent. `POST /standing/run_due` writes it too, for the time it is given.
 
 ## Errors
 

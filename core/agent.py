@@ -136,6 +136,11 @@ DECIMAL_COMMA = re.compile(r"\d+,\d{1,2}")
 # Every dash a text can hold, read as a plain hyphen by the provenance check, so a receipt id written with
 # a non breaking hyphen or an en dash in a paste is still the same id. Source: the attacker brief of 8 October.
 DASHES = re.compile(r"[\u2010-\u2015\u2212\ufe58\ufe63\uff0d]")
+# The word a cancel may name in place of a receipt id: the student's most recent receipt, resolved in code.
+LATEST = "latest"
+# The words for that in the student's own turn, in the three languages. A cancel of "latest" is trusted only
+# when the student's own words this turn say it; when only data says it, it is data. Source: docs/decisions.md.
+LATEST_WORDS = re.compile(r"\b(?:latest|last|most recent|newest|[úu]ltim[oa]|recente)\b|最近|最后|上一笔|刚才")
 DIGIT_GROUPING = re.compile(r"(?<=\d)[ \u00a0\u202f'\u2019](?=\d{3}(?!\d))")
 MANDATE_VERSION = re.compile(r"(?P<base>.*-v)(?P<number>\d+)")
 WORD = re.compile(r"[a-zà-ÿ]+")
@@ -288,8 +293,9 @@ TOOLS = [
     ),
     _tool(
         "cancel_transfer",
-        "Cancel one of the student's own transfers that is still pending, by receipt id. Nothing changes until "
-        "the student confirms it, and a transfer that has moved on cannot be cancelled.",
+        "Cancel one of the student's own transfers that is still pending, by receipt id, or by the word latest for "
+        "their most recent transfer. Nothing changes until the student confirms it, and a transfer that has moved "
+        "on cannot be cancelled.",
         {"receipt_id": TEXT},
         ["receipt_id"],
     ),
@@ -387,6 +393,7 @@ TEXTS = {
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
+        "no_receipt_to_cancel": "You have no transfer of your own that Lifeline could cancel.",
         "cancelled": "Done. Transfer {receipt_id} was cancelled and returned. It still counts toward today's limit.",
         "cancel_not_supported": "Transfer {receipt_id} could not be cancelled: {reason}",
         "cancel_failed": "Lifeline could not cancel transfer {receipt_id}: {reason}",
@@ -470,6 +477,7 @@ TEXTS = {
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
+        "no_receipt_to_cancel": "Você não tem nenhuma transferência sua que o Lifeline possa cancelar.",
         "cancelled": "Pronto. A transferência {receipt_id} foi cancelada e devolvida. Ela ainda conta para o limite de hoje.",
         "cancel_not_supported": "A transferência {receipt_id} não pôde ser cancelada: {reason}",
         "cancel_failed": "O Lifeline não conseguiu cancelar a transferência {receipt_id}: {reason}",
@@ -553,6 +561,7 @@ TEXTS = {
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
+        "no_receipt_to_cancel": "你没有任何可以由 Lifeline 取消的本人转账。",
         "cancelled": "已完成。转账 {receipt_id} 已取消并退回。它仍计入今天的限额。",
         "cancel_not_supported": "转账 {receipt_id} 无法取消：{reason}",
         "cancel_failed": "Lifeline 无法取消转账 {receipt_id}：{reason}",
@@ -714,6 +723,8 @@ class _Trail:
     from_data: _Details = field(default_factory=_Details)
     # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
     notices: list[str] = field(default_factory=list)
+    # What the student typed in this turn, read as the provenance check reads it.
+    said: str = ""
 
 
 @dataclass
@@ -997,6 +1008,14 @@ def _untrusted_plan_update(trail: _Trail, action: Action) -> dict[str, Source]:
     return untrusted
 
 
+def _untrusted_latest(trail: _Trail) -> dict[str, Source]:
+    """Where a cancel of "latest" came from: the student's own words this turn, or data that says it."""
+    if LATEST_WORDS.search(trail.said):
+        return {}
+    source = next((source for text, source in trail.from_data.texts if LATEST_WORDS.search(text)), None)
+    return {} if source is None else {"receipt_id": source}
+
+
 def _anchored[**P, R](
     method: Callable[Concatenate["AgentLoop", str, P], R],
 ) -> Callable[Concatenate["AgentLoop", str, P], R]:
@@ -1157,6 +1176,8 @@ class AgentLoop:
         # The memory keeps the language the loop answered in, so a note written later, with no turn to
         # detect it from, is in the student's language. Source: docs/decisions.md, 8 October 2026.
         student = student.model_copy(update={"lang": lang})
+        if _from_student(student):
+            trail.said = DASHES.sub("-", _visible(student.text)).casefold()
         turn_messages = [_remembered(student)] + ([_remembered(pasted)] if pasted is not None else [])
         history = self._conversations.get(user_id, [])
         for earlier in [*history, *turn_messages]:
@@ -1245,10 +1266,17 @@ class AgentLoop:
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
+        if latest:
+            # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
+            fields.pop("receipt_id", None)
+            resolved = self._latest_receipt(user_id)
+            if resolved is not None:
+                fields["receipt_id"] = resolved
         if action_type is ActionType.CANCEL_TRANSFER:
             # The loop names the student's own transfer behind the receipt, never the model; None when the
             # student's ledger holds no such receipt, which the engine refuses.
-            fields["cancel_of"] = self._own_transfer(user_id, str(call.arguments.get("receipt_id", "")))[0]
+            fields["cancel_of"] = self._own_transfer(user_id, str(fields.get("receipt_id", "")))[0]
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
             fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
@@ -1271,6 +1299,8 @@ class AgentLoop:
         )
         if action.type is ActionType.UPDATE_PLAN:
             untrusted = _untrusted_plan_update(trail, action)
+        elif latest:
+            untrusted = _untrusted_latest(trail)
         else:
             untrusted = _untrusted_fields(trail, action) if checked else {}
         if untrusted:
@@ -1519,7 +1549,10 @@ class AgentLoop:
         token = decision.confirmation_token
         warning_key = decision.warning_key
         if not decision.allowed or not decision.requires_confirmation or not token or not warning_key:
-            return self._reply(trail, lang, self._refusal(lang, decision), decision=decision)
+            text = self._refusal(lang, decision)
+            if action.type is ActionType.CANCEL_TRANSFER and not action.receipt_id:
+                text = f"{_text(lang, 'no_receipt_to_cancel')} {text}"
+            return self._reply(trail, lang, text, decision=decision)
         pending = PendingConfirmation(
             user_id=user_id,
             action=action,
@@ -2028,7 +2061,8 @@ class AgentLoop:
         if not decision.allowed or decision.requires_confirmation:
             return StandingEvent(kind="needs_student", decision=decision, **event)
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
-        if receipt is None:
+        if not isinstance(receipt, Receipt):
+            # Each rail's reason is in its rail error note, as for a transfer the student confirmed.
             return StandingEvent(kind="rail_failed", decision=decision, **event)
         return StandingEvent(kind="run", decision=decision, receipt=receipt, **event)
 
@@ -2037,21 +2071,26 @@ class AgentLoop:
     ) -> AgentReply:
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
+        if isinstance(receipt, RailError):
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(receipt)), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
 
     def _pay(
         self, user_id: str, trail: _Trail, action: Action, mandate_ref: str, token: str
-    ) -> Receipt | None:
+    ) -> Receipt | RailError | None:
+        """Pay on the cheapest route, then the next; the receipt, the last rail's error, or None with no route."""
         routes = self._router.quote(action.corridor, action.amount, action.purpose or "", URGENCY)
         failed: set[str] = set()
+        last: RailError | None = None
         while (route := self._choose(routes, failed)) is not None:
             receipt = self._pay_on_route(user_id, trail, action, route, mandate_ref, token)
             if not isinstance(receipt, RailError):
                 return receipt
             failed.add(route.rail)
-        return None
+            last = receipt
+        return last
 
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
@@ -2180,6 +2219,14 @@ class AgentLoop:
             if receipt.get("receipt_id") == receipt_id:
                 return receipt.get("idempotency_key"), payload.get("rail")
         return None, None
+
+    def _latest_receipt(self, user_id: str) -> str | None:
+        """The id of the student's most recent receipt in their own ledger, or None when they have none."""
+        latest = None
+        for entry in self._ledger.entries():
+            if entry.kind == "receipt" and entry.payload.get("user_id") == user_id:
+                latest = entry.payload.get("receipt", {}).get("receipt_id") or latest
+        return latest
 
     def _cancel(self, user_id: str, lang: str, trail: _Trail, action: Action) -> tuple[str, CancelResult]:
         receipt_id = action.receipt_id or ""

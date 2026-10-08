@@ -1579,3 +1579,43 @@ def test_a_payee_only_the_model_named_stays_untrusted_after_its_source_leaves_th
     assert reply.confirmation is None
     assert reply.decision.rule_ids == ["R01"]
     assert _kinds(s.ledger)[-1] == "injection_suspected"
+
+
+class _RefusingRail(FakeRail):
+    def execute(self, route, mandate_ref, idempotency_key, confirmation_token):
+        from contracts.errors import RailError
+
+        raise RailError(f"{self.name} refuses: over the day's cap. Source: in_upi_paynow_cap_002. Nothing was charged.")
+
+
+def _refusing_rails():
+    return {name: _RefusingRail(name=name, simulated=name == "sim_pix") for name in ("wise", "bank_wire", "sim_pix")}
+
+
+def test_a_scheduled_standing_run_the_rail_refuses_records_the_rails_reason_in_its_ledger_note():
+    s = _setup([], rails=_refusing_rails())
+    _create_standing(s)
+    _, _, notice_time, run_time = _times(s)
+    s.loop.run_due_standing_mandates(notice_time)
+
+    [event] = s.loop.run_due_standing_mandates(run_time)
+
+    assert event.kind == "rail_failed"
+    run_key = next(e.payload["action"]["idempotency_key"] for e in s.ledger.entries() if "standing_run" in e.payload)
+    notes = [e.payload for e in s.ledger.entries() if e.kind == "note" and e.payload.get("idempotency_key") == run_key]
+    assert notes and all("Source: in_upi_paynow_cap_002." in note["rail_error"] and note["executed"] is False for note in notes)
+    assert "receipt" not in [e.kind for e in s.ledger.entries()]
+
+
+def test_a_standing_run_paid_from_chat_that_the_rail_refuses_gives_the_rails_reason():
+    s = _setup([], rails=_refusing_rails())
+    _create_standing(s)
+    _, due, _, _ = _times(s)
+    s.adapter._responses.append(_call("propose_transfer", {**RENT, "standing_mandate_id": STANDING_ID}))
+    from unittest.mock import patch
+
+    with patch("core.agent._now", return_value=due):
+        reply = s.loop.handle(USER, _user("Pay this month's rent now under my standing mandate"))
+
+    assert reply.receipt is None
+    assert "The rail said:" in reply.text and "in_upi_paynow_cap_002" in reply.text
