@@ -1,0 +1,28 @@
+- id: br_pix_instant_001
+  statement: "Pix is the payment scheme of the Banco Central do Brasil for instant payments, in which the funds become available to the payee in real time, 24 hours a day and every day of the year. Its participants are institutions authorized to operate by the Banco Central do Brasil."
+  country: BR
+  rail: pix
+  kind: rule
+  source_url: "https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Pix_Regulation/Resolution_BCB_1.pdf"
+  source_type: regulator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T29, sim_pix]
+  values:
+    typical_duration_hours: 0
+  note: "From Resolution BCB 1 of 12 August 2020, the English text: the regulation's definition of an instant payment, and the rule on who participates. The duration of zero hours stands for the statement's real time."
+- id: br_pix_keys_002
+  statement: "A Pix payee is reached through a Pix key linked to their transactional account, which may be a cell phone number, an e-mail address, a CPF registration number, a CNPJ registration number, or a random key."
+  country: BR
+  rail: pix
+  kind: rule
+  source_url: "https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Pix_Regulation/Resolution_BCB_1.pdf"
+  source_type: regulator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T29, sim_pix]
+  values:
+    key_types: [cell phone number, e-mail, CPF, CNPJ, random key]
+  note: "From Resolution BCB 1 of 12 August 2020, the English text, the article on the Pix keys that may be linked to transactional accounts."

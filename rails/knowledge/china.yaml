@@ -87,3 +87,17 @@
   checked_by: "S"
   second_check_by: ""
   used_by: [T36, T38]
+- id: cn_boc_anxin_009
+  statement: "Bank of China's An Xin account is an SGD savings account in the student's own name at Bank of China Singapore Branch, for students holding an admission letter from a university or college in Singapore. It is applied for at a branch of Bank of China in China with the originals of the passport, the ID card or Hukou book, and the enrollment or admission letter, and once it is approved, money can be remitted to it with the customer reference number the Singapore Branch provides."
+  country: CN
+  rail: bank_remittance
+  kind: documents
+  source_url: "https://www.boc.cn/en/pbservice/pb4/201005/t20100520_1323963.html"
+  source_type: bank
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T31, T36, cn_bank_remit_sim, precheck.remit_from_china]
+  values:
+    documents: [passport, ID card or Hukou book, enrollment or admission letter]
+  note: "The page gives no date and no time for a remittance to arrive. Check the service is still offered."

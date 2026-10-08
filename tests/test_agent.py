@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from contracts.schemas import Mandate, Message, ReceiptStatus, Role, Source, Tier, ToolCall, TraceResult
+from contracts.schemas import Action, ActionType, Mandate, Message, Receipt, ReceiptStatus, Role, Route, Source, Tier, ToolCall, TraceResult
 from contracts.schemas import AgentReply
 from core.agent import AgentLoop, PendingConfirmation, detect_lang
 from core.conversation_store import ConversationStore
@@ -13,6 +13,7 @@ from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
 from rails.fake_rail import REVOLUT_FREEZE_DEEP_LINK, FakeRail
+from rails.inbound import Inbound, seed_inbound
 from rails.fake_router import FakeRouter
 
 USER = "student_001"
@@ -1369,3 +1370,142 @@ def test_a_transfer_reply_says_what_the_receipt_status_says(status, lang):
     else:
         assert NOT_COMPLETED[lang].format(status=status.value) in reply.text
         assert DONE_WORDS[lang] not in reply.text
+
+
+class _RecordingRail(FakeRail):
+    """A Wise rail that keeps every route it was asked to pay."""
+
+    def __init__(self) -> None:
+        super().__init__(name="wise", simulated=False)
+        self.routes = []
+
+    def execute(self, route, mandate_ref, idempotency_key, confirmation_token):
+        self.routes.append(route)
+        return super().execute(route, mandate_ref, idempotency_key, confirmation_token)
+
+
+def test_the_loop_stamps_the_payee_on_the_route_it_pays_and_the_router_names_the_purpose():
+    rail = _RecordingRail()
+    s = _setup([_call("propose_transfer", RENT)], rails={**_honest_rails(), "wise": rail})
+    proposed = s.loop.handle(USER, _user(RENT_REQUEST))
+
+    assert proposed.confirmation.selected_route.payee_id is None
+    assert proposed.confirmation.selected_route.purpose == "rent"
+    s.loop.handle(USER, _user(""), confirmation_token=proposed.confirmation.confirmation_token)
+
+    assert [(r.payee_id, r.purpose) for r in rail.routes] == [("landlord_sp", "rent")]
+    execution = [e.payload for e in s.ledger.entries() if e.kind == "execution"][-1]
+    assert execution["route"]["payee_id"] == "landlord_sp"
+
+
+def test_a_standing_run_is_paid_on_a_route_stamped_with_its_payee():
+    rail = _RecordingRail()
+    s = _setup([], rails={**_honest_rails(), "wise": rail})
+    now = datetime.now(timezone.utc)
+    receipt = s.loop._pay(
+        USER,
+        _trail_for(s),
+        Action(
+            type=ActionType.TRANSFER,
+            idempotency_key="student_001:standing:x:2026-10",
+            amount=Decimal("1200"),
+            currency="SGD",
+            corridor="SG>BR",
+            payee_id="landlord_sp",
+            purpose="rent",
+            requested_at=now,
+        ),
+        MANDATE_ID,
+        "token-for-this-test",
+    )
+
+    assert receipt is not None
+    assert rail.routes[0].payee_id == "landlord_sp"
+
+
+def _trail_for(s):
+    from core.agent import _Trail
+
+    return _Trail(USER, 1, mandate_id=MANDATE_ID)
+
+
+INBOUND_ID = "wise-in-0001"
+
+
+def _inbound_receipt() -> Receipt:
+    now = datetime.now(timezone.utc)
+    return Receipt(
+        receipt_id=INBOUND_ID,
+        rail="wise",
+        amount=Decimal("500"),
+        currency="SGD",
+        status=ReceiptStatus.IN_TRANSIT,
+        stage_entered_at=now,
+        mandate_ref="inbound:parent",
+        idempotency_key="inbound:wise-in-0001",
+        simulated=False,
+        executed_at=now,
+    )
+
+
+def _inbound_route():
+    return Route(
+        rail="wise", corridor="SG>SG", amount=Decimal("500"), currency_from="SGD", currency_to="SGD",
+        fee=Decimal(0), spread_cost=Decimal(0), tax_lines=[], arrival_hours=0, status="up",
+        simulated=False, limit_ok=True, quoted_at=datetime.now(timezone.utc),
+    )
+
+
+def test_a_seeded_inbound_receipt_is_traceable_and_writes_nothing_to_the_ledger():
+    trace = TraceResult(
+        receipt_id=INBOUND_ID,
+        status=ReceiptStatus.IN_TRANSIT,
+        stage_entered_at=datetime.now(timezone.utc),
+        typical_duration_hours=24,
+        typical_duration_source="fixture",
+        next_steps=["Wait for the bank to credit it."],
+        warnings=[],
+    )
+    rail = FakeRail({INBOUND_ID: trace}, name="wise", simulated=False)
+    seed_inbound({"wise": rail}, {"wise": [Inbound(_inbound_receipt(), _inbound_route())]})
+    adapter = FakeModelAdapter([])
+    ledger = HashChainLedger()
+    loop = AgentLoop(
+        adapter=adapter,
+        engine=DeterministicMandateEngine(),
+        ledger=ledger,
+        router=FakeRouter(),
+        rails={"wise": rail},
+        mandates={USER: _mandate()},
+        balances={USER: {}},
+        pending={},
+        inbound_receipts={USER: {INBOUND_ID: "wise"}},
+    )
+    assert ledger.entries() == []
+
+    decision, result = loop.act(USER, "trace_transfer", {"receipt_id": INBOUND_ID})
+
+    assert decision.allowed is True
+    assert result["trace"]["receipt_id"] == INBOUND_ID
+    assert result["trace"]["status"] == "in_transit"
+    assert [e.kind for e in ledger.entries()] == ["proposal", "decision", "execution"]
+
+
+def test_an_inbound_receipt_of_another_student_is_not_traceable():
+    rail = FakeRail(name="wise", simulated=False)
+    seed_inbound({"wise": rail}, {"wise": [Inbound(_inbound_receipt(), _inbound_route())]})
+    loop = AgentLoop(
+        adapter=FakeModelAdapter([]),
+        engine=DeterministicMandateEngine(),
+        ledger=HashChainLedger(),
+        router=FakeRouter(),
+        rails={"wise": rail},
+        mandates={USER: _mandate()},
+        balances={USER: {}},
+        pending={},
+        inbound_receipts={"student_999": {INBOUND_ID: "wise"}},
+    )
+
+    decision, result = loop.act(USER, "trace_transfer", {"receipt_id": INBOUND_ID})
+
+    assert "error" in result

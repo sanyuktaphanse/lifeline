@@ -43,6 +43,7 @@ from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
+from rails.inbound import inbound_from_fixture, seed_inbound
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -202,6 +203,8 @@ def create_app(
     ledger = JsonlLedger(ledger_path or LEDGER_PATH)
     rails = rails if rails is not None else demo_rails(fixture.get("traces"))
     _restore_rails(rails, ledger)
+    # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
+    inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))
     loop = AgentLoop(
         adapter=adapter if adapter is not None else ProviderModelAdapter(),
         engine=DeterministicMandateEngine(),
@@ -214,6 +217,7 @@ def create_app(
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
         council=council if council is not None else council_for(),
         plans={user_id: Plan.model_validate(fixture["plan"])},
+        inbound_receipts={user_id: inbound},
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.

@@ -699,3 +699,25 @@ def test_a_malformed_rescue_step_never_echoes_what_was_typed(body):
     assert response.status_code == 422
     assert DEMO_ANSWER not in response.text
     assert response.json()["detail"][0]["loc"]
+
+
+def test_an_inbound_receipt_in_the_fixture_is_traceable_after_every_start(tmp_path):
+    import yaml
+
+    fixture = yaml.safe_load(Path(DEMO_FIXTURE).read_text(encoding="utf-8"))
+    fixture["inbound_receipts"] = {
+        "wise": [{"receipt_id": "wise-in-0001", "amount": "500", "currency": "SGD", "corridor": "SG>SG", "status": "in_transit", "sender": "parent", "sent_hours_ago": 30}]
+    }
+    fixture["traces"]["wise"].append(
+        {"receipt_id": "wise-in-0001", "status": "in_transit", "typical_duration_hours": 24, "typical_duration_source": "fixture", "next_steps": ["Wait."], "warnings": []}
+    )
+    path = tmp_path / "fixture.yaml"
+    path.write_text(yaml.safe_dump(fixture), encoding="utf-8")
+
+    for _ in range(2):
+        client = _client(fixture_path=path)
+        response = client.post("/trace", json={"user_id": USER, "receipt_id": "wise-in-0001"})
+        assert response.status_code == 200
+        assert response.json()["status"] == "in_transit"
+    kinds = [e["kind"] for e in client.get(f"/ledger/{USER}").json()]
+    assert "receipt" not in kinds

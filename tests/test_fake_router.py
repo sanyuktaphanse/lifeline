@@ -35,8 +35,11 @@ def test_sg_to_br_returns_wise_sim_pix_and_bank_wire():
         assert route.status is RouteStatus.UP
         assert route.limit_ok is True
         assert route.blocked_reason is None
-        assert route.rule_id is None
+        assert route.purpose == "rent"
+        assert route.payee_id is None
         assert route.quoted_at.tzinfo is not None
+    assert [route.rule_id for route in routes] == [None, "br_pix_instant_001", None]
+    assert all(route.fee_source_url is None for route in routes)
 
 
 def test_wise_route_has_its_fee_and_no_spread():
@@ -70,31 +73,94 @@ def test_bank_wire_spread_is_two_and_a_half_percent_of_the_amount():
     assert bank_wire.spread_cost == Decimal("12.50")
 
 
-@pytest.mark.parametrize("purpose", ["allowance", "family_support"])
-def test_in_to_sg_returns_one_open_upi_paynow_route(purpose):
+@pytest.mark.parametrize("purpose", ["maintenance_of_relatives_abroad", "gift"])
+def test_in_to_sg_returns_one_open_upi_paynow_route_for_the_rbi_purposes(purpose):
     routes = _quote("IN>SG", amount="25000", purpose=purpose)
 
     assert len(routes) == 1
     route = routes[0]
-    assert route.rail == "upi_paynow"
+    assert route.rail == "upi_paynow_sim"
     assert route.corridor == "IN>SG"
     assert route.amount == Decimal("25000")
-    assert route.currency_from == "INR"
-    assert route.currency_to == "SGD"
+    assert (route.currency_from, route.currency_to) == ("INR", "SGD")
     assert route.simulated is True
     assert route.status is RouteStatus.UP
     assert route.blocked_reason is None
-    assert route.rule_id is None
+    assert route.rule_id == "in_upi_paynow_purpose_001"
+    assert route.purpose == purpose
+    assert route.fee_source_url is None
+    assert route.rate_source == "fixture"
 
 
-@pytest.mark.parametrize("purpose", ["rent", "tuition", ""])
-def test_upi_paynow_is_blocked_with_reason_and_rule_for_other_purposes(purpose):
+@pytest.mark.parametrize("purpose", ["business", "rent", "allowance", "tuition", ""])
+def test_upi_paynow_is_blocked_for_any_other_purpose_naming_the_permitted_ones_and_the_entry(purpose):
     route = _quote("IN>SG", amount="25000", purpose=purpose)[0]
 
-    assert route.rail == "upi_paynow"
-    assert route.status is RouteStatus.UP
-    assert route.blocked_reason
+    assert route.rail == "upi_paynow_sim"
     assert route.rule_id == "in_upi_paynow_purpose_001"
+    assert "maintenance_of_relatives_abroad" in route.blocked_reason
+    assert "gift" in route.blocked_reason
+    assert "in_upi_paynow_purpose_001" in route.blocked_reason
+    assert repr(purpose) in route.blocked_reason
+
+
+def test_upi_paynow_is_open_at_the_daily_cap_and_blocked_above_it_citing_the_cap_entry():
+    at_cap = _quote("IN>SG", amount="60000", purpose="gift")[0]
+    above = _quote("IN>SG", amount="60000.01", purpose="gift")[0]
+
+    assert at_cap.blocked_reason is None
+    assert above.rule_id == "in_upi_paynow_cap_002"
+    assert "in_upi_paynow_cap_002" in above.blocked_reason
+    assert "60000 INR" in above.blocked_reason
+    assert above.limit_ok is False
+
+
+def test_a_wrong_purpose_above_the_cap_names_both_entries():
+    route = _quote("IN>SG", amount="70000", purpose="business")[0]
+
+    assert route.rule_id == "in_upi_paynow_purpose_001"
+    assert "in_upi_paynow_purpose_001" in route.blocked_reason
+    assert "in_upi_paynow_cap_002" in route.blocked_reason
+
+
+def test_cn_to_sg_tuition_is_blocked_because_nus_asks_for_flywire_or_convera():
+    route = _quote("CN>SG", amount="30000", purpose="tuition")[0]
+
+    assert route.rail == "cn_bank_remit_sim"
+    assert (route.currency_from, route.currency_to) == ("CNY", "SGD")
+    assert route.simulated is True
+    assert route.rule_id == "sg_nus_fee_payment_003"
+    for text in ("Flywire", "Convera", "no sourced rule", "direct bank remittance", "sg_nus_fee_payment_003", "cn_edu_remit_002"):
+        assert text in route.blocked_reason
+
+
+def test_cn_to_sg_funding_the_student_is_blocked_for_want_of_a_sourced_duration():
+    route = _quote("CN>SG", amount="30000", purpose="living_costs")[0]
+
+    assert route.rule_id == "cn_boc_anxin_009"
+    assert "no sourced duration" in route.blocked_reason
+    assert "cn_boc_anxin_009" in route.blocked_reason
+
+
+def test_cn_to_sg_for_any_other_purpose_is_blocked_with_no_sourced_rule():
+    route = _quote("CN>SG", amount="30000", purpose="rent")[0]
+
+    assert "no sourced rule" in route.blocked_reason
+    assert "'rent'" in route.blocked_reason
+
+
+def test_the_china_precheck_gives_the_bank_of_china_checklist_and_the_chinese_side_rules():
+    from rails.knowledge.loader import load_knowledge
+
+    entries = load_knowledge()
+    result = FakeRouter().precheck("remit_from_china", "cn_bank_remit_sim", {})
+
+    assert result.documents_likely == entries["cn_boc_anxin_009"]["values"]["documents"]
+    assert entries["cn_fx_quota_001"]["statement"] in result.review_triggers
+    assert entries["cn_cdd_004"]["statement"] in result.review_triggers
+    assert any("no sourced duration" in t and "cn_boc_anxin_009" in t for t in result.review_triggers)
+    assert result.rule_ids == ["cn_boc_anxin_009", "cn_fx_quota_001", "cn_cdd_004"]
+    assert result.ready is None
 
 
 @pytest.mark.parametrize("corridor", ["SG>IN", "SG>US"])

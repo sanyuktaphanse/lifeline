@@ -181,6 +181,10 @@ class Route(BaseModel):
     fee_source_url: str | None = None
     rate_source: str | None = None
     quoted_at: AwareDatetime
+    # Source: docs/decisions.md, 8 October 2026. A rail must see what it carries: the router names
+    # the purpose it quoted for, and the loop stamps the payee on the route it is about to pay.
+    purpose: str | None = None
+    payee_id: str | None = None
 
 
 class Receipt(BaseModel):
@@ -201,7 +205,9 @@ class TraceResult(BaseModel):
     receipt_id: str
     status: ReceiptStatus
     stage_entered_at: AwareDatetime
-    typical_duration_hours: Hours
+    # None when no entry gives a duration; typical_duration_source then names the entry and says so.
+    # Source: docs/decisions.md, 8 October 2026.
+    typical_duration_hours: Hours | None = None
     typical_duration_source: str
     next_steps: list[str]
     warnings: list[str]

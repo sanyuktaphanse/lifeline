@@ -24,6 +24,7 @@ from contracts.schemas import (
     Source,
     Tier,
     ToolCall,
+    TraceResult,
 )
 from core.tiers import TIERS
 
@@ -432,3 +433,24 @@ def test_rescue_states_run_from_s0_to_s9_and_done():
 def test_rescue_progress_refuses_an_unknown_next_step():
     with pytest.raises(ValidationError):
         RescueProgress(state_before=None, state_after=None, do_now="send_money_anywhere")
+
+
+def test_a_route_may_carry_the_purpose_and_the_payee_and_defaults_to_neither():
+    route = Route(**_route_fields())
+
+    assert (route.purpose, route.payee_id) == (None, None)
+    stamped = Route(**_route_fields(purpose="rent", payee_id="landlord_sp"))
+    assert (stamped.purpose, stamped.payee_id) == ("rent", "landlord_sp")
+
+
+def test_a_trace_may_have_no_sourced_duration():
+    trace = TraceResult(
+        receipt_id="cn_bank_remit_sim-0001",
+        status="in_transit",
+        stage_entered_at=NOW,
+        typical_duration_source="cn_boc_anxin_009: no sourced duration on file",
+        next_steps=[],
+        warnings=[],
+    )
+
+    assert trace.typical_duration_hours is None

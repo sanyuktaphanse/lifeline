@@ -1,0 +1,29 @@
+- id: in_upi_paynow_purpose_001
+  statement: "Through the UPI-PayNow linkage between India and Singapore, only person to person remittances for the purposes of 'Maintenance of Relatives Abroad' and 'Gift' are allowed, under the Liberalised Remittance Scheme, whose limits apply."
+  country: IN
+  rail: upi_paynow
+  kind: rule
+  source_url: "https://www.rbi.org.in/commonman/english/scripts/FAQs.aspx?Id=3415"
+  source_type: regulator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T18, X15, upi_paynow_sim]
+  values:
+    purposes: [maintenance_of_relatives_abroad, gift]
+  note: "The RBI page is dated 21 February 2023. Check the purposes are unchanged."
+- id: in_upi_paynow_cap_002
+  statement: "Cross border remittances through the UPI-PayNow linkage have a daily transaction limit of 60,000 rupees in a day, equivalent to around 1,000 Singapore dollars."
+  country: IN
+  rail: upi_paynow
+  kind: limit
+  source_url: "https://www.rbi.org.in/commonman/english/scripts/FAQs.aspx?Id=3415"
+  source_type: regulator
+  date_checked: 2026-10-08
+  checked_by: "CC"
+  second_check_by: ""
+  used_by: [T18, T19, upi_paynow_sim]
+  values:
+    daily_cap: 60000
+    currency: INR
+  note: "The RBI page is dated 21 February 2023. Check the cap is unchanged."

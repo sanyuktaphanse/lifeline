@@ -128,3 +128,17 @@ FROZEN_ACTION_TIERS = {
 def test_action_types_and_their_tiers_are_pinned():
     assert {kind.value: tier.value for kind, tier in TIERS.items()} == FROZEN_ACTION_TIERS
     assert [kind.value for kind in ActionType] == list(FROZEN_ACTION_TIERS)
+
+
+def test_route_and_trace_result_carry_the_pinned_fields():
+    from contracts.schemas import Route, TraceResult
+
+    assert list(Route.model_fields) == [
+        "rail", "corridor", "amount", "currency_from", "currency_to", "fee", "spread_cost", "tax_lines",
+        "arrival_hours", "status", "simulated", "limit_ok", "blocked_reason", "rule_id", "fee_source_url",
+        "rate_source", "quoted_at", "purpose", "payee_id",
+    ]
+    for name in ("purpose", "payee_id"):
+        assert Route.model_fields[name].default is None
+    assert TraceResult.model_fields["typical_duration_hours"].default is None
+    assert not TraceResult.model_fields["typical_duration_hours"].is_required()

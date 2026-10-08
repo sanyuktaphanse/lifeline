@@ -693,6 +693,7 @@ class AgentLoop:
         conversations: ConversationStore | None = None,
         council: Council | None = None,
         plans: dict[str, Plan] | None = None,
+        inbound_receipts: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self._adapter = adapter
         self._plans = dict(plans or {})
@@ -709,7 +710,11 @@ class AgentLoop:
         self._pending = pending
         self._history: dict[str, list[Action]] = {}
         self._turns: dict[str, int] = {}
-        self._receipt_rails: dict[str, dict[str, str]] = {}
+        # Money sent to a student, such as a parent's transfer: which rail holds each receipt. It is
+        # given on every start and never written to the ledger, because the student did not send it.
+        self._receipt_rails: dict[str, dict[str, str]] = {
+            user_id: dict(receipts) for user_id, receipts in (inbound_receipts or {}).items()
+        }
         self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
         self._store = ConversationStore() if conversations is None else conversations
         self._conversations: dict[str, list[Message]] = {}
@@ -1460,6 +1465,8 @@ class AgentLoop:
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
     ) -> Receipt | RailError:
+        # The one place a route learns its payee: a rail such as Pix must know who it is paying.
+        route = route.model_copy(update={"payee_id": action.payee_id})
         try:
             receipt = self._rails[route.rail].execute(route, mandate_ref, action.idempotency_key, token)
         except RailError as error:

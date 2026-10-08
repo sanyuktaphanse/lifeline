@@ -316,6 +316,10 @@ class Route(BaseModel):
     fee_source_url: str | None = None
     rate_source: str | None = None
     quoted_at: AwareDatetime
+    # Source: docs/decisions.md, 8 October 2026. A rail must see what it carries: the router names
+    # the purpose it quoted for, and the loop stamps the payee on the route it is about to pay.
+    purpose: str | None = None
+    payee_id: str | None = None
 
 
 class Receipt(BaseModel):
@@ -336,7 +340,9 @@ class TraceResult(BaseModel):
     receipt_id: str
     status: ReceiptStatus
     stage_entered_at: AwareDatetime
-    typical_duration_hours: Hours
+    # None when no entry gives a duration; typical_duration_source then names the entry and says so.
+    # Source: docs/decisions.md, 8 October 2026.
+    typical_duration_hours: Hours | None = None
     typical_duration_source: str
     next_steps: list[str]
     warnings: list[str]
@@ -1816,6 +1822,21 @@ from typing import Any
 
 from contracts.interfaces import Router
 from contracts.schemas import PrecheckResult, Route, RouteStatus
+from rails.sim.rules import (
+    CN_CDD_ENTRY,
+    CN_FUNDING_ENTRY,
+    CN_QUOTA_ENTRY,
+    LIVING_COSTS,
+    PIX_SCHEME_ENTRY,
+    TUITION,
+    UPI_CAP_ENTRY,
+    UPI_PURPOSE_ENTRY,
+    cn_documents,
+    cn_purpose_refusals,
+    entry,
+    no_duration,
+    upi_refusals,
+)
 
 # Every value below is a fixture for tests and the agent loop, not a published
 # fee, rate, or rule. Source: this file. Real quotes must come from a real rail.
@@ -1823,9 +1844,11 @@ FIXTURE_SOURCE = "fixture"
 WISE_FEE = Decimal("5.60")
 BANK_WIRE_FEE = Decimal("25")
 BANK_WIRE_SPREAD_PCT = Decimal("2.5")
-UPI_PAYNOW_PURPOSES = frozenset({"allowance", "family_support"})
-# Fake: written in the knowledge base id style, but no such entry exists in rails/knowledge/.
-FAKE_UPI_PAYNOW_PURPOSE_RULE = "in_upi_paynow_purpose_001"
+# Fixture: the simulated UPI to PayNow route's arrival time; no entry gives one.
+UPI_PAYNOW_HOURS = 1
+# Fixture: a China to Singapore route is always quoted blocked, because no entry gives a duration or
+# allows paying the institution; Route needs an arrival time, so zero stands for none.
+CN_BLOCKED_HOURS = 0
 CENT = Decimal("0.01")
 ```
 
@@ -1849,6 +1872,7 @@ class FakeRouter(Router):
                     fee=WISE_FEE,
                     arrival_hours=24,
                     simulated=False,
+                    purpose=purpose,
                 ),
                 self._route(
                     "sim_pix",
@@ -1859,6 +1883,8 @@ class FakeRouter(Router):
                     quoted_at,
                     arrival_hours=1,
                     simulated=True,
+                    rule_id=PIX_SCHEME_ENTRY,
+                    purpose=purpose,
                 ),
                 self._route(
                     "bank_wire",
@@ -1871,6 +1897,7 @@ class FakeRouter(Router):
                     spread_cost=(amount * BANK_WIRE_SPREAD_PCT / 100).quantize(CENT),
                     arrival_hours=72,
                     simulated=False,
+                    purpose=purpose,
                 ),
             ]
         if corridor == "SG>SG":
@@ -1885,26 +1912,46 @@ class FakeRouter(Router):
                     fee=WISE_DOMESTIC_FEE,
                     arrival_hours=WISE_DOMESTIC_HOURS,
                     simulated=False,
+                    purpose=purpose,
                 )
             ]
         if corridor == "IN>SG":
-            blocked = purpose not in UPI_PAYNOW_PURPOSES
+            # The router knows no earlier transfer, so it checks the cap for this amount alone; the
+            # rail checks the day's total when it pays.
+            refusals = upi_refusals(amount, "INR", purpose, Decimal(0))
             return [
                 self._route(
-                    "upi_paynow",
+                    "upi_paynow_sim",
                     corridor,
                     amount,
                     "INR",
                     "SGD",
                     quoted_at,
-                    arrival_hours=1,
+                    arrival_hours=UPI_PAYNOW_HOURS,
                     simulated=True,
-                    blocked_reason=(
-                        f"UPI to PayNow only carries allowance or family_support, not {purpose!r}."
-                        if blocked
-                        else None
-                    ),
-                    rule_id=FAKE_UPI_PAYNOW_PURPOSE_RULE if blocked else None,
+                    limit_ok=all(entry_id != UPI_CAP_ENTRY for entry_id, _ in refusals),
+                    blocked_reason=" ".join(reason for _, reason in refusals) or None,
+                    rule_id=refusals[0][0] if refusals else UPI_PURPOSE_ENTRY,
+                    purpose=purpose,
+                )
+            ]
+        if corridor == "CN>SG":
+            refusals = cn_purpose_refusals(purpose)
+            if purpose == LIVING_COSTS:
+                refusals = [(CN_FUNDING_ENTRY, f"Funding the student is a remittance to their own account. {no_duration(CN_FUNDING_ENTRY)}")]
+            return [
+                self._route(
+                    "cn_bank_remit_sim",
+                    corridor,
+                    amount,
+                    "CNY",
+                    "SGD",
+                    quoted_at,
+                    arrival_hours=CN_BLOCKED_HOURS,
+                    simulated=True,
+                    blocked_reason=" ".join(reason for _, reason in refusals),
+                    rule_id=refusals[0][0] if purpose in {LIVING_COSTS, TUITION} else None,
+                    purpose=purpose,
                 )
             ]
         return []
@@ -1916,6 +1963,21 @@ class FakeRouter(Router):
     def precheck(
         self, action_kind: str, provider: str, user_context: dict[str, Any]
     ) -> PrecheckResult:
+        if action_kind == "remit_from_china":
+            # What the entries say the Chinese side will ask for when funding the student, and the
+            # Chinese side's quota and identity rules. Nothing else, and no date.
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=cn_documents(),
+                review_triggers=[
+                    entry(CN_QUOTA_ENTRY)["statement"],
+                    entry(CN_CDD_ENTRY)["statement"],
+                    no_duration(CN_FUNDING_ENTRY),
+                ],
+                ready=None,
+                rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
         if action_kind != "enable_pix":
             return PrecheckResult(
                 provider=provider,
@@ -1949,6 +2011,8 @@ class FakeRouter(Router):
         spread_cost: Decimal = Decimal("0"),
         blocked_reason: str | None = None,
         rule_id: str | None = None,
+        limit_ok: bool = True,
+        purpose: str | None = None,
     ) -> Route:
         return Route(
             rail=rail,
@@ -1962,11 +2026,12 @@ class FakeRouter(Router):
             arrival_hours=arrival_hours,
             status=RouteStatus.UP,
             simulated=simulated,
-            limit_ok=True,
+            limit_ok=limit_ok,
             blocked_reason=blocked_reason,
             rule_id=rule_id,
             rate_source=FIXTURE_SOURCE,
             quoted_at=quoted_at,
+            purpose=purpose,
         )
 ```
 
@@ -3167,6 +3232,7 @@ class AgentLoop:
         conversations: ConversationStore | None = None,
         council: Council | None = None,
         plans: dict[str, Plan] | None = None,
+        inbound_receipts: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self._adapter = adapter
         self._plans = dict(plans or {})
@@ -3183,7 +3249,11 @@ class AgentLoop:
         self._pending = pending
         self._history: dict[str, list[Action]] = {}
         self._turns: dict[str, int] = {}
-        self._receipt_rails: dict[str, dict[str, str]] = {}
+        # Money sent to a student, such as a parent's transfer: which rail holds each receipt. It is
+        # given on every start and never written to the ledger, because the student did not send it.
+        self._receipt_rails: dict[str, dict[str, str]] = {
+            user_id: dict(receipts) for user_id, receipts in (inbound_receipts or {}).items()
+        }
         self._versions: dict[str, Mandate] = {mandate.id: mandate for mandate in mandates.values()}
         self._store = ConversationStore() if conversations is None else conversations
         self._conversations: dict[str, list[Message]] = {}
@@ -4000,6 +4070,8 @@ When no confirmation waits under the token for this student, and when a waiting 
     def _pay_on_route(
         self, user_id: str, trail: _Trail, action: Action, route: Route, mandate_ref: str, token: str
     ) -> Receipt | RailError:
+        # The one place a route learns its payee: a rail such as Pix must know who it is paying.
+        route = route.model_copy(update={"payee_id": action.payee_id})
         try:
             receipt = self._rails[route.rail].execute(route, mandate_ref, action.idempotency_key, token)
         except RailError as error:
@@ -5028,6 +5100,7 @@ from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
+from rails.inbound import inbound_from_fixture, seed_inbound
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -5350,17 +5423,20 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
         mandates = {USER: _mandate(fixtures.get("mandate", {}))}
+        rails = _rails(fixtures)
+        inbound = seed_inbound(rails, inbound_from_fixture(fixtures.get("inbound_receipts"), rails))
         loop = AgentLoop(
             adapter=adapter,
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
-            rails=_rails(fixtures),
+            rails=rails,
             mandates=mandates,
             balances={USER: balances},
             pending={},
             council=_council(fixtures),
             plans={USER: _plan(fixtures)},
+            inbound_receipts={USER: inbound},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
@@ -5610,6 +5686,7 @@ from core.ledger import JsonlLedger
 from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
+from rails.inbound import inbound_from_fixture, seed_inbound
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -5774,6 +5851,8 @@ def create_app(
     ledger = JsonlLedger(ledger_path or LEDGER_PATH)
     rails = rails if rails is not None else demo_rails(fixture.get("traces"))
     _restore_rails(rails, ledger)
+    # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
+    inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))
     loop = AgentLoop(
         adapter=adapter if adapter is not None else ProviderModelAdapter(),
         engine=DeterministicMandateEngine(),
@@ -5786,6 +5865,7 @@ def create_app(
         conversations=ConversationStore(conversations_path or CONVERSATIONS_PATH),
         council=council if council is not None else council_for(),
         plans={user_id: Plan.model_validate(fixture["plan"])},
+        inbound_receipts={user_id: inbound},
     )
     users = {user_id}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.

@@ -18,6 +18,7 @@ from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
+from rails.inbound import inbound_from_fixture, seed_inbound
 from rails.fake_router import FakeRouter
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -307,17 +308,20 @@ def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult
         fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
         balances = {currency: Decimal(amount) for currency, amount in fixtures.get("balances", FIXTURE_BALANCES).items()}
         mandates = {USER: _mandate(fixtures.get("mandate", {}))}
+        rails = _rails(fixtures)
+        inbound = seed_inbound(rails, inbound_from_fixture(fixtures.get("inbound_receipts"), rails))
         loop = AgentLoop(
             adapter=adapter,
             engine=DeterministicMandateEngine(),
             ledger=ledger,
             router=FakeRouter(),
-            rails=_rails(fixtures),
+            rails=rails,
             mandates=mandates,
             balances={USER: balances},
             pending={},
             council=_council(fixtures),
             plans={USER: _plan(fixtures)},
+            inbound_receipts={USER: inbound},
         )
         replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):

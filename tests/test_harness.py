@@ -499,3 +499,36 @@ def test_a_family_notice_expectation_fails_when_the_notice_lacks_a_sentence_or_i
 
     assert any("family notice does not contain 'Everything was fine.'" in f for f in results["T07"].runs[0].failures)
     assert any("no family notice was written" in f for f in results["T99"].runs[0].failures)
+
+
+def test_a_scenario_seeds_an_inbound_receipt_the_student_can_trace(tmp_path):
+    suites = _suites(tmp_path)
+    scenario = {
+        "id": "T07",
+        "fixtures": {
+            "inbound_receipts": {
+                "wise": [{"receipt_id": "wise-in-0001", "amount": "500", "currency": "SGD", "corridor": "SG>SG", "status": "in_transit", "sender": "parent", "sent_hours_ago": 30}]
+            },
+            "traces": {
+                "wise": [{"receipt_id": "wise-in-0001", "status": "in_transit", "typical_duration_hours": 24, "typical_duration_source": "fixture", "next_steps": ["Wait."], "warnings": []}]
+            },
+        },
+        "runs": [
+            {
+                "lang": "en",
+                "turns": [
+                    {
+                        "user": "My parent sent money and it has not arrived, receipt wise-in-0001",
+                        "model": [{"calls": [{"name": "trace_transfer", "arguments": {"receipt_id": "wise-in-0001"}}]}, {"text": "It is in transit."}],
+                        "expect": {"model_saw": []},
+                    }
+                ],
+                "expected": {"ledger": ["proposal", "decision", "execution"], "must_not_contain": ["No receipt"]},
+            }
+        ],
+    }
+    _write_scenario(suites, scenario)
+
+    result = _by_id(evaluate(suites, suites / "scenarios"))["T07"]
+
+    assert [run.failures for run in result.runs] == [[]]
