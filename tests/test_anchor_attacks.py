@@ -51,6 +51,13 @@ def _pay(client: TestClient, text: str = "Send 1,200 SGD rent to landlord_sp") -
     assert client.post("/confirm", json={"user_id": USER, "confirmation_token": token}).json()["receipt"]
 
 
+def _held(client: TestClient, text: str) -> None:
+    """A payment on a ledger that cannot be trusted is held, so it is never paid and never anchored.
+    Source: docs/decisions.md, 9 October 2026."""
+    token = client.post("/chat", json={"user_id": USER, "text": text}).json()["confirmation"]["confirmation_token"]
+    assert client.post("/confirm", json={"user_id": USER, "confirmation_token": token}).json()["receipt"] is None
+
+
 def _entries(path: Path) -> list[LedgerEntry]:
     return [LedgerEntry.model_validate_json(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
@@ -134,13 +141,12 @@ def test_a_tampered_ledger_is_never_anchored_so_a_later_payment_cannot_launder_i
     anchors = ledger_file.parent / "anchors.jsonl"
     lines_before = anchors.read_text(encoding="utf-8")
 
-    _pay(_client([_call(SMALL)]), "Send 50 SGD rent to landlord_sp")
+    _held(_client([_call(SMALL)]), "Send 50 SGD rent to landlord_sp")
 
     assert anchors.read_text(encoding="utf-8") == lines_before
-    entries = _entries(ledger_file)
-    skipped = [entry for entry in entries if entry.payload.get("kind") == "anchor_skipped"]
-    assert len(skipped) == 1
-    assert "does not match" in skipped[0].payload["reason"]
+    holds = [entry.payload for entry in _entries(ledger_file) if entry.payload.get("kind") == "ledger_integrity_hold"]
+    assert len(holds) == 1
+    assert "does not match" in holds[0]["reason"]
     assert _status()["verified"] is False
 
 
@@ -151,11 +157,11 @@ def test_a_broken_chain_is_never_anchored(ledger_file):
     anchors = ledger_file.parent / "anchors.jsonl"
     lines_before = anchors.read_text(encoding="utf-8")
 
-    _pay(_client([_call(SMALL)]), "Send 50 SGD rent to landlord_sp")
+    _held(_client([_call(SMALL)]), "Send 50 SGD rent to landlord_sp")
 
     assert anchors.read_text(encoding="utf-8") == lines_before
-    reasons = [entry.payload["reason"] for entry in _entries(ledger_file) if entry.payload.get("kind") == "anchor_skipped"]
-    assert reasons == ["The ledger chain breaks at entry 1, so its head is not anchored."]
+    reasons = [entry.payload["reason"] for entry in _entries(ledger_file) if entry.payload.get("kind") == "ledger_integrity_hold"]
+    assert reasons == ["The ledger chain breaks at entry 1."]
 
 
 def test_an_honest_ledger_with_several_anchors_still_verifies(ledger_file):

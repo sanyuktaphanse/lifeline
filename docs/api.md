@@ -18,6 +18,8 @@ CORS allows `http://localhost` and `http://127.0.0.1` on any port, for `GET` and
 
 ## Security: developer machines only
 
+When `LIFELINE_ENV` is `production` the API does not start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are both set to non empty values; the error names the variable that is missing.
+
 The server binds to `127.0.0.1` only, so no other machine can reach it. It has no sign in: anyone who can reach it can act as the demo student. Run it only on a developer's machine, and never expose it on a network. Authentication is out of scope for the hackathon.
 
 ## Persistence and restarts
@@ -34,7 +36,7 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 8. every rescue in progress, at the step it had reached, with the card it chose, the result of its freeze, and the backup card payments moved to, so a rescue can be finished after a restart.
 9. every overseas cash withdrawal the student recorded, which the cash cap reads from the ledger on every call, so the position after a restart is the fixture's starting position plus those withdrawals.
 
-The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on start the loop reads the time of the last anchor from the ledger, so the hourly anchor keeps its pace. The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete the three files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash.
+The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on start the loop reads the time of the last anchor from the ledger, so the hourly anchor keeps its pace. The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete the three files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash. A line that cannot be read at all, or a file saved without a final newline, also loads, and while the ledger fails verification every payment and confirmed action is paused, as `integrity_hold` in that response shows.
 
 ## Conventions
 
@@ -668,7 +670,7 @@ A line of `data/conversations.jsonl`, which the API never returns:
 
 ## GET /ledger/{user_id}/verify
 
-Checks the whole hash chain and the latest anchor of its head. `first_broken_seq` is `null` when every entry is intact, or the sequence number of the first entry that was changed. `anchor` says whether the ledger head has been anchored and whether that anchor still checks.
+Checks the whole hash chain and the latest anchor of its head. `first_broken_seq` is `null` when every entry is intact, or the sequence number of the first entry that was changed, cannot be read, or is out of its place. `anchor` says whether the ledger head has been anchored and whether that anchor still checks. `integrity_hold` is `null` when payments and confirmed actions may go ahead; otherwise it holds `first_broken_seq`, which is `null` when the anchor store disagrees with the ledger, and `reason`, and every `/confirm`, confirmed rescue step, rescue reroute and standing run is refused until the API restarts on a clean file, while reads go on. A card freeze is the one exception: it goes through, with the hold note written beside it, so a student can still freeze a lost card. `development_secrets` lists `LIFELINE_ANCHOR_SECRET` or `LIFELINE_CONFIRM_SECRET` when that secret is unset and its public development value signs, so anyone could forge an anchor line or a token; it is always empty in production, where the API does not start without both.
 
 The loop anchors the head after every payment, new payee, card freeze or new standing mandate, and at least once an hour while the app is in use. An anchor is a signed line in `data/anchors.jsonl`, outside the ledger, holding only the head hash, its sequence number, a hash of the student's id, and the time. Anyone holding a copy of the ledger can recompute the hash of entry `head_seq` and compare it with `head_hash`.
 
@@ -680,7 +682,9 @@ Response `200` before anything has been anchored:
   "anchor": {
     "anchored": false,
     "kind": "local"
-  }
+  },
+  "integrity_hold": null,
+  "development_secrets": []
 }
 ```
 
@@ -697,9 +701,35 @@ Response `200` after a confirmed payment:
     "matches_ledger": true,
     "anchored_at": "2026-10-08T11:44:57.806133+00:00",
     "kind": "local"
-  }
+  },
+  "integrity_hold": null,
+  "development_secrets": []
 }
 ```
+
+Response `200` on a ledger file whose first entry was edited, after the API restarted on it and a payment was confirmed. The anchor still verifies, because the anchored head, entry 7, was not edited; the break is in the chain before it:
+
+```json
+{
+  "first_broken_seq": 1,
+  "anchor": {
+    "anchored": true,
+    "head_hash": "181015737286cc52a7bf73c6161fd5543e50a772867666888bf4f3065ec598f1",
+    "head_seq": 7,
+    "verified": true,
+    "matches_ledger": true,
+    "anchored_at": "2026-10-08T21:18:39.385717+00:00",
+    "kind": "local"
+  },
+  "integrity_hold": {
+    "first_broken_seq": 1,
+    "reason": "The ledger chain breaks at entry 1."
+  },
+  "development_secrets": []
+}
+```
+
+The confirmation was answered with `receipt` null and the text "Lifeline has paused every payment and confirmed action, because its ledger failed verification at entry 1. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean.", and the ledger holds a note of kind `ledger_integrity_hold` with `first_broken_seq`, `reason` and the `idempotency_key` of the confirmation it held.
 
 | Field | Meaning |
 | --- | --- |
@@ -979,7 +1009,7 @@ A standing mandate is a recurring transfer the student confirms once, such as mo
 1. While the API runs, it checks for due runs once a minute. It needs no request from the app, and it writes to the ledger and to the server's log.
 2. `POST /standing/run_due` makes the same check at a chosen time, for demos and tests. It is refused with `403` when `LIFELINE_ENV` is `production`, because choosing the time would let a caller bring a run forward.
 
-Each check returns standing events. The first check inside a run's window gives a `notice`, with the time until which the student can cancel; the app should show it. Once that window has passed, a later check gives a `run`, with the decision under rule R12 and the receipt. The other kinds are `skipped` for a cancelled run, `needs_student` for a run the mandate engine would not allow without the student, and `rail_failed` when no route could pay. A student cancels a run, or stops a standing mandate for good, through `/chat`.
+Each check returns standing events. The first check inside a run's window gives a `notice`, with the time until which the student can cancel; the app should show it. Once that window has passed, a later check gives a `run`, with the decision under rule R12 and the receipt. The other kinds are `skipped` for a cancelled run, `needs_student` for a run the mandate engine would not allow without the student, `rail_failed` when no route could pay, and `held` for a run not paid because the ledger is under the integrity hold. A student cancels a run, or stops a standing mandate for good, through `/chat`.
 
 A run's receipt names the mandate version it was paid under in `mandate_ref`, like every receipt, and the standing mandate in `standing_mandate_id`. Every other receipt has `standing_mandate_id` null.
 

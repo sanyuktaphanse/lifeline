@@ -37,11 +37,12 @@ from contracts.schemas import (
     TraceResult,
 )
 from core.agent import AgentLoop
-from core.anchor_local import anchor_for
+from core.anchor_local import ANCHOR_SECRET_VAR, LocalSignedAnchor, anchor_for
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
 from core.ledger import JsonlLedger
-from core.mandate import DeterministicMandateEngine
+from core.mandate import CONFIRM_SECRET_VAR, DeterministicMandateEngine
+from core.mandate import uses_development_secret as uses_confirm_development_secret
 from core.monthly import is_month
 from core.reminders import reminders_of, split
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
@@ -133,6 +134,11 @@ class VerifyResult(BaseModel):
     # AgentLoop.anchor_status: anchored false and the kind when there is no anchor, else the latest
     # anchored head, its sequence, whether the anchor store verifies it, its time, and the kind.
     anchor: dict[str, Any]
+    # AgentLoop.integrity_hold: None when every execution may go ahead, else the first broken entry, or None
+    # for an anchor store that disagrees, and the reason. Source: docs/decisions.md, 9 October 2026.
+    integrity_hold: dict[str, Any] | None
+    # The secrets this process signs with their public development value, by variable name.
+    development_secrets: list[str]
 
 
 class Health(BaseModel):
@@ -214,24 +220,31 @@ def _demo_mandate(fixture: dict[str, Any], ledger: Ledger) -> Mandate:
     )
 
 
-def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> None:
+def _restore_rails(rails: dict[str, FakeRail], ledger: Ledger) -> tuple[int, str] | None:
+    """Restore the fake rails' receipts from the ledger. The first entry that cannot be read stops the restore,
+    and its sequence and error are returned, so the loop holds every execution on it. Source: docs/decisions.md,
+    9 October 2026."""
     paid: dict[str, dict[str, Any]] = {}
     for entry in ledger.entries():
-        if entry.kind == "execution" and "route" in entry.payload:
-            paid[entry.payload["idempotency_key"]] = entry.payload
-        elif entry.kind == "receipt" and entry.payload.get("rail") in rails:
-            receipt = Receipt.model_validate(entry.payload["receipt"])
-            execution = paid[receipt.idempotency_key]
-            route = Route.model_validate(execution["route"])
-            rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
-        elif (
-            entry.kind == "note"
-            and entry.payload.get("kind") == "cancel_result"
-            and entry.payload.get("status") == "done"
-            and entry.payload.get("rail") in rails
-        ):
-            # A cancel the rail carried out stays carried out after a restart.
-            rails[entry.payload["rail"]].mark_cancelled(entry.payload["receipt_id"])
+        try:
+            if entry.kind == "execution" and "route" in entry.payload:
+                paid[entry.payload["idempotency_key"]] = entry.payload
+            elif entry.kind == "receipt" and entry.payload.get("rail") in rails:
+                receipt = Receipt.model_validate(entry.payload["receipt"])
+                execution = paid[receipt.idempotency_key]
+                route = Route.model_validate(execution["route"])
+                rails[entry.payload["rail"]].restore(receipt, route, execution["mandate_ref"])
+            elif (
+                entry.kind == "note"
+                and entry.payload.get("kind") == "cancel_result"
+                and entry.payload.get("status") == "done"
+                and entry.payload.get("rail") in rails
+            ):
+                # A cancel the rail carried out stays carried out after a restart.
+                rails[entry.payload["rail"]].mark_cancelled(entry.payload["receipt_id"])
+        except (KeyError, TypeError, ValueError) as error:  # anti-pattern: SILENT-EXCEPT ok, the error is returned and the loop holds on it
+            return entry.seq, f"{type(error).__name__}: {error}"
+    return None
 
 
 def _without_tokens[R: AgentReply](reply: R) -> R:
@@ -249,6 +262,27 @@ def _event_without_tokens(event: StandingEvent) -> StandingEvent:
     if event.decision is None:
         return event
     return event.model_copy(update={"decision": event.decision.model_copy(update={"confirmation_token": None})})
+
+
+def development_secrets() -> list[str]:
+    """The secrets that fall back to their public development value, which anyone can sign with."""
+    names = []
+    if LocalSignedAnchor.uses_development_secret():
+        names.append(ANCHOR_SECRET_VAR)
+    if uses_confirm_development_secret():
+        names.append(CONFIRM_SECRET_VAR)
+    return names
+
+
+def require_production_secrets() -> None:
+    """In production the API does not start when a secret is missing or empty, so no token or anchor is ever
+    signed with an empty key or a public one. Source: docs/decisions.md, 9 October 2026."""
+    environment(None)
+    if os.environ.get("LIFELINE_ENV") != "production":
+        return
+    for name in (CONFIRM_SECRET_VAR, ANCHOR_SECRET_VAR):
+        if not os.environ.get(name):
+            raise RuntimeError(f"{name} must be set to a non empty value when LIFELINE_ENV is production, so the API did not start.")
 
 
 def council_for(env: Mapping[str, str] | None = None) -> FiveVoiceCouncil | None:
@@ -275,6 +309,7 @@ def create_app(
     anchor: Anchor | None = None,
     parent_fixture_path: Path | None = DEMO_PARENT,
 ) -> FastAPI:
+    require_production_secrets()
     fixture = _load_fixture(fixture_path)
     parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
@@ -294,7 +329,7 @@ def create_app(
     fixture = {**fixture, "inbound_receipts": {
         key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
     }}
-    _restore_rails(rails, ledger)
+    unreadable = _restore_rails(rails, ledger)
     # The demo student first, then the parent when its fixture exists.
     people = [fixture, *([parent] if parent is not None else [])]
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
@@ -318,6 +353,8 @@ def create_app(
         anchor=anchor,
         chinese_cards={user_id: fixture.get("chinese_cards") or []},
     )
+    if unreadable is not None:
+        loop.hold_unreadable(*unreadable)
     users = {person["user_id"] for person in people}
     # Requests run in worker threads and the tick on the event loop; the agent loop is not thread safe.
     lock = threading.Lock()
@@ -442,7 +479,12 @@ def create_app(
     def verify(user: str) -> VerifyResult:
         known(user)
         with lock:
-            return VerifyResult(first_broken_seq=ledger.verify(), anchor=loop.anchor_status())
+            return VerifyResult(
+                first_broken_seq=ledger.verify(),
+                anchor=loop.anchor_status(),
+                integrity_hold=loop.integrity_hold(),
+                development_secrets=development_secrets(),
+            )
 
     @app.post("/trace")
     def trace(request: TraceRequest) -> TraceResult:
