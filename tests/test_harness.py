@@ -15,7 +15,7 @@ from core.harness import (
 
 SCENARIOS = {
     "T01", "T02", "T05", "T06", "T07", "T08", "T09", "T10", "T11", "T12", "T13", "T14",
-    "T15", "T16", "T17", "T18", "T19", "T20", "T21", "T22", "T23", "T26", "T29", "T31", "T32", "T34", "T35", "T36", "T37", "T38", "X01", "X02", "X03", "X04", "X05",
+    "T15", "T16", "T17", "T18", "T19", "T20", "T21", "T22", "T23", "T26", "T29", "T30", "T31", "T32", "T34", "T35", "T36", "T37", "T38", "X01", "X02", "X03", "X04", "X05",
     "X06", "X07", "X08", "X09", "X10", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20",
     "X21", "X22", "X23", "X24", "X26", "X27", "X28",
 }
@@ -675,3 +675,13 @@ def test_a_reply_carrying_a_cancel_result_is_of_kind_cancel():
     reply = AgentReply(text="Done.", lang="en", cancel=CancelResult(status=CancelStatus.DONE), ledger_seqs=[])
 
     assert reply_kind(reply) == "cancel"
+
+
+def test_a_council_fixture_may_script_several_deliberations_five_replies_each():
+    from core.harness import _council
+
+    reply = '{"position": "wise", "confidence": 0.8, "reason": "Wise.", "evidence": ["wise"]}'
+
+    assert _council({"council": [reply] * 10}) is not None
+    with pytest.raises(ValueError):
+        _council({"council": [reply] * 7})

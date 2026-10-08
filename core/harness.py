@@ -250,7 +250,7 @@ def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
 
 
 def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
-    """The council a scenario asks for, with one scripted reply per voice.
+    """The council a scenario asks for, with one scripted reply per voice for each deliberation.
 
     Without `fixtures.council` the loop is built with no council at all, which is how every
     scenario written before the council ran and still runs.
@@ -258,10 +258,12 @@ def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
     scripted = fixtures.get("council")
     if scripted is None:
         return None
-    if len(scripted) != len(VOICES):
+    # One reply for each voice, in the order of VOICES, for each deliberation the run convenes, consumed in
+    # order: a run whose rent and allowance both escalate scripts ten.
+    if not scripted or len(scripted) % len(VOICES):
         raise ValueError(
             f"council scripts {len(scripted)} voices, and it needs one for each of "
-            f"{', '.join(VOICES)}"
+            f"{', '.join(VOICES)} in every deliberation"
         )
     return FiveVoiceCouncil(FakeModelAdapter(scripted))
 
