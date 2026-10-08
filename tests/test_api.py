@@ -741,3 +741,10 @@ def test_create_app_takes_sim_rails_explicitly(monkeypatch):
 
 def test_env_example_names_sim_rails():
     assert "SIM_RAILS=" in (Path(DEMO_FIXTURE).parent.parent / ".env.example").read_text(encoding="utf-8")
+
+
+def test_the_api_runs_sim_pix_as_the_pix_rail_with_the_fixture_keys():
+    rail = _client().app.state.loop._rails["sim_pix"]
+
+    assert type(rail).__name__ == "PixSimRail"
+    assert rail.pix_key_on_file == frozenset({"landlord_sp"})

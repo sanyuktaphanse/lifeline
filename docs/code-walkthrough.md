@@ -5101,6 +5101,7 @@ from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
@@ -5143,7 +5144,7 @@ FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
 # The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
 FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False, "upi_paynow_sim": True}
 # The simulated rails, each built with the script a scenario chooses in fixtures.rail_scripts.
-SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail}
+SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail, "sim_pix": PixSimRail}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 ```
@@ -5229,8 +5230,11 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
     if not_simulated:
         raise ValueError(f"rail_scripts names {not_simulated}, which are not simulated rails")
+    demo = load_suite(DEMO_FIXTURE)
+    # What a simulated rail is built with beyond its script, from the scenario or else the demo fixture.
+    built_with = {"sim_pix": {"pix_key_on_file": fixtures.get("pix_key_on_file", demo["pix_key_on_file"])}}
     return {
-        name: SIM_RAILS[name](script=scripts.get(name, "normal"))
+        name: SIM_RAILS[name](script=scripts.get(name, "normal"), **built_with.get(name, {}))
         if name in SIM_RAILS
         else FakeRail(
             traces.get(name),
@@ -5699,6 +5703,7 @@ from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
@@ -5783,23 +5788,22 @@ class Health(BaseModel):
 Each request body is a pydantic model, so FastAPI rejects a missing field, a wrong type, or text that is empty or too long with a `422` before any code runs. `pasted_text` is optional; when present it must hold at least one character. `lang` is optional on `/chat` and `/confirm`. `VerifyResult` wraps the first broken sequence number in an object, so an intact ledger answers `{"first_broken_seq": null}` rather than a bare `null`. `RunDueRequest` takes the time to run the check at; `AwareDatetime` refuses a time without a time zone with a `422`. `RescueStartRequest` takes a trigger from `RescueTrigger`, so any other value is a `422`, and the student's words; `RescueStepRequest` takes text that may be empty, because a step that only confirms or continues has nothing to say, and an optional token.
 
 ```python
-def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None, sim_rails: bool = True) -> dict[str, Any]:
+def demo_rails(
+    traces: dict[str, list[dict[str, Any]]] | None = None,
+    sim_rails: bool = True,
+    pix_key_on_file: list[str] | None = None,
+) -> dict[str, Any]:
     scripted = scripted_traces(traces)
     rails: dict[str, Any] = {
         "wise": FakeRail(scripted.get("wise"), name="wise", simulated=False),
         "bank_wire": FakeRail(scripted.get("bank_wire"), name="bank_wire", simulated=False),
-        "sim_pix": FakeRail(scripted.get("sim_pix"), name="sim_pix", simulated=True),
+        "sim_pix": PixSimRail(pix_key_on_file=pix_key_on_file or ()),
         "revolut": FakeRail(scripted.get("revolut"), name="revolut", simulated=False),
     }
     if sim_rails:
         # The API always runs the normal script; a scenario chooses others through the harness.
         rails["upi_paynow_sim"] = UpiPayNowSimRail()
     return rails
-
-
-def sim_rails_on(env: Mapping[str, str] | None = None) -> bool:
-    """Whether the API registers the simulated rails beyond Pix: on unless SIM_RAILS turns them off."""
-    return environment(env).get("SIM_RAILS", "").strip().casefold() not in SIM_RAILS_OFF
 ```
 
 `demo_rails` builds the same four fake rails as the harness, named after the routes they stand for, and gives each the traces the fixture scripts for it. The traces themselves are built by `scripted_traces` in `rails/fake_rail.py`, which the harness imports too, so a scenario's `traces` fixture and `fixtures/demo_user.yaml` have exactly one meaning between them. A test passes its own rails, such as a Wise rail that fails once.
@@ -5875,7 +5879,11 @@ def create_app(
     user_id = fixture["user_id"]
     ledger = JsonlLedger(ledger_path or LEDGER_PATH)
     if rails is None:
-        rails = demo_rails(fixture.get("traces"), sim_rails_on() if sim_rails is None else sim_rails)
+        rails = demo_rails(
+            fixture.get("traces"),
+            sim_rails_on() if sim_rails is None else sim_rails,
+            fixture.get("pix_key_on_file"),
+        )
     _restore_rails(rails, ledger)
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))

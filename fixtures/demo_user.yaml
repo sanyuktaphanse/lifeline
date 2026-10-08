@@ -18,6 +18,8 @@ valid_days: 365
 balances:
   SGD: "2300"
   BRL: "150"
+# Fixture: the payees who have a Pix key on file, by payee id. The key itself is never held here.
+pix_key_on_file: [landlord_sp]
 # Scripted traces per rail, so a trace of the first Wise receipt has an answer.
 # The rail stamps stage_entered_at from its own receipt, so the fixture gives no time.
 traces:

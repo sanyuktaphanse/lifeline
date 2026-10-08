@@ -44,6 +44,7 @@ from core.mandate import DeterministicMandateEngine
 from core.model_adapter import ModelAdapterError, ProviderModelAdapter, council_adapter, environment
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
@@ -122,12 +123,16 @@ class Health(BaseModel):
     status: str
 
 
-def demo_rails(traces: dict[str, list[dict[str, Any]]] | None = None, sim_rails: bool = True) -> dict[str, Any]:
+def demo_rails(
+    traces: dict[str, list[dict[str, Any]]] | None = None,
+    sim_rails: bool = True,
+    pix_key_on_file: list[str] | None = None,
+) -> dict[str, Any]:
     scripted = scripted_traces(traces)
     rails: dict[str, Any] = {
         "wise": FakeRail(scripted.get("wise"), name="wise", simulated=False),
         "bank_wire": FakeRail(scripted.get("bank_wire"), name="bank_wire", simulated=False),
-        "sim_pix": FakeRail(scripted.get("sim_pix"), name="sim_pix", simulated=True),
+        "sim_pix": PixSimRail(pix_key_on_file=pix_key_on_file or ()),
         "revolut": FakeRail(scripted.get("revolut"), name="revolut", simulated=False),
     }
     if sim_rails:
@@ -215,7 +220,11 @@ def create_app(
     user_id = fixture["user_id"]
     ledger = JsonlLedger(ledger_path or LEDGER_PATH)
     if rails is None:
-        rails = demo_rails(fixture.get("traces"), sim_rails_on() if sim_rails is None else sim_rails)
+        rails = demo_rails(
+            fixture.get("traces"),
+            sim_rails_on() if sim_rails is None else sim_rails,
+            fixture.get("pix_key_on_file"),
+        )
     _restore_rails(rails, ledger)
     # A parent's transfer to the student is seeded on every start from the fixture, never from the ledger.
     inbound = seed_inbound(rails, inbound_from_fixture(fixture.get("inbound_receipts"), rails))

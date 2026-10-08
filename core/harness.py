@@ -19,6 +19,7 @@ from core.mandate import DeterministicMandateEngine
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
+from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
 
@@ -61,7 +62,7 @@ FIXTURE_BALANCES = {"SGD": "2300", "BRL": "150"}
 # The rails a scenario can ask for, and which of them is a simulation. Source: this file, matching api/main.py.
 FIXTURE_RAILS = {"wise": False, "bank_wire": False, "sim_pix": True, "revolut": False, "upi_paynow_sim": True}
 # The simulated rails, each built with the script a scenario chooses in fixtures.rail_scripts.
-SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail}
+SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail, "sim_pix": PixSimRail}
 # Long enough to cover a standing run that falls due up to two months ahead.
 FIXTURE_VALIDITY = timedelta(days=70)
 
@@ -141,8 +142,11 @@ def _rails(fixtures: dict[str, Any]) -> dict[str, Any]:
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
     if not_simulated:
         raise ValueError(f"rail_scripts names {not_simulated}, which are not simulated rails")
+    demo = load_suite(DEMO_FIXTURE)
+    # What a simulated rail is built with beyond its script, from the scenario or else the demo fixture.
+    built_with = {"sim_pix": {"pix_key_on_file": fixtures.get("pix_key_on_file", demo["pix_key_on_file"])}}
     return {
-        name: SIM_RAILS[name](script=scripts.get(name, "normal"))
+        name: SIM_RAILS[name](script=scripts.get(name, "normal"), **built_with.get(name, {}))
         if name in SIM_RAILS
         else FakeRail(
             traces.get(name),

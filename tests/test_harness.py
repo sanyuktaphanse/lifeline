@@ -588,3 +588,18 @@ def test_a_script_or_a_failure_for_the_wrong_rail_is_refused(fixtures, message):
 
     with pytest.raises(ValueError, match=message):
         _rails(fixtures)
+
+
+def test_the_harness_builds_sim_pix_as_the_pix_rail_with_the_demo_keys():
+    from core.harness import _rails
+
+    rails = _rails({})
+
+    assert type(rails["sim_pix"]).__name__ == "PixSimRail"
+    assert "landlord_sp" in rails["sim_pix"].pix_key_on_file
+
+
+def test_a_scenario_chooses_which_payees_have_a_pix_key():
+    from core.harness import _rails
+
+    assert _rails({"pix_key_on_file": ["landlord_two"]})["sim_pix"].pix_key_on_file == frozenset({"landlord_two"})
