@@ -52,6 +52,7 @@ from core.anchor_local import LocalSignedAnchor
 from core.conversation_store import REMEMBERED_FIELDS, ConversationStore
 from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
+from core.monthly import is_month, month_of, previous_month, render, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
@@ -187,6 +188,8 @@ ROLE_WORDS: dict[str, list[str]] = {
 TRUE_WORDS = frozenset({"true", "yes", "y", "on", "1", "sim", "是", "对"})
 # How a list of senders written as one string is split.
 SENDER_SPLIT = re.compile(r"\s*(?:,|;|/|、|，|和|&|\band\b|\be\b)\s*")
+# The note the tick writes once for each student and each month that has ended.
+MONTHLY_NOTE = "monthly_note"
 # The note a restart writes for a plan update the plan given on start can no longer hold.
 PLAN_UPDATE_SKIPPED = "plan_update_skipped"
 # What the cash cap tool always asks the router, whatever the model passes. Source: docs/decisions.md, 8 October 2026.
@@ -274,6 +277,13 @@ TOOLS = [
         [],
     ),
     _tool(
+        "monthly_summary",
+        "Summarise the student's ledger for a calendar month written YYYY-MM, or the current month: transfers "
+        "sent with their totals and fees, standing runs, anything failed, returned or cancelled, and refusals.",
+        {"month": TEXT},
+        [],
+    ),
+    _tool(
         "cancel_transfer",
         "Cancel one of the student's own transfers that is still pending, by receipt id. Nothing changes until "
         "the student confirms it, and a transfer that has moved on cannot be cancelled.",
@@ -332,6 +342,7 @@ TOOL_ACTIONS = {
     "cash_cap_status": ActionType.PRECHECK,
     "update_plan": ActionType.UPDATE_PLAN,
     "cancel_transfer": ActionType.CANCEL_TRANSFER,
+    "monthly_summary": ActionType.MONTHLY_SUMMARY,
 }
 # Tools an app may run directly, without the model: they only read, so they are tier T0.
 DIRECT_TOOLS = ("trace_transfer", "precheck")
@@ -1062,6 +1073,8 @@ class AgentLoop:
         self._standing_cancelled: set[tuple[str, str, str]] = set()
         self._standing_attempted: set[tuple[str, str, str]] = set()
         self._standing_skipped: set[tuple[str, str, str]] = set()
+        # The months a monthly note was already written for, per student, rebuilt from the ledger.
+        self._monthly_noted: set[tuple[str, str]] = set()
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -1128,6 +1141,9 @@ class AgentLoop:
         else:
             source = Source.PASTED_TEXT if message.source is Source.USER_TURN else message.source
             student = message.model_copy(update={"role": Role.USER, "source": source})
+        # The memory keeps the language the loop answered in, so a note written later, with no turn to
+        # detect it from, is in the student's language. Source: docs/decisions.md, 8 October 2026.
+        student = student.model_copy(update={"lang": lang})
         turn_messages = [_remembered(student)] + ([_remembered(pasted)] if pasted is not None else [])
         history = self._conversations.get(user_id, [])
         for earlier in [*history, *turn_messages]:
@@ -1280,6 +1296,9 @@ class AgentLoop:
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
+        if "summary" in result:
+            # The figures the student hears are the code's, from the ledger, never the model's.
+            trail.notices.append(render(result["summary"], lang))
         if action.type is ActionType.VERIFY_LEDGER:
             skipped = self._skipped_fields(user_id)
             if skipped:
@@ -1348,6 +1367,11 @@ class AgentLoop:
             return self._ledger_report(user_id, action.requested_at)
         if action.type is ActionType.UPDATE_PLAN:
             return self._update_plan(user_id, action)
+        if action.type is ActionType.MONTHLY_SUMMARY:
+            month = str(arguments.get("month") or month_of(action.requested_at)).strip()
+            if not is_month(month):
+                return {"error": f"A month is written YYYY-MM, such as {month_of(action.requested_at)}."}
+            return {"summary": summarize(self._ledger.entries(), user_id, month)}
         return {"error": f"No runner for {action.type.value}."}
 
     def _skipped_fields(self, user_id: str) -> list[str]:
@@ -1931,6 +1955,37 @@ class AgentLoop:
                     events.append(self._run_standing(user_id, standing, period, now, event))
             self._anchor_if_due(user_id)
         return events
+
+    def _student_lang(self, user_id: str) -> str:
+        """The language of the student's latest turn in memory, English when there is none."""
+        for message in reversed(self._conversations.get(user_id, [])):
+            if _from_student(message):
+                return message.lang if message.lang in TEXTS else "en"
+        return "en"
+
+    def write_monthly_notes(self, now: datetime) -> list[dict[str, Any]]:
+        """On the first call in a new month, write each student's note for the month that ended.
+
+        The month is read from the time given, never the clock, so the tick and a test choose it. A note is
+        written once per student and month, survives a restart through the ledger, and calls no model.
+        Nothing is sent; the app shows the note. A student with no entry by that month gets none.
+        """
+        month = previous_month(month_of(now))
+        written: list[dict[str, Any]] = []
+        entries = self._ledger.entries()
+        for user_id, mandate in list(self._mandates.items()):
+            if (user_id, month) in self._monthly_noted:
+                continue
+            if not any(e.payload.get("user_id") == user_id and month_of(e.ts) <= month for e in entries):
+                continue
+            lang = self._student_lang(user_id)
+            summary = summarize(entries, user_id, month)
+            note = {"kind": MONTHLY_NOTE, "month": month, "lang": lang, "text": render(summary, lang), "summary": summary}
+            self._write(self._attempt_trail(user_id, mandate), "note", note)
+            self._monthly_noted.add((user_id, month))
+            written.append(note)
+            self._anchor_if_due(user_id)
+        return written
 
     def _run_standing(
         self, user_id: str, standing: StandingMandate, period: str, now: datetime, event: dict[str, Any]
@@ -2990,6 +3045,8 @@ class AgentLoop:
             elif entry.kind == "note" and entry.payload.get("kind") == "standing_notice":
                 key = (user_id, entry.payload["standing_mandate_id"], entry.payload["period"])
                 self._standing_notices[key] = datetime.fromisoformat(entry.payload["noticed_at"])
+            elif entry.kind == "note" and entry.payload.get("kind") == MONTHLY_NOTE:
+                self._monthly_noted.add((user_id, str(entry.payload.get("month"))))
             elif entry.kind == "note" and entry.payload.get("kind") == "standing_skipped":
                 self._standing_skipped.add((user_id, entry.payload["standing_mandate_id"], entry.payload["period"]))
             if entry.kind == "proposal" and "standing_run" in entry.payload:

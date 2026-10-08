@@ -865,3 +865,25 @@ def test_a_done_cancel_survives_a_restart_of_the_api(tmp_path):
     trace = second.post("/trace", json={"user_id": USER, "receipt_id": "wise-0001"}).json()
 
     assert trace["status"] == "returned"
+
+
+def test_the_scheduler_writes_the_monthly_note_once_on_the_first_run_in_a_new_month():
+    from datetime import datetime, timedelta, timezone
+
+    from core.monthly import month_of
+
+    client = _client([_call("propose_transfer", RENT)])
+    token = _propose(client)
+    client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
+    month = month_of(datetime.now(timezone.utc))
+    year, number = (int(part) for part in month.split("-"))
+    first = datetime(year + number // 12, number % 12 + 1, 1, tzinfo=timezone.utc)
+
+    for minutes in (0, 1):
+        response = client.post("/standing/run_due", json={"now": (first + timedelta(minutes=minutes)).isoformat()})
+        assert response.status_code == 200
+
+    notes = [e["payload"] for e in client.get(f"/ledger/{USER}").json() if e["payload"].get("kind") == "monthly_note"]
+    assert len(notes) == 1
+    assert notes[0]["month"] == month
+    assert "1 sent on SG>BR, total 1200 SGD" in notes[0]["text"]

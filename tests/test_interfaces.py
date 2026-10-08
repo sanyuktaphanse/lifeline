@@ -125,6 +125,7 @@ FROZEN_ACTION_TIERS = {
     "verify_ledger": "T0",
     "update_plan": "T1",
     "cancel_transfer": "T2",
+    "monthly_summary": "T0",
 }
 
 

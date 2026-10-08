@@ -57,6 +57,7 @@ class ActionType(str, Enum):
     VERIFY_LEDGER = "verify_ledger"
     UPDATE_PLAN = "update_plan"
     CANCEL_TRANSFER = "cancel_transfer"
+    MONTHLY_SUMMARY = "monthly_summary"
 
 
 class RouteStatus(str, Enum):

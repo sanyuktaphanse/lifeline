@@ -285,7 +285,10 @@ def create_app(
 
     def run_due(now: datetime) -> list[StandingEvent]:
         with lock:
-            return [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+            events = [_event_without_tokens(event) for event in loop.run_due_standing_mandates(now)]
+            # The first tick in a new month writes each student's note for the month that ended, once.
+            loop.write_monthly_notes(now)
+            return events
 
     async def tick() -> None:
         while True:
