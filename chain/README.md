@@ -31,6 +31,10 @@ FISCO_KEY_PATH=<this folder>/anchor.key
 
 `core/anchor_fisco.py` tries two routes, each behind a small adapter a test can fake. The first is the FISCO BCOS Python SDK, which is not on PyPI and is not installed here, so it reports itself unavailable. The second is the node's native JSON RPC. A transaction is built in FISCO BCOS's TARS format, hashed and signed with secp256k1 in pure Python by `core/fisco_tx.py` and `core/evm_tx.py`, and sent with `sendTransaction`, which answers with the receipt once the transaction is in a block. No package was added.
 
+## After the attacker brief
+
+An independent attacker found eight breaks, now each a test in `tests/test_attack_five.py`. One of its probes sent a transaction with a malformed contract address, which FISCO BCOS v3.16.4 accepted into its pool and then failed to execute, so the network stopped making blocks at block 5. The client now refuses such an address before sending anything. The network was rebuilt with `docker compose down`, removing `nodes/`, and `bash chain/setup.sh`, and the contract, which now accepts anchors only from the account that deployed it and never overwrites a head, was deployed again. The live tests then passed: a head anchored and verified with its block, the same head refused a second time, and another account refused. A rent payment through the API with `ANCHOR=fisco` was anchored in block 7, and the verify endpoint reported it verified with its block number.
+
 ## What did not work, and what was not tried
 
 1. The node's Ethereum compatible web3 JSON RPC, on port 8545, was tried first. It refuses every transaction whose sender has a zero balance, with `InsufficientFunds`, even at a gas price of zero, and the anchor account holds none. Granting a balance needs the chain's balance feature and a governor transaction, which was not attempted, so the client uses the native RPC instead.

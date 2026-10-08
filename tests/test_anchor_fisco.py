@@ -21,11 +21,14 @@ from core.anchor_fisco import (
     TransportUnavailable,
 )
 from core.anchor_local import AnchorNotConfigured
+from core.evm_tx import address_of
 
 ROOT = Path(__file__).resolve().parent.parent
 HEAD = hashlib.sha256(b"head").hexdigest()
 USER = hashlib.sha256(b"student_001").hexdigest()
 TX = "0x" + "ab" * 32
+OURS = address_of(bytes.fromhex("46" * 32))
+KEY = "46" * 32
 CONFIG = {"FISCO_RPC_URL": "http://127.0.0.1:20200", "FISCO_CONTRACT_ADDRESS": "0x" + "12" * 20, "FISCO_KEY_PATH": "/keys/anchor.pem"}
 
 
@@ -39,7 +42,7 @@ class FakeTransport(ChainTransport):
         if self.fail is not None:
             raise self.fail
         self.seen.append((config.key_path, head_hash, seq, user_hash))
-        self.records[head_hash] = ChainRecord(head_hash, seq, user_hash, datetime(2026, 10, 8, 12, tzinfo=timezone.utc), "0xsender", 42)
+        self.records[head_hash] = ChainRecord(head_hash, seq, user_hash, datetime(2026, 10, 8, 12, tzinfo=timezone.utc), OURS, 42)
         return TX
 
     def read_record(self, config, head_hash):
@@ -57,9 +60,13 @@ class Unavailable(ChainTransport):
 
 
 @pytest.fixture
-def configured(monkeypatch):
+def configured(monkeypatch, tmp_path):
     for name, value in CONFIG.items():
         monkeypatch.setenv(name, value)
+    key = tmp_path / "anchor.key"
+    key.write_text(KEY + "\n")
+    monkeypatch.setenv("FISCO_KEY_PATH", str(key))
+    return key
 
 
 def test_the_fisco_anchor_implements_the_anchor_interface():
@@ -73,7 +80,7 @@ def test_a_successful_anchor_returns_the_transaction_hash(configured):
     anchor_id = FiscoBcosAnchor(transports=[transport]).anchor(HEAD, 7, USER)
 
     assert anchor_id == f"fisco:{TX}"
-    assert transport.seen == [("/keys/anchor.pem", HEAD, 7, USER)]
+    assert transport.seen == [(str(configured), HEAD, 7, USER)]
 
 
 def test_verify_reads_back_the_record_with_its_time_and_block(configured):
@@ -114,7 +121,7 @@ def test_the_configuration_is_read_at_call_time(configured, monkeypatch):
 
     anchor.anchor(hashlib.sha256(b"next").hexdigest(), 8, USER)
 
-    assert [seen[0] for seen in transport.seen] == ["/keys/anchor.pem", "/keys/rotated.pem"]
+    assert [seen[0] for seen in transport.seen] == [str(configured), "/keys/rotated.pem"]
 
 
 def test_the_python_route_is_tried_first_and_json_rpc_second(configured):
@@ -248,3 +255,26 @@ def test_a_chain_that_cannot_be_read_is_reported_as_not_verified_with_its_error(
 
     assert status["kind"] == "fisco"
     assert status["verified"] is False and "FiscoAnchorError" in status["error"]
+
+
+@pytest.mark.skipif(not _node_answers(), reason="No FISCO BCOS node answers at FISCO_RPC_URL.")
+def test_a_real_node_never_lets_a_head_be_anchored_twice():
+    head = hashlib.sha256(b"twice " + datetime.now(timezone.utc).isoformat().encode()).hexdigest()
+    anchor = FiscoBcosAnchor()
+    anchor.anchor(head, 1, USER)
+    first = anchor.block_number(head)
+
+    with pytest.raises(FiscoAnchorError):
+        anchor.anchor(head, 2, USER)
+    assert anchor.block_number(head) == first
+
+
+@pytest.mark.skipif(not _node_answers(), reason="No FISCO BCOS node answers at FISCO_RPC_URL.")
+def test_a_real_node_lets_no_other_account_anchor(monkeypatch, tmp_path):
+    stranger = tmp_path / "stranger.key"
+    stranger.write_text("47" * 32 + "\n")
+    monkeypatch.setenv("FISCO_KEY_PATH", str(stranger))
+    head = hashlib.sha256(b"stranger " + datetime.now(timezone.utc).isoformat().encode()).hexdigest()
+
+    with pytest.raises(FiscoAnchorError):
+        FiscoBcosAnchor().anchor(head, 1, USER)

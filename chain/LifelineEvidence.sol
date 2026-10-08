@@ -16,10 +16,19 @@ contract LifelineEvidence {
     }
 
     mapping(bytes32 => Record) private records;
+    // The account that deployed the contract, Lifeline's anchor account, is the only one that may anchor.
+    address public owner;
 
     event Anchored(bytes32 indexed head, uint64 seq, bytes32 userHash, uint256 timestamp, address sender);
 
+    constructor() public {
+        owner = msg.sender;
+    }
+
+    // A head is recorded once, by the owner, so the record of when it existed can never be replaced.
     function anchor(bytes32 head, uint64 seq, bytes32 userHash) public {
+        require(msg.sender == owner, "only the owner anchors");
+        require(records[head].head == bytes32(0), "head already anchored");
         records[head] = Record(head, seq, userHash, block.timestamp, msg.sender, block.number);
         emit Anchored(head, seq, userHash, block.timestamp, msg.sender);
     }

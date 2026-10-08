@@ -8,7 +8,7 @@ import pytest
 from contracts.interfaces import Anchor
 from contracts.schemas import Mandate, Message, Role, ToolCall
 from core.agent import AgentLoop
-from core.anchor_local import ANCHOR_SECRET_VAR, LocalSignedAnchor
+from core.anchor_local import ANCHOR_SECRET_VAR, LocalSignedAnchor, user_hash_of
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger, JsonlLedger
 from core.mandate import DeterministicMandateEngine
@@ -166,7 +166,8 @@ def test_the_anchor_entry_holds_the_student_the_head_the_sequence_the_id_and_the
     [line] = [json.loads(line) for line in anchor.path.read_text(encoding="utf-8").splitlines()]
     assert line["head_hash"] == entry.payload["head_hash"]
     assert line["seq"] == entry.payload["head_seq"]
-    assert line["user_hash"] == hashlib.sha256(USER.encode("utf-8")).hexdigest()
+    assert line["user_hash"] == user_hash_of(USER)
+    assert line["user_hash"] != hashlib.sha256(USER.encode("utf-8")).hexdigest()
     assert anchor.verify(entry.payload["head_hash"]) is True
 
 

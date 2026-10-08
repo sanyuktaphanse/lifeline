@@ -36,6 +36,12 @@ def _anchor_secret() -> bytes:
     return secret.encode("utf-8")
 
 
+def user_hash_of(user_id: str) -> str:
+    """The user id as an anchor holds it: HMAC SHA 256 under the anchor secret, so no one reading an anchor
+    line or the chain can recover the id by hashing a guess. Source: the FISCO anchor attacker brief."""
+    return hmac.new(_anchor_secret(), user_id.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def _signed(head_hash: str, seq: int, user_hash: str, anchored_at: str) -> bytes:
     return json.dumps([head_hash, seq, user_hash, anchored_at], separators=(",", ":")).encode("utf-8")
 

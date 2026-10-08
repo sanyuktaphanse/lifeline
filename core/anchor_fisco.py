@@ -10,6 +10,9 @@ The client tries the project's Python SDK first and JSON RPC second, each behind
 adapter, so a test can fake either without a network.
 """
 
+import json
+import re
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -20,7 +23,7 @@ import httpx
 
 from contracts.interfaces import Anchor
 from core.anchor_local import DIGEST, FISCO, AnchorNotConfigured, _is_seq
-from core.evm_tx import keccak256
+from core.evm_tx import address_of, keccak256
 from core.fisco_tx import build_transaction
 from core.model_adapter import environment
 
@@ -28,6 +31,14 @@ CONFIG_VARS = ("FISCO_RPC_URL", "FISCO_CONTRACT_ADDRESS", "FISCO_KEY_PATH")
 # Source: this module. An anchor runs right after a payment in the same request, so a chain that does not
 # answer must fail fast and leave a note, never hold the payment's reply. Not a money rule.
 TIMEOUT_SECONDS = 5.0
+# Source: this module. The largest answer a node may give one request, so a node cannot fill memory.
+MAX_ANSWER_BYTES = 1_000_000
+# Source: this module. The longest piece of a node's words kept in an error, which reaches the ledger.
+MAX_ERROR_CHARS = 300
+CONTRACT_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
+TRANSACTION_HASH = re.compile(r"0x[0-9a-fA-F]{64}")
+# A URL's user and password, which an error must never carry.
+URL_CREDENTIALS = re.compile(r"//[^/@\s]+@")
 # The group and chain build_chain.sh creates by default. Source: chain/nodes/127.0.0.1/node0/config.genesis.
 GROUP_ID = "group0"
 CHAIN_ID = "chain0"
@@ -82,9 +93,22 @@ Post = Callable[[str, dict[str, Any], float], dict[str, Any]]
 
 
 def _post(url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
-    response = httpx.post(url, json=payload, timeout=timeout)
-    response.raise_for_status()
-    return response.json()
+    """One JSON RPC request with an overall deadline, not only one per read, so a node that answers a byte
+    at a time cannot hold the payment's reply, and a size cap. Proxy settings are not followed."""
+    deadline = time.monotonic() + timeout
+    body = bytearray()
+    with httpx.Client(timeout=timeout, trust_env=False) as client, client.stream("POST", url, json=payload) as response:
+        response.raise_for_status()
+        for chunk in response.iter_bytes():
+            body += chunk
+            if time.monotonic() > deadline:
+                raise httpx.ReadTimeout("The node did not finish answering within the deadline.")
+            if len(body) > MAX_ANSWER_BYTES:
+                raise ValueError("The node's answer is larger than an answer can be.")
+    answer = json.loads(body)
+    if not isinstance(answer, dict):
+        raise ValueError("The node's answer is not a JSON object.")
+    return answer
 
 
 class PythonSdkTransport(ChainTransport):
@@ -109,9 +133,15 @@ class PythonSdkTransport(ChainTransport):
 def _private_key(path: str) -> bytes:
     """The anchor key, read from its file on every call: 64 hexadecimal characters, nothing else kept."""
     try:
-        text = open(path, encoding="utf-8").read().strip()
+        with open(path, "rb") as handle:
+            raw = handle.read(256)
     except OSError as error:
         raise AnchorNotConfigured(f"FISCO_KEY_PATH names a file that cannot be read: {type(error).__name__}.") from None
+    try:
+        text = raw.decode("ascii").strip()
+    except UnicodeDecodeError:
+        # The message is fixed, so no byte of a key written as raw bytes reaches an error or the ledger.
+        raise AnchorNotConfigured("FISCO_KEY_PATH must name a file holding one private key as 64 hexadecimal characters.") from None
     text = text[2:] if text.startswith("0x") else text
     if len(text) != 64 or any(char not in "0123456789abcdefABCDEF" for char in text):
         raise AnchorNotConfigured("FISCO_KEY_PATH must name a file holding one private key as 64 hexadecimal characters.")
@@ -145,20 +175,25 @@ class JsonRpcTransport(ChainTransport):
         block = int(self._rpc(config, "getBlockNumber", [GROUP_ID, ""]))
         raw = build_transaction(private_key, CHAIN_ID, GROUP_ID, block + BLOCK_LIMIT_AHEAD, to, data)
         receipt = self._rpc(config, "sendTransaction", [GROUP_ID, "", raw, False])
-        if not isinstance(receipt, dict) or int(receipt.get("status", -1)) != 0:
-            raise RuntimeError(f"The transaction was not executed: status {receipt.get('status') if isinstance(receipt, dict) else receipt}.")
+        if not isinstance(receipt, dict) or str(receipt.get("status", "")) != "0":
+            status = str(receipt.get("status"))[:20] if isinstance(receipt, dict) else "missing"
+            raise RuntimeError(f"The transaction was not executed: status {status}.")
         return receipt
 
     def send_anchor(self, config: FiscoConfig, head_hash: str, seq: int, user_hash: str) -> str:
         data = ANCHOR_SELECTOR + bytes.fromhex(head_hash) + _word(seq) + bytes.fromhex(user_hash)
         receipt = self.send_raw(config, _private_key(config.key_path), config.contract_address, data)
-        return str(receipt["transactionHash"])
+        transaction = str(receipt.get("transactionHash", ""))
+        if not TRANSACTION_HASH.fullmatch(transaction):
+            raise ValueError("The node's receipt carries no well formed transaction hash.")
+        return transaction
 
     def read_record(self, config: FiscoConfig, head_hash: str) -> ChainRecord | None:
         data = "0x" + (VERIFY_SELECTOR + bytes.fromhex(head_hash)).hex()
         answer = self._rpc(config, "call", [GROUP_ID, "", config.contract_address, data])
-        if not isinstance(answer, dict) or int(answer.get("status", -1)) != 0:
-            raise RuntimeError(f"The call to verify was not executed: {answer}")
+        if not isinstance(answer, dict) or str(answer.get("status", "")) != "0":
+            status = str(answer.get("status"))[:20] if isinstance(answer, dict) else "missing"
+            raise RuntimeError(f"The call to verify was not executed: status {status}.")
         result = bytes.fromhex(str(answer.get("output", "")).removeprefix("0x"))
         if len(result) < 192:
             raise ValueError(f"verify returned {len(result)} bytes, not the six words of a record.")
@@ -188,7 +223,16 @@ def _config() -> FiscoConfig:
     missing = [name for name, value in values.items() if not value]
     if missing:
         raise AnchorNotConfigured(f"ANCHOR is fisco and {', '.join(missing)} is not set, so nothing was anchored on the chain.")
+    if not CONTRACT_ADDRESS.fullmatch(values["FISCO_CONTRACT_ADDRESS"]):
+        # A malformed address is refused before anything is sent: one sent to FISCO BCOS v3.16.4 stopped the
+        # local chain making blocks. Source: the FISCO anchor attacker brief of 8 October.
+        raise AnchorNotConfigured("FISCO_CONTRACT_ADDRESS must be 0x followed by 40 hexadecimal characters.")
     return FiscoConfig(*(values[name] for name in CONFIG_VARS))
+
+
+def _reported(error: Exception) -> str:
+    """An error as the ledger may hold it: its type and the node's words, bounded, with no URL credentials."""
+    return URL_CREDENTIALS.sub("//", f"{type(error).__name__}: {error}")[:MAX_ERROR_CHARS]
 
 
 class FiscoBcosAnchor(Anchor):
@@ -209,7 +253,7 @@ class FiscoBcosAnchor(Anchor):
                 raise
             except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, every chain failure becomes this anchor's own error, which the loop notes
                 # The type and the node's words only; the key is read by the transport and never put here.
-                raise FiscoAnchorError(f"{type(error).__name__}: {error}") from None
+                raise FiscoAnchorError(_reported(error)) from None
         raise AnchorNotConfigured("No route to FISCO BCOS works here. Tried: " + " ".join(tried))
 
     def anchor(self, head_hash: str, seq: int, user_hash: str) -> str:
@@ -222,19 +266,27 @@ class FiscoBcosAnchor(Anchor):
         transaction = self._through(lambda transport, config: transport.send_anchor(config, head_hash, seq, user_hash))
         return f"{FISCO}:{transaction}"
 
-    def _record(self, head_hash: str) -> ChainRecord | None:
+    def record_of(self, head_hash: str) -> ChainRecord | None:
+        """The contract's record of the head, in one read, only when Lifeline's own account wrote it.
+
+        A record another account wrote is no evidence, so it reads as none. Source: the FISCO anchor
+        attacker brief of 8 October.
+        """
         record = self._through(lambda transport, config: transport.read_record(config, head_hash))
-        return record if record is not None and record.head_hash == head_hash else None
+        if record is None or record.head_hash != head_hash:
+            return None
+        ours = address_of(_private_key(_config().key_path))
+        return record if record.sender.casefold() == ours.casefold() else None
 
     def verify(self, head_hash: str) -> bool:
-        return self._record(head_hash) is not None
+        return self.record_of(head_hash) is not None
 
     def anchored_at(self, head_hash: str) -> datetime | None:
         """The block time the contract recorded for the head, or None when it holds none."""
-        record = self._record(head_hash)
+        record = self.record_of(head_hash)
         return None if record is None else record.timestamp.astimezone(timezone.utc)
 
     def block_number(self, head_hash: str) -> int | None:
         """The block the head was anchored in, for the verify endpoint, or None when it holds none."""
-        record = self._record(head_hash)
+        record = self.record_of(head_hash)
         return None if record is None else record.block_number
