@@ -1986,6 +1986,7 @@ from rails.sim.rules import (
     UPI_PURPOSE_ENTRY,
     cn_documents,
     cn_purpose_refusals,
+    document_request,
     entry,
     no_duration,
     upi_refusals,
@@ -2131,6 +2132,18 @@ class FakeRouter(Router):
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
+        if action_kind == "document_request":
+            ready, triggers, rule_ids = document_request(
+                str(user_context.get("provider", provider)), user_context.get("channel")
+            )
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=ready,
+                rule_ids=rule_ids,
             )
         if action_kind != "enable_pix":
             return PrecheckResult(
@@ -2381,6 +2394,8 @@ No figure is written here: every limit, purpose, and document list comes from `v
 and every refusal names the entry it rests on. Source: docs/decisions.md, 8 October 2026.
 """
 
+import re
+import unicodedata
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
@@ -2396,6 +2411,14 @@ CN_INSTITUTION_ENTRY = "cn_edu_remit_002"
 CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
+WISE_DOCS_ENTRY = "wise_docs_channel_001"
+WISE_SCAM_ENTRY = "wise_docs_impersonation_002"
+# The kinds of channel a provider's request for documents can name, never the address itself.
+# Source: docs/decisions.md, 8 October 2026. Only the first two are inside the provider's own app or website.
+UPLOAD_CHANNELS = ("provider_app_upload", "provider_website_upload")
+DOCUMENT_CHANNELS = (*UPLOAD_CHANNELS, "email", "chat", "link", "phone", "post", "other")
+# The names Wise goes by, as whole words. Source: the provider value of wise_docs_channel_001 and its old name.
+WISE_NAMES = frozenset({"wise", "transferwise"})
 # The two purposes the China rail tells apart: paying the institution, and funding the student.
 TUITION = "tuition"
 LIVING_COSTS = "living_costs"
@@ -3236,6 +3259,7 @@ from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
+from rails.sim.rules import DOCUMENT_CHANNELS, WISE_DOCS_ENTRY, is_wise
 
 ACTOR = "agent"
 URGENCY = "normal"
@@ -3312,6 +3336,12 @@ ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
 ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
 TEXT = {"type": "string"}
+# The channel kinds a document request can name. Source: DOCUMENT_CHANNELS in rails/sim/rules.py.
+PRECHECK_CHANNELS = DOCUMENT_CHANNELS
+# What a provider becomes when the model gives an address in its place, so no address is written.
+UNKNOWN_PROVIDER = "unknown"
+# What a precheck's user context carries beside the student, from the tool's arguments.
+PRECHECK_CONTEXT = ("provider", "channel")
 
 
 def _tool(name: str, description: str, properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
@@ -3360,8 +3390,11 @@ TOOLS = [
     _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
     _tool(
         "precheck",
-        "List what a provider is likely to ask for before an action such as enable_pix.",
-        {"action_kind": TEXT, "provider": TEXT},
+        "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "
+        "For a message that asks for documents, use action_kind document_request with the provider the "
+        "message claims to be from and the kind of channel it asks the documents to be sent through, "
+        "never the address itself.",
+        {"action_kind": TEXT, "provider": TEXT, "channel": {"type": "string", "enum": list(PRECHECK_CHANNELS)}},
         ["action_kind", "provider"],
     ),
     _tool(
@@ -3437,6 +3470,7 @@ TEXTS = {
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
+        "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
@@ -3509,6 +3543,7 @@ TEXTS = {
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
         "refused": "Não posso fazer isso. Regras: {rules}.",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
+        "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
@@ -3581,6 +3616,7 @@ TEXTS = {
         "simulated": "这是一次模拟，没有真实资金转出。",
         "refused": "我不能这样做。规则：{rules}。",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
+        "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
@@ -3749,6 +3785,8 @@ class _Trail:
     seqs: list[int] = field(default_factory=list)
     from_user: _Details = field(default_factory=_Details)
     from_data: _Details = field(default_factory=_Details)
+    # Sentences the loop itself adds to the end of the turn's reply, such as a precheck's flag.
+    notices: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -4067,7 +4105,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
             answer = self._adapter.complete(messages, TOOLS)
             trail.provider, trail.model = answer.provider, answer.model
             if not answer.tool_calls:
-                reply = self._reply(trail, lang, answer.text, decision=decision)
+                reply = self._reply(trail, lang, " ".join(filter(None, [answer.text, *trail.notices])), decision=decision)
                 turn_messages.append(_remembered(answer.model_copy(update={"text": reply.text})))
                 return self._finish(trail, turn_messages, reply)
             turn_messages.append(_remembered(answer))
@@ -4076,6 +4114,8 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 calls += 1
                 outcome = self._run_tool(user_id, mandate, lang, trail, call, calls)
                 if isinstance(outcome, AgentReply):
+                    if trail.notices:
+                        outcome = outcome.model_copy(update={"text": " ".join([outcome.text, *trail.notices])})
                     turn_messages += _closing_results(answer.tool_calls[index:], outcome)
                     turn_messages.append(Message(role=Role.ASSISTANT, text=outcome.text, lang=lang))
                     return self._finish(trail, turn_messages, outcome)
@@ -4121,6 +4161,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
         action_type = TOOL_ACTIONS.get(call.name)
         if action_type is None:
             return None, {"error": f"Unknown tool {call.name}."}
+        if action_type is ActionType.PRECHECK:
+            call = call.model_copy(update={"arguments": _canonical_precheck(call.arguments)})
         missing = [
             name for name in REQUIRED_ARGUMENTS.get(call.name, ()) if call.arguments.get(name) in (None, "")
         ]
@@ -4175,6 +4217,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
         result = self._run_now(user_id, action, call.arguments, trail)
         self._history.setdefault(user_id, []).append(action)
         self._write(trail, "execution", {"action": _action_json(action), "result": result})
+        if action.type is ActionType.PRECHECK:
+            self._after_precheck(trail, lang, action, call.arguments, result)
         return decision, result
 ```
 
@@ -4224,10 +4268,11 @@ When the source was changed, the engine refuses the action under R01, exactly as
             version = self._new_version(user_id, self._without_standing(user_id, standing.id))
             return {"deactivated": {"standing_mandate_id": standing.id, "new_mandate_id": version.id}}
         if action.type is ActionType.PRECHECK:
+            context = {"user_id": user_id, **{name: arguments[name] for name in PRECHECK_CONTEXT if name in arguments}}
             result = self._router.precheck(
                 str(arguments.get("action_kind", "")),
                 str(arguments.get("provider", "")),
-                {"user_id": user_id},
+                context,
             )
             return {"precheck": result.model_dump(mode="json")}
         if action.type is ActionType.VERIFY_LEDGER:

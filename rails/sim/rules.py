@@ -4,6 +4,8 @@ No figure is written here: every limit, purpose, and document list comes from `v
 and every refusal names the entry it rests on. Source: docs/decisions.md, 8 October 2026.
 """
 
+import re
+import unicodedata
 from decimal import Decimal
 from fractions import Fraction
 from typing import Any
@@ -19,6 +21,14 @@ CN_INSTITUTION_ENTRY = "cn_edu_remit_002"
 CN_QUOTA_ENTRY = "cn_fx_quota_001"
 CN_CDD_ENTRY = "cn_cdd_004"
 NUS_FEE_ENTRY = "sg_nus_fee_payment_003"
+WISE_DOCS_ENTRY = "wise_docs_channel_001"
+WISE_SCAM_ENTRY = "wise_docs_impersonation_002"
+# The kinds of channel a provider's request for documents can name, never the address itself.
+# Source: docs/decisions.md, 8 October 2026. Only the first two are inside the provider's own app or website.
+UPLOAD_CHANNELS = ("provider_app_upload", "provider_website_upload")
+DOCUMENT_CHANNELS = (*UPLOAD_CHANNELS, "email", "chat", "link", "phone", "post", "other")
+# The names Wise goes by, as whole words. Source: the provider value of wise_docs_channel_001 and its old name.
+WISE_NAMES = frozenset({"wise", "transferwise"})
 # The two purposes the China rail tells apart: paying the institution, and funding the student.
 TUITION = "tuition"
 LIVING_COSTS = "living_costs"
@@ -100,3 +110,23 @@ def cn_purpose_refusals(purpose: str | None) -> list[Refusal]:
 
 def cn_documents() -> list[str]:
     return list(entry(CN_FUNDING_ENTRY)["values"]["documents"])
+
+
+def is_wise(provider: str) -> bool:
+    """Whether a provider name is Wise, however it is written: any case, fullwidth, or inside a domain."""
+    words = re.findall(r"[a-z]+", unicodedata.normalize("NFKC", provider).casefold())
+    return any(word in WISE_NAMES for word in words)
+
+
+def document_request(provider: str, channel: str | None) -> tuple[bool | None, list[str], list[str]]:
+    """Whether a request for documents arrives the way the provider collects them, by its entries.
+
+    Returns ready, the review triggers and the entry ids. A channel that is not an upload inside the
+    provider's own app or website is not ready. A provider with no entry gets no verdict.
+    """
+    if not is_wise(provider):
+        return None, ["Lifeline has no sourced entry on how this provider collects documents."], []
+    if channel in UPLOAD_CHANNELS:
+        return True, [entry(WISE_DOCS_ENTRY)["statement"]], [WISE_DOCS_ENTRY]
+    ids = [WISE_DOCS_ENTRY, WISE_SCAM_ENTRY]
+    return False, [entry(entry_id)["statement"] for entry_id in ids], ids

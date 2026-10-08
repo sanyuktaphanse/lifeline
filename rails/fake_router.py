@@ -15,6 +15,7 @@ from rails.sim.rules import (
     UPI_PURPOSE_ENTRY,
     cn_documents,
     cn_purpose_refusals,
+    document_request,
     entry,
     no_duration,
     upi_refusals,
@@ -157,6 +158,18 @@ class FakeRouter(Router):
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
+            )
+        if action_kind == "document_request":
+            ready, triggers, rule_ids = document_request(
+                str(user_context.get("provider", provider)), user_context.get("channel")
+            )
+            return PrecheckResult(
+                provider=provider,
+                action_kind=action_kind,
+                documents_likely=[],
+                review_triggers=triggers,
+                ready=ready,
+                rule_ids=rule_ids,
             )
         if action_kind != "enable_pix":
             return PrecheckResult(

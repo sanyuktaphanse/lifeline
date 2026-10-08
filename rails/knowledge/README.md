@@ -1,6 +1,6 @@
 # Knowledge base
 
-This folder holds the facts Lifeline is allowed to state about money rules, limits, documents, and providers in each corridor. There is one YAML file per country, and each file is a list of entries.
+This folder holds the facts Lifeline is allowed to state about money rules, limits, documents, and providers in each corridor. There is one YAML file per country, and each file is a list of entries. A fact about a provider that is not tied to one country, such as how Wise collects documents, goes in `providers.yaml`, with `country` set to `all`.
 
 ## Rules
 
@@ -16,7 +16,7 @@ This folder holds the facts Lifeline is allowed to state about money rules, limi
 | --- | --- | --- |
 | `id` | text | Stable identifier made of the country code, a short topic, and a number, such as `cn_fx_quota_001` |
 | `statement` | text | The fact in plain sentences, worded exactly as the agent may state it |
-| `country` | text | Country code the fact applies to, such as `CN` |
+| `country` | text | Country code the fact applies to, such as `CN`, or `all` for a provider fact in `providers.yaml` that holds wherever the provider operates |
 | `rail` | text | The rail or channel the fact is about: `bank_fx`, `bank_remittance`, `card`, `wallet`, `wise`, `upi_paynow`, `pix`, or `all` for a rule that covers every rail |
 | `kind` | text | What sort of fact it is: `quota`, `limit`, `rule`, or `documents` |
 | `source_url` | text | Where the fact comes from |
