@@ -1,5 +1,7 @@
 """The findings of the first live run. Every test here uses the fake adapter, so nothing makes a real provider call."""
 
+from decimal import Decimal
+
 from contracts.schemas import Message, Role, ToolCall
 from core.harness import FAILED, PASSED, evaluate, render_live_report, strip_read_triples
 from tests.test_live_harness import ANSWERS, GENERATED, SCRIPTED, _live, _propose, _provider, _say, _suites
@@ -94,3 +96,82 @@ def test_a_read_the_scenario_expects_is_stripped_from_the_expectation_as_well(tm
 
     assert (twice.status, twice.runs[0].stripped) == (PASSED, 2)
     assert (never.status, never.runs[0].stripped) == (PASSED, 0)
+
+
+# Two. The model is told what the engine will decide on.
+
+FIVE_RULES = (
+    "Propose every payment the student asks for through propose_transfer, and never refuse it or judge a limit "
+    "in your own words, because the engine decides and explains with a rule id.",
+    "Read the balance again with read_balance whenever the student asks for it, and never answer it from memory.",
+    "Never recommend a simulated route for real money, and say that a route is simulated whenever it is.",
+    "Never say you can change a limit or a setting; call the tool, such as change_limit, and let the code answer.",
+    "Call add_payee only when the student asks to add a payee.",
+)
+
+
+def _system_prompt(setup, call: int = 0) -> str:
+    [system] = [message for message in setup.adapter.calls[call][0] if message.role is Role.SYSTEM]
+    return system.text
+
+
+def test_the_mandate_block_lists_the_codes_limits_and_balances_exactly_as_the_mandate_holds_them():
+    from core.agent import mandate_block
+    from tests.test_agent import _mandate
+
+    mandate = _mandate().model_copy(update={
+        "allowed_payees": {"self_sg", "landlord_sp"},
+        "allowed_corridors": {"SG>SG", "SG>BR"},
+        "allowed_purposes": {"rent", "emergency"},
+    })
+
+    block = mandate_block(mandate, {"SGD": Decimal("2300"), "BRL": Decimal("150.50")})
+
+    assert block == (
+        "What the mandate engine decides on, from the student's current mandate:\n"
+        "Allowed payee ids: landlord_sp, self_sg.\n"
+        "Allowed corridor codes: SG>BR, SG>SG.\n"
+        "Allowed purpose codes: emergency, rent.\n"
+        "Per transaction limit: 1500 SGD. Daily limit: 2500 SGD.\n"
+        "Balances: 150.50 BRL, 2300 SGD.\n"
+        "Pass these codes to tools exactly as written here and never translate them."
+    )
+
+
+def test_a_mandate_with_nothing_allowed_says_none_rather_than_leaving_a_gap():
+    from core.agent import mandate_block
+    from tests.test_agent import _mandate
+
+    block = mandate_block(_mandate().model_copy(update={"allowed_payees": set()}), {})
+
+    assert "Allowed payee ids: none.\n" in block
+    assert "Balances: none on file.\n" in block
+
+
+def test_every_turn_sends_the_block_and_the_five_rules_in_the_system_prompt_in_every_language():
+    from core.agent import PROMPT_RULES, mandate_block
+    from tests.test_agent import USER, _say as say, _setup, _user
+
+    setup = _setup([say("Hi."), say("Oi."), say("你好。")])
+    for lang in ("en", "pt", "zh"):
+        setup.loop.handle(USER, _user("Hello", lang=lang))
+
+    assert PROMPT_RULES == FIVE_RULES
+    for call in range(3):
+        prompt = _system_prompt(setup, call)
+        assert mandate_block(setup.mandates[USER], {"SGD": Decimal("2300"), "BRL": Decimal("150")}) in prompt
+        assert "Allowed purpose codes: rent." in prompt
+        for rule in FIVE_RULES:
+            assert rule in prompt
+
+
+def test_the_block_follows_the_current_mandate_after_a_payee_is_added():
+    from tests.test_agent import USER, _call, _say as say, _setup, _user
+
+    setup = _setup([_call("add_payee", {"payee_id": "ana_rio", "display_name": "Ana"}), say("Hello.")])
+    proposed = setup.loop.handle(USER, _user("Add Ana as a payee, id ana_rio"))
+    setup.loop.handle(USER, _user("Yes"), confirmation_token=proposed.confirmation.confirmation_token)
+    setup.loop.handle(USER, _user("Thanks"))
+
+    assert "Allowed payee ids: landlord_sp.\n" in _system_prompt(setup, 0)
+    assert "Allowed payee ids: ana_rio, landlord_sp.\n" in _system_prompt(setup, 1)

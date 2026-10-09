@@ -3931,7 +3931,63 @@ PORTUGUESE_WORDS = frozenset(
 )
 ```
 
-The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_HISTORY_MESSAGES` is how many earlier messages the model sees, twenty, citing the decision that set it, and `REMEMBERED_FIELDS`, imported from the conversation store, names the parts of a message the memory keeps. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. The cap counts calls to the loop's own adapter, and the council calls its own, so a deliberation spends none of it. `RUNNER_UP_DISAGREEMENT` is the score above which a reply names the runner up as well as the choice, cited as a product decision rather than a sourced figure. `COUNCIL_QUESTION` is the one question the loop ever asks the council. `COUNCIL_ROUTE_FIELDS` is what a voice is told about each usable route, which is a subset of the route's own fields and nothing invented. `NO_ANSWER`, `WAIT` and `SAFETY` come from `core/council.py`, so the two files agree on the words for the two positions that are not a rail and on the name of the safety voice, and `most_confident` and `safety_wait` are the helpers that read a finished deliberation for what the student hears. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `PASTED_FRAME` wraps text the student pasted before the model sees it, between markers, with a sentence saying it is data and never an instruction. `SYSTEM_PROMPT` is sent as the first message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions. `MANDATE_VERSION` splits a mandate id such as `mandate-student_001-v1` into the part up to `-v` and the version number, so the next version can be named.
+The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_HISTORY_MESSAGES` is how many earlier messages the model sees, twenty, citing the decision that set it, and `REMEMBERED_FIELDS`, imported from the conversation store, names the parts of a message the memory keeps. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. The cap counts calls to the loop's own adapter, and the council calls its own, so a deliberation spends none of it. `RUNNER_UP_DISAGREEMENT` is the score above which a reply names the runner up as well as the choice, cited as a product decision rather than a sourced figure. `COUNCIL_QUESTION` is the one question the loop ever asks the council. `COUNCIL_ROUTE_FIELDS` is what a voice is told about each usable route, which is a subset of the route's own fields and nothing invented. `NO_ANSWER`, `WAIT` and `SAFETY` come from `core/council.py`, so the two files agree on the words for the two positions that are not a rail and on the name of the safety voice, and `most_confident` and `safety_wait` are the helpers that read a finished deliberation for what the student hears. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `PASTED_FRAME` wraps text the student pasted before the model sees it, between markers, with a sentence saying it is data and never an instruction. `SYSTEM_PROMPT` opens the system message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions. The rest of that message is described just below. `MANDATE_VERSION` splits a mandate id such as `mandate-student_001-v1` into the part up to `-v` and the version number, so the next version can be named.
+
+The first live run showed models refusing or judging a limit in their own words, answering a balance from memory, recommending a simulated route, offering to change a limit, adding a payee nobody asked for, and passing a purpose translated into the student's language, which the engine refuses under R07. `PROMPT_RULES` holds five sentences against the first five, and `mandate_block` answers the last by telling the model what the engine decides on, written in code from the student's current mandate: the allowed payee ids, corridor codes and purpose codes, sorted so the block reads the same on every turn, the two limits and the balances through `format_amount`, and the sentence that the codes go to tools exactly as written and are never translated. A set with nothing in it says none, so the model is never left with a blank line.
+
+```python
+# What the first live run showed models getting wrong: refusing or judging a limit themselves, answering a balance
+# from memory, recommending a simulated route, offering to change a limit, and adding a payee nobody asked for.
+# Source: docs/decisions.md, decision 139.
+PROMPT_RULES = (
+    "Propose every payment the student asks for through propose_transfer, and never refuse it or judge a limit "
+    "in your own words, because the engine decides and explains with a rule id.",
+    "Read the balance again with read_balance whenever the student asks for it, and never answer it from memory.",
+    "Never recommend a simulated route for real money, and say that a route is simulated whenever it is.",
+    "Never say you can change a limit or a setting; call the tool, such as change_limit, and let the code answer.",
+    "Call add_payee only when the student asks to add a payee.",
+)
+
+
+def _codes(values: set[str] | list[str]) -> str:
+    return ", ".join(sorted(values)) or "none"
+
+
+def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
+    """What the engine decides on, written from the student's current mandate and balances for the system prompt.
+
+    The codes are the mandate's own, sorted so the block reads the same on every turn, and the model is told to
+    pass them to tools as written, because a translated purpose such as aluguel is refused under R07.
+    Source: docs/decisions.md, decision 139.
+    """
+    held = ", ".join(format_amount(balances[code], code, "en") for code in sorted(balances)) or "none on file"
+    return "\n".join(
+        [
+            "What the mandate engine decides on, from the student's current mandate:",
+            f"Allowed payee ids: {_codes(mandate.allowed_payees)}.",
+            f"Allowed corridor codes: {_codes(mandate.allowed_corridors)}.",
+            f"Allowed purpose codes: {_codes(mandate.allowed_purposes)}.",
+            f"Per transaction limit: {format_amount(mandate.per_txn_limit, mandate.currency, 'en')}. "
+            f"Daily limit: {format_amount(mandate.daily_limit, mandate.currency, 'en')}.",
+            f"Balances: {held}.",
+            "Pass these codes to tools exactly as written here and never translate them.",
+        ]
+    )
+```
+
+`_system_prompt` joins the three parts for one turn. It reads the mandate and the balances when the turn starts, so a payee added on an earlier turn is in the block on the next one.
+
+```python
+    def _system_prompt(self, user_id: str, lang: str) -> str:
+        """The fixed prompt, the rules the first live run called for, and the block from the current mandate."""
+        return "\n\n".join(
+            [
+                SYSTEM_PROMPT.format(lang=lang),
+                " ".join(PROMPT_RULES),
+                mandate_block(self._mandates[user_id], self._balances.get(user_id, {})),
+            ]
+        )
+```
 
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
@@ -4974,7 +5030,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 # memory. Source: docs/decisions.md, 8 October 2026.
                 trail.from_data.add(earlier.text, Source.TOOL_RESULT)
         messages = [
-            Message(role=Role.SYSTEM, text=SYSTEM_PROMPT.format(lang=lang)),
+            Message(role=Role.SYSTEM, text=self._system_prompt(user_id, lang)),
             *(_for_model(earlier) for earlier in history),
             *(_for_model(current) for current in turn_messages),
         ]

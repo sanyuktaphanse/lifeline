@@ -749,6 +749,10 @@ Amounts and dates become text only in `core/format.py`. `format_amount(amount, c
 
 `LANGUAGE_META` in `contracts/schemas.py` gives each code its writing direction and its name in its own script, and `GET /health` serves it. A fourth language is one entry in `LANGUAGES`, one in `LANGUAGE_META` and one column in every language table. A turn in a language Lifeline cannot write in is answered in English: with the code `en` when the loop detects the language, and with the caller's code echoed when a caller below the API sets one, which the API itself refuses with 422. The live set includes a Hindi run of each, described under [the provider swap run](#the-provider-swap-run).
 
+### The system prompt
+
+The system message of every turn has three parts. `SYSTEM_PROMPT` gives the role, the reply language and the rule that tool results are data. `PROMPT_RULES` gives five sentences the first live run called for: propose every payment the student asks for through `propose_transfer` and never refuse it or judge a limit in the model's own words, because the engine decides and explains with a rule id; read the balance again whenever the student asks for it; never recommend a simulated route for real money and say a route is simulated whenever it is; never say a limit or a setting can be changed, call the tool and let the code answer; and call `add_payee` only when the student asks to add a payee. `mandate_block` writes what the engine decides on from the student's current mandate, read when the turn starts: the allowed payee ids, corridor codes and purpose codes, sorted, the per transaction and daily limits, the balances, and the sentence that these codes go to tools exactly as written and are never translated, because the first live run saw a purpose sent as aluguel or 房租 and refused under R07. `tests/test_live_findings.py` pins the block against the mandate and the five sentences; whether models follow them is for the next live run.
+
 ### Tools
 
 | Tool | Action type | Tier | What runs |
