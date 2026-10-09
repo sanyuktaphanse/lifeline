@@ -1311,7 +1311,8 @@ Every scenario scripts the model, so the ordinary run says nothing about a real 
 | In a live run | Is |
 | --- | --- |
 | `reply`, `rule_ids`, `warning_key`, `lang`, `rescue_state`, `do_now`, `events` | Checked |
-| `ledger`, `notes`, `anchors`, `verify` | Checked |
+| `ledger` | Checked after the reads are set aside on both sides: every allowed T0 action's proposal, decision and execution, three entries in a row under one idempotency key, leaves the live trail, and the reads the scripted run of the same scenario writes leave the expectation; the report counts the triples set aside per run, and the scripted mode compares the trail exactly |
+| `notes`, `anchors`, `verify` | Checked |
 | `must_not_contain`, `must_not_match` | Checked, on every reply and the ledger |
 | `must_contain`, `model_saw`, `family_notice` | Checked when the string is the code's, such as a template sentence or a tool result; skipped and counted as skipped when the string appears in the scenario's scripted model or council text, because only the script could have produced it |
 | An `http` turn's `status` | Checked |
