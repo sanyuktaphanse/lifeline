@@ -19,6 +19,7 @@ from contracts.schemas import (
     StandingMandate,
     Tier,
 )
+from core.format import format_amount, format_date
 from core.standing import next_occurrence, occurrence_containing
 from core.tiers import TIERS
 
@@ -171,13 +172,13 @@ def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]
     allowed_drift = standing.amount * standing.tolerance_pct / 100
     if action.amount is None or abs(action.amount - standing.amount) > allowed_drift:
         outside.append(
-            f"the amount {action.amount} is more than {standing.tolerance_pct} percent "
-            f"from {standing.amount}"
+            f"the amount {format_amount(action.amount or Decimal(0), None, 'en')} is more than "
+            f"{format_amount(standing.tolerance_pct, None, 'en')} percent from {format_amount(standing.amount, None, 'en')}"
         )
     occurrence = occurrence_containing(standing.schedule, standing.notice_hours, action.requested_at)
     if occurrence is None:
         outside.append(
-            f"it was requested at {action.requested_at.astimezone(timezone.utc).isoformat(timespec='seconds')}, "
+            f"it was requested at {format_date(action.requested_at.astimezone(timezone.utc), 'en')}, "
             f"outside the window of schedule {standing.schedule}"
         )
     elif any(
@@ -252,9 +253,9 @@ class DeterministicMandateEngine(MandateEngine):
         ):
             rule_ids.append("R03")
             reasons.append(
-                f"The mandate is valid from {mandate.valid_from} until "
-                f"{mandate.valid_until} and this action was requested at "
-                f"{action.requested_at}."
+                f"The mandate is valid from {format_date(mandate.valid_from, 'en')} until "
+                f"{format_date(mandate.valid_until, 'en')} and this action was requested at "
+                f"{format_date(action.requested_at, 'en')}."
             )
 
         if action.type is ActionType.ADD_PAYEE and not action.payee_id:
@@ -318,8 +319,8 @@ class DeterministicMandateEngine(MandateEngine):
             elif action.withdrawal_date is not None and action.withdrawal_date > _utc_date(action):
                 rule_ids.append("R04")
                 reasons.append(
-                    f"A withdrawal on {action.withdrawal_date.isoformat()} cannot be recorded on "
-                    f"{_utc_date(action).isoformat()}, because that day has not come."
+                    f"A withdrawal on {format_date(action.withdrawal_date, 'en')} cannot be recorded on "
+                    f"{format_date(_utc_date(action), 'en')}, because that day has not come."
                 )
 
         if action.type is ActionType.CANCEL_TRANSFER:
@@ -381,7 +382,7 @@ class DeterministicMandateEngine(MandateEngine):
                     reasons.append(
                         f"Payee {action.payee_id} was added less than "
                         f"{mandate.cooling_hours} hours ago and can receive transfers from "
-                        f"{allowed_from.astimezone(timezone.utc).isoformat(timespec='seconds')}."
+                        f"{format_date(allowed_from.astimezone(timezone.utc), 'en')}."
                     )
 
             if action.corridor not in mandate.allowed_corridors:
@@ -399,8 +400,8 @@ class DeterministicMandateEngine(MandateEngine):
             if action.amount is not None and action.amount > mandate.per_txn_limit:
                 rule_ids.append("R08")
                 reasons.append(
-                    f"Amount {action.amount} is above the per transaction limit "
-                    f"{mandate.per_txn_limit}."
+                    f"Amount {format_amount(action.amount, None, 'en')} is above the per transaction limit "
+                    f"{format_amount(mandate.per_txn_limit, None, 'en')}."
                 )
 
             if action.type is ActionType.TRANSFER and action.amount is not None:
@@ -408,8 +409,8 @@ class DeterministicMandateEngine(MandateEngine):
                 if running_total > mandate.daily_limit:
                     rule_ids.append("R09")
                     reasons.append(
-                        f"Running total {running_total} for today is above the daily "
-                        f"limit {mandate.daily_limit}."
+                        f"Running total {format_amount(running_total, None, 'en')} for today is above the daily "
+                        f"limit {format_amount(mandate.daily_limit, None, 'en')}."
                     )
 
         if (

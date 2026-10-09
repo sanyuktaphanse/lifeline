@@ -33,19 +33,20 @@ Every Python excerpt below is copied exactly from the file it names, and `tests/
 25. The rescue machine, `core/rescue.py`
 26. The agent loop, `core/agent.py`, with the rescue
 27. The monthly note, `core/monthly.py`
-28. The evaluation harness, `core/harness.py`
-29. The API, `api/main.py`
-30. The tests
-31. The Stage 8a tests
-32. The Stage 8b tests
-33. The suites and their scenarios
-34. The Stage 8a scenarios
-35. The Stage 8b scenarios
-36. The knowledge base, `rails/knowledge/`
-37. The provider entries, `rails/knowledge/providers.yaml`
-38. The demo parent, `fixtures/demo_parent.yaml`
-39. Configuration files
-40. Commands used to build and check the repo
+28. Amounts and dates, `core/format.py`
+29. The evaluation harness, `core/harness.py`
+30. The API, `api/main.py`
+31. The tests
+32. The Stage 8a tests
+33. The Stage 8b tests
+34. The suites and their scenarios
+35. The Stage 8a scenarios
+36. The Stage 8b scenarios
+37. The knowledge base, `rails/knowledge/`
+38. The provider entries, `rails/knowledge/providers.yaml`
+39. The demo parent, `fixtures/demo_parent.yaml`
+40. Configuration files
+41. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -142,6 +143,15 @@ CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 # The languages Lifeline writes replies in. Source: the TEXTS table in core/agent.py, which a
 # test in tests/test_council.py pins to this tuple so the two cannot drift.
 LANGUAGES = ("en", "pt", "zh")
+# What the app needs to show each language: its writing direction and its name in its own script. The app reads
+# this from GET /health and never hardcodes it. A fourth language is one entry in LANGUAGES, one here and one
+# column in every TEXTS table, and tests/test_i18n.py fails until all three are there.
+# Source: docs/decisions.md, 9 October 2026.
+LANGUAGE_META: dict[str, dict[str, str]] = {
+    "en": {"direction": "ltr", "name": "English"},
+    "pt": {"direction": "ltr", "name": "Português"},
+    "zh": {"direction": "ltr", "name": "中文"},
+}
 LanguageCode = Annotated[str, Field(pattern=f"^({'|'.join(LANGUAGES)})$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]
@@ -756,6 +766,7 @@ from contracts.schemas import (
     StandingMandate,
     Tier,
 )
+from core.format import format_amount, format_date
 from core.standing import next_occurrence, occurrence_containing
 from core.tiers import TIERS
 
@@ -916,13 +927,13 @@ def _outside_pattern(action: Action, mandate: Mandate, history: Sequence[Action]
     allowed_drift = standing.amount * standing.tolerance_pct / 100
     if action.amount is None or abs(action.amount - standing.amount) > allowed_drift:
         outside.append(
-            f"the amount {action.amount} is more than {standing.tolerance_pct} percent "
-            f"from {standing.amount}"
+            f"the amount {format_amount(action.amount or Decimal(0), None, 'en')} is more than "
+            f"{format_amount(standing.tolerance_pct, None, 'en')} percent from {format_amount(standing.amount, None, 'en')}"
         )
     occurrence = occurrence_containing(standing.schedule, standing.notice_hours, action.requested_at)
     if occurrence is None:
         outside.append(
-            f"it was requested at {action.requested_at.astimezone(timezone.utc).isoformat(timespec='seconds')}, "
+            f"it was requested at {format_date(action.requested_at.astimezone(timezone.utc), 'en')}, "
             f"outside the window of schedule {standing.schedule}"
         )
     elif any(
@@ -1004,9 +1015,9 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
         ):
             rule_ids.append("R03")
             reasons.append(
-                f"The mandate is valid from {mandate.valid_from} until "
-                f"{mandate.valid_until} and this action was requested at "
-                f"{action.requested_at}."
+                f"The mandate is valid from {format_date(mandate.valid_from, 'en')} until "
+                f"{format_date(mandate.valid_until, 'en')} and this action was requested at "
+                f"{format_date(action.requested_at, 'en')}."
             )
 
         if action.type is ActionType.ADD_PAYEE and not action.payee_id:
@@ -1070,8 +1081,8 @@ The class implements the `MandateEngine` interface. Its `confirmation_token_for`
             elif action.withdrawal_date is not None and action.withdrawal_date > _utc_date(action):
                 rule_ids.append("R04")
                 reasons.append(
-                    f"A withdrawal on {action.withdrawal_date.isoformat()} cannot be recorded on "
-                    f"{_utc_date(action).isoformat()}, because that day has not come."
+                    f"A withdrawal on {format_date(action.withdrawal_date, 'en')} cannot be recorded on "
+                    f"{format_date(_utc_date(action), 'en')}, because that day has not come."
                 )
 
         if action.type is ActionType.CANCEL_TRANSFER:
@@ -1137,7 +1148,7 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
                     reasons.append(
                         f"Payee {action.payee_id} was added less than "
                         f"{mandate.cooling_hours} hours ago and can receive transfers from "
-                        f"{allowed_from.astimezone(timezone.utc).isoformat(timespec='seconds')}."
+                        f"{format_date(allowed_from.astimezone(timezone.utc), 'en')}."
                     )
 
             if action.corridor not in mandate.allowed_corridors:
@@ -1155,8 +1166,8 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
             if action.amount is not None and action.amount > mandate.per_txn_limit:
                 rule_ids.append("R08")
                 reasons.append(
-                    f"Amount {action.amount} is above the per transaction limit "
-                    f"{mandate.per_txn_limit}."
+                    f"Amount {format_amount(action.amount, None, 'en')} is above the per transaction limit "
+                    f"{format_amount(mandate.per_txn_limit, None, 'en')}."
                 )
 
             if action.type is ActionType.TRANSFER and action.amount is not None:
@@ -1164,8 +1175,8 @@ From here on, failures are collected instead of returned. R02 refuses tier T3, b
                 if running_total > mandate.daily_limit:
                     rule_ids.append("R09")
                     reasons.append(
-                        f"Running total {running_total} for today is above the daily "
-                        f"limit {mandate.daily_limit}."
+                        f"Running total {format_amount(running_total, None, 'en')} for today is above the daily "
+                        f"limit {format_amount(mandate.daily_limit, None, 'en')}."
                     )
 ```
 
@@ -2868,6 +2879,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from contracts.schemas import INSTRUMENT_ID, NonNegativeAmount
+from core.format import format_amount
 from rails.knowledge.loader import load_knowledge
 
 UPI_PURPOSE_ENTRY = "in_upi_paynow_purpose_001"
@@ -2941,8 +2953,9 @@ def upi_refusals(amount: Decimal, currency: str, purpose: str | None, earlier_to
         refusals.append(
             (
                 UPI_CAP_ENTRY,
-                f"{amount} {currency} would take the day's UPI to PayNow total to {earlier_today + amount} "
-                f"{currency}, above the daily cap of {cap['daily_cap']} {cap['currency']}. Source: {UPI_CAP_ENTRY}.",
+                f"{format_amount(amount, currency, 'en')} would take the day's UPI to PayNow total to "
+                f"{format_amount(earlier_today + amount, currency, 'en')}, above the daily cap of "
+                f"{format_amount(cap['daily_cap'], cap['currency'], 'en')}. Source: {UPI_CAP_ENTRY}.",
             )
         )
     return refusals
@@ -3772,6 +3785,7 @@ from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
 from core.monthly import is_month, month_of, previous_month, render, seqs_of, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
+from core.format import fill, format_amount, format_date
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
@@ -4138,21 +4152,21 @@ REQUIRED_ARGUMENTS = {
 ```python
 TEXTS = {
     "en": {
-        "confirm": "Please confirm: send {amount} {currency} to {payee} for {purpose} over {rail}, fee {fee} {currency} and exchange cost {spread} {currency}. Nothing moves until you confirm.",
-        "sent": "Done. {amount} {currency} was sent over {rail}. Receipt {receipt_id}.",
-        "transfer_failed": "The transfer of {amount} {currency} over {rail} failed, and no money arrived. Receipt {receipt_id}.",
-        "transfer_not_completed": "The transfer of {amount} {currency} over {rail} is not completed; its status is {status}. Receipt {receipt_id}.",
+        "confirm": "Please confirm: send {amount} to {payee} for {purpose} over {rail}, fee {fee} and exchange cost {spread}. Nothing moves until you confirm.",
+        "sent": "Done. {amount} was sent over {rail}. Receipt {receipt_id}.",
+        "transfer_failed": "The transfer of {amount} over {rail} failed, and no money arrived. Receipt {receipt_id}.",
+        "transfer_not_completed": "The transfer of {amount} over {rail} is not completed; its status is {status}. Receipt {receipt_id}.",
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
         "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
         "plan_updated": "Your plan now has: {fields}.",
         "plan_update_skipped": "After a restart Lifeline could not apply an earlier change to your plan's {fields}, because your plan no longer allows it, so that part of your plan stays as it was.",
-        "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} {currency} a day and your cards together may still withdraw {today} {currency} today, so you can reach the cap. {consequence} Source: {entry_id}.",
-        "cash_cap_year": "You have used {used} {currency} of the {cap} {currency} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
-        "cash_cap_year_consequence": "You have used {used} {currency} of the {cap} {currency} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
+        "cash_cap_warning": "Warning: {remaining} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} a day and your cards together may still withdraw {today} today, so you can reach the cap. {consequence} Source: {entry_id}.",
+        "cash_cap_year": "You have used {used} of the {cap} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
+        "cash_cap_year_consequence": "You have used {used} of the {cap} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
         "withdrawal_not_recorded": "Lifeline recorded no cash withdrawal. {reason}",
-        "cash_cap_card_day": "Card {instrument} has withdrawn {used} {currency} today of its daily cap of {cap} {currency}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
+        "cash_cap_card_day": "Card {instrument} has withdrawn {used} today of its daily cap of {cap}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
@@ -4164,12 +4178,12 @@ TEXTS = {
         "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
         "notice_injection_any": "A request that did not come from the student was blocked.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
-        "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
+        "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
         "no_route_refused": "No route is available for this transfer right now, so nothing was sent. The rail said: {reason}",
         "too_many_steps": "I stopped before finishing. Please ask again.",
-        "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
-        "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
+        "confirm_standing": "Please confirm: send {amount} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
+        "standing_created": "Done. Standing mandate {standing_id} sends {amount} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
@@ -4219,10 +4233,10 @@ TEXTS = {
         "notice_freeze_failed": "Lifeline could not freeze card {instrument}.",
         "notice_not_frozen": "No card was frozen through Lifeline.",
         "notice_rerouted": "Payments now use the backup card {instrument}.",
-        "notice_sent": "{amount} {currency} was sent to {payee}.",
+        "notice_sent": "{amount} was sent to {payee}.",
         "notice_simulated": "That transfer was a simulation and no real money moved.",
-        "notice_transfer_failed": "A transfer of {amount} {currency} to {payee} failed, and no money arrived.",
-        "notice_transfer_status": "A transfer of {amount} {currency} to {payee} was started and is {status}.",
+        "notice_transfer_failed": "A transfer of {amount} to {payee} failed, and no money arrived.",
+        "notice_transfer_status": "A transfer of {amount} to {payee} was started and is {status}.",
         "notice_refused": "Lifeline refused an action under rules {rules}.",
         "notice_not_confirmed": "A confirmation was not completed, so that action did not happen.",
         "notice_injection": "A request to move money that did not come from the student was blocked.",
@@ -4230,40 +4244,42 @@ TEXTS = {
         "notice_identity_locked": "The safety question was answered wrongly {count} times, so the rescue was locked and nothing else was done.",
         "notice_money_skipped": "The student did not take emergency money.",
         "notice_standing": "{count} standing payments were stopped.",
+        "quoted_in_english": "{text}",
+        "english_pending": "{text}",
     },
     "pt": {
-        "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
-        "sent": "Pronto. {amount} {currency} enviados via {rail}. Recibo {receipt_id}.",
-        "transfer_failed": "A transferência de {amount} {currency} via {rail} falhou, e nenhum dinheiro chegou. Recibo {receipt_id}.",
-        "transfer_not_completed": "A transferência de {amount} {currency} via {rail} não foi concluída; o status é {status}. Recibo {receipt_id}.",
+        "confirm": "Confirme: enviar {amount} para {payee} ({purpose}) via {rail}, taxa de {fee} e custo de câmbio de {spread}. Nada é enviado antes da sua confirmação.",
+        "sent": "Pronto. {amount} enviados via {rail}. Recibo {receipt_id}.",
+        "transfer_failed": "A transferência de {amount} via {rail} falhou, e nenhum dinheiro chegou. Recibo {receipt_id}.",
+        "transfer_not_completed": "A transferência de {amount} via {rail} não foi concluída; o status é {status}. Recibo {receipt_id}.",
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
-        "refused": "Não posso fazer isso. Regras: {rules}.",
+        "refused": "Não posso fazer isso. Regras: {rules}. {reasons}",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
         "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
         "plan_updated": "Seu plano agora tem: {fields}.",
         "plan_update_skipped": "Depois de um reinício o Lifeline não conseguiu aplicar uma mudança anterior em {fields} do seu plano, porque o seu plano não permite mais, então essa parte do plano ficou como estava.",
-        "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} {currency} por dia e seus cartões juntos ainda podem sacar {today} {currency} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
-        "cash_cap_year": "Você já sacou {used} {currency} do limite anual de {cap} {currency} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
-        "cash_cap_year_consequence": "Você já sacou {used} {currency} do limite anual de {cap} {currency} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "cash_cap_warning": "Atenção: restam {remaining} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} por dia e seus cartões juntos ainda podem sacar {today} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "cash_cap_year": "Você já sacou {used} do limite anual de {cap} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
+        "cash_cap_year_consequence": "Você já sacou {used} do limite anual de {cap} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "withdrawal_not_recorded": "O Lifeline não registrou nenhum saque em dinheiro. {reason}",
-        "cash_cap_card_day": "O cartão {instrument} já sacou {used} {currency} hoje do limite diário de {cap} {currency}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
+        "cash_cap_card_day": "O cartão {instrument} já sacou {used} hoje do limite diário de {cap}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
-        "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
+        "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada: {reasons} Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
-        "held_entry": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o seu registro falhou na verificação na entrada {seq}. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
+        "held_entry": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o registro do Lifeline falhou na verificação na entrada {seq}. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
         "held_store": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o armazenamento de âncoras não corresponde ao registro. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
         "backup_frozen": "Seu cartão reserva {backup} também está bloqueado, então o Lifeline não passou seus pagamentos para ele.",
         "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
         "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
         "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
-        "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
+        "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
         "no_route_refused": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado. A via disse: {reason}",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
-        "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
-        "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
+        "confirm_standing": "Confirme: enviar {amount} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
+        "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
@@ -4313,37 +4329,39 @@ TEXTS = {
         "notice_freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}.",
         "notice_not_frozen": "Nenhum cartão foi bloqueado pelo Lifeline.",
         "notice_rerouted": "Os pagamentos agora usam o cartão reserva {instrument}.",
-        "notice_sent": "{amount} {currency} foram enviados para {payee}.",
+        "notice_sent": "{amount} foram enviados para {payee}.",
         "notice_simulated": "Essa transferência foi uma simulação e nenhum dinheiro real foi movimentado.",
-        "notice_transfer_failed": "Uma transferência de {amount} {currency} para {payee} falhou, e nenhum dinheiro chegou.",
-        "notice_transfer_status": "Uma transferência de {amount} {currency} para {payee} foi iniciada e está {status}.",
+        "notice_transfer_failed": "Uma transferência de {amount} para {payee} falhou, e nenhum dinheiro chegou.",
+        "notice_transfer_status": "Uma transferência de {amount} para {payee} foi iniciada e está {status}.",
         "notice_refused": "O Lifeline recusou uma ação pelas regras {rules}.",
         "notice_not_confirmed": "Uma confirmação não foi concluída, então essa ação não aconteceu.",
         "notice_injection": "Um pedido para movimentar dinheiro que não veio do estudante foi bloqueado.",
         "notice_identity_failed": "Uma resposta errada foi dada à pergunta de segurança.",
         "notice_identity_locked": "A pergunta de segurança foi respondida errado {count} vezes, então o resgate foi travado e nada mais foi feito.",
-        "notice_money_skipped": "O estudante não recebeu dinheiro de emergência.",
+        "notice_money_skipped": "O estudante não aceitou dinheiro de emergência.",
         "notice_standing": "{count} ordens permanentes foram interrompidas.",
+        "quoted_in_english": "O trecho a seguir está em inglês, citado da fonte registrada: {text}",
+        "english_pending": "O texto a seguir está em inglês, e a tradução está pendente: {text}",
     },
     "zh": {
-        "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
-        "sent": "已完成。{amount} {currency} 已通过 {rail} 发出。回执 {receipt_id}。",
-        "transfer_failed": "通过 {rail} 发送的 {amount} {currency} 转账失败，没有资金到账。回执 {receipt_id}。",
-        "transfer_not_completed": "通过 {rail} 发送的 {amount} {currency} 转账尚未完成，当前状态为 {status}。回执 {receipt_id}。",
+        "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount}（用途：{purpose}），手续费 {fee}，汇率成本 {spread}。确认之前不会转出任何资金。",
+        "sent": "已完成。{amount} 已通过 {rail} 发出。回执 {receipt_id}。",
+        "transfer_failed": "通过 {rail} 发送的 {amount} 转账失败，没有资金到账。回执 {receipt_id}。",
+        "transfer_not_completed": "通过 {rail} 发送的 {amount} 转账尚未完成，当前状态为 {status}。回执 {receipt_id}。",
         "simulated": "这是一次模拟，没有真实资金转出。",
-        "refused": "我不能这样做。规则：{rules}。",
+        "refused": "我不能这样做。规则：{rules}。{reasons}",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
         "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
         "plan_updated": "你的计划现在为：{fields}。",
         "plan_update_skipped": "重启后，Lifeline 无法应用之前对你计划中 {fields} 的修改，因为你的计划已不再允许，所以这部分计划保持不变。",
-        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计）。单张卡每天可取 {daily} {currency}，你的卡今天合计还能取 {today} {currency}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
-        "cash_cap_year": "你所有中国银行卡本年度境外取现已用 {used} {currency}，年度额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
-        "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used} {currency}，年度额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining}（你所有中国银行卡合计）。单张卡每天可取 {daily}，你的卡今天合计还能取 {today}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "cash_cap_year": "你所有中国银行卡本年度境外取现已用 {used}，年度额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
+        "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used}，年度额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "withdrawal_not_recorded": "Lifeline 没有记录任何取现。{reason}",
-        "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used} {currency}，单卡每日额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
+        "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used}，单卡每日额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
-        "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
+        "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝：{reasons} 请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
         "held_entry": "Lifeline 已暂停所有付款和已确认的操作，因为账本在第 {seq} 条记录处未通过验证。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
         "held_store": "Lifeline 已暂停所有付款和已确认的操作，因为锚定存储与账本不一致。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
@@ -4352,12 +4370,12 @@ TEXTS = {
         "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
         "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
-        "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
+        "retry": "{failed} 执行失败，在 {key} 下没有产生任何扣款。次优路线是 {rail}，手续费 {fee}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
         "no_route_refused": "目前没有可用于这笔转账的路线，因此没有发送任何资金。支付通道的说明：{reason}",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
-        "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
-        "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
+        "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
+        "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
@@ -4407,10 +4425,10 @@ TEXTS = {
         "notice_freeze_failed": "Lifeline 无法冻结卡片 {instrument}。",
         "notice_not_frozen": "没有卡片通过 Lifeline 被冻结。",
         "notice_rerouted": "付款现在使用备用卡 {instrument}。",
-        "notice_sent": "{amount} {currency} 已发送给 {payee}。",
+        "notice_sent": "{amount} 已发送给 {payee}。",
         "notice_simulated": "该转账是一次模拟，没有真实资金转出。",
-        "notice_transfer_failed": "一笔发给 {payee} 的 {amount} {currency} 转账失败，没有资金到账。",
-        "notice_transfer_status": "一笔发给 {payee} 的 {amount} {currency} 转账已发起，当前状态为 {status}。",
+        "notice_transfer_failed": "一笔发给 {payee} 的 {amount} 转账失败，没有资金到账。",
+        "notice_transfer_status": "一笔发给 {payee} 的 {amount} 转账已发起，当前状态为 {status}。",
         "notice_refused": "Lifeline 根据规则 {rules} 拒绝了一项操作。",
         "notice_not_confirmed": "有一项确认未完成，因此该操作没有发生。",
         "notice_injection": "一项并非来自学生本人的转账请求已被阻止。",
@@ -4418,6 +4436,8 @@ TEXTS = {
         "notice_identity_locked": "安全问题被答错 {count} 次，因此救援已锁定，没有执行任何其他操作。",
         "notice_money_skipped": "学生没有领取紧急资金。",
         "notice_standing": "{count} 项定期付款已被停止。",
+        "quoted_in_english": "以下内容为英文原文，引自已记录的来源：{text}",
+        "english_pending": "以下内容为英文，翻译尚待完成：{text}",
     },
 }
 ```
@@ -4714,7 +4734,19 @@ def _now() -> datetime:
 
 
 def _text(lang: str, name: str, **values: Any) -> str:
-    return TEXTS.get(lang, TEXTS["en"])[name].format(**values)
+    return fill(TEXTS.get(lang, TEXTS["en"])[name], **values)
+
+
+def _quoted(lang: str, text: str) -> str:
+    """A knowledge entry's statement inside a reply, behind the sentence that says it is quoted in English from
+    the source on file. Nothing when empty."""
+    return _text(lang, QUOTED, text=text) if text else ""
+
+
+def _pending(lang: str, text: str) -> str:
+    """Lifeline's own English, such as a rule's reason or a rail's message, behind the sentence that says it is
+    in English and its translation is pending. Nothing when empty."""
+    return _text(lang, PENDING, text=text) if text else ""
 
 
 def _action_json(action: Action) -> dict[str, Any]:
@@ -4725,15 +4757,14 @@ def _decision_json(decision: Decision) -> dict[str, Any]:
     return decision.model_dump(mode="json", exclude={"confirmation_token"})
 
 
-def _route_values(action: Action, route: Route) -> dict[str, Any]:
+def _route_values(lang: str, action: Action, route: Route) -> dict[str, Any]:
     return {
-        "amount": action.amount,
-        "currency": action.currency,
+        "amount": format_amount(action.amount or Decimal(0), action.currency, lang),
         "payee": action.payee_id,
         "purpose": action.purpose,
         "rail": route.rail,
-        "fee": route.fee,
-        "spread": route.spread_cost,
+        "fee": format_amount(route.fee, action.currency, lang),
+        "spread": format_amount(route.spread_cost, action.currency, lang),
     }
 
 
@@ -5101,7 +5132,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
             )
         if decision.tier is Tier.T3:
             name = "credentials" if action.type is ActionType.EXPORT_CREDENTIALS else "settings"
-            text = _text(lang, name, reasons=" ".join(decision.reasons))
+            text = _text(lang, name, reasons=_pending(lang, " ".join(decision.reasons)))
             return self._reply(trail, lang, text, decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
@@ -5119,7 +5150,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         if "withdrawal_recorded" in result:
             self._warn_cash_cap(trail, lang, action)
         elif action.type is ActionType.RECORD_CASH_WITHDRAWAL:
-            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=result.get("error", "")))
+            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=_pending(lang, result.get("error", ""))))
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
@@ -5292,7 +5323,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
             if selected is None:
                 return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
             pending.routes, pending.selected_route = routes, selected
-            text = _text(lang, "confirm", **_route_values(action, selected))
+            text = _text(lang, "confirm", **_route_values(lang, action, selected))
             said = self._council_text(lang, advice)
             if said:
                 text = f"{text} {said}"
@@ -5312,12 +5343,11 @@ When the source was changed, the engine refuses the action under R01, exactly as
             text = _text(
                 lang,
                 "confirm_standing",
-                amount=action.amount,
-                currency=action.currency,
+                amount=format_amount(action.amount or Decimal(0), action.currency, lang),
                 payee=action.payee_id,
                 purpose=action.purpose,
                 schedule=terms.schedule,
-                tolerance=terms.tolerance_pct,
+                tolerance=format_amount(terms.tolerance_pct, None, lang),
                 notice=terms.notice_hours,
                 cancel=terms.cancel_window_hours,
             )
@@ -5650,7 +5680,7 @@ When no confirmation waits under the token for this student, and when a waiting 
             "payee_added",
             payee=payee,
             display_name=name or payee,
-            allowed_from=allowed_from.isoformat(timespec="seconds"),
+            allowed_from=format_date(allowed_from, lang),
         )
 ```
 
@@ -5693,8 +5723,7 @@ When no confirmation waits under the token for this student, and when a waiting 
             lang,
             "standing_created",
             standing_id=standing.id,
-            amount=standing.amount,
-            currency=action.currency,
+            amount=format_amount(standing.amount, action.currency, lang),
             payee=standing.payee_id,
             schedule=standing.schedule,
         )
@@ -5879,7 +5908,7 @@ A standing run moves money without a confirmation, so since the Stage 10 review 
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if isinstance(receipt, RailError):
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(receipt)), decision=decision)
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_pending(lang, str(receipt))), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -5978,8 +6007,7 @@ A standing run moves money without a confirmation, so since the Stage 10 review 
         text = _text(
             lang,
             name,
-            amount=receipt.amount,
-            currency=receipt.currency,
+            amount=format_amount(receipt.amount, receipt.currency, lang),
             rail=receipt.rail,
             receipt_id=receipt.receipt_id,
             status=receipt.status.value,
@@ -6018,7 +6046,7 @@ Since the Stage 10 review it first asks `_held`, so a run paid from chat on a le
             return _text(lang, "frozen", instrument=instrument), result
         if result.status is FreezeStatus.NOT_SUPPORTED:
             return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
-        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
+        return _text(lang, "freeze_failed", instrument=instrument, reason=_pending(lang, result.reason or "")), result
 ```
 
 `_carry_out` finishes a confirmed payee or freeze. The waiting confirmation is removed first and its token recorded as consumed, so the same token cannot be used twice, the confirmation is written with the engine's decision, and the action joins the history. `_add_payee` adds the payee to the student's mandate and records the time as `payee_added_at`, which is what R14 reads. `model_copy(update=...)` builds a new mandate with the changed fields rather than editing the old one, and `|` joins two sets. The new mandate replaces the old one in `self._mandates`, so the next turn is checked against it. The execution entry records the action, and a `note` of kind `payee_added` records the payee, the display name, when it was added, and when it can first receive money. The reply tells the student that time. `_freeze` finds the rail by the issuer, the part of the card id before the colon, so `wise:card_01` goes to the rail stored under `wise`. With no such rail the result is a `failed` `FreezeResult` with a reason, not an error, because a freeze that cannot happen is something the student must be told. The whole `FreezeResult` is written in the execution entry, so `not_supported` and its deep link are kept in the ledger. The reply depends on the status: `done` says the card is frozen, `not_supported` says Lifeline could not do it directly and gives the issuer's link, and `failed` gives the reason and tells the student to use the issuer's app. `_add_payee` first checks whether the payee became allowed while the confirmation waited; if so it only replies `payee_exists`, and writes no execution and no new version. Otherwise `_new_version` makes the change. It copies the current mandate with the next version id, the payee added, and the addition time recorded, stores it in `_versions`, and makes it current. The `payee_added` note records `new_mandate_id`, while the entry itself carries the version that authorised the change. `version_id` lets the rebuild reuse the id the ledger recorded instead of computing one. `_freeze` now returns the text and the `FreezeResult` together as a tuple, and `_carry_out` passes the result to `_reply` as `freeze`.
@@ -6038,7 +6066,7 @@ Since the Stage 10 review it first asks `_held`, so a run paid from chat on a le
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
             # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
             # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(error)))
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_pending(lang, str(error))))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -6048,7 +6076,7 @@ Since the Stage 10 review it first asks `_held`, so a run paid from chat on a le
             selected_route=selected,
         )
         text = _text(
-            lang, "retry", failed=failed.rail, key=action.idempotency_key, **_route_values(action, selected)
+            lang, "retry", failed=failed.rail, key=action.idempotency_key, **_route_values(lang, action, selected)
         )
         return self._reply(trail, lang, text, confirmation=confirmation)
 ```
@@ -6081,7 +6109,7 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         return min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
 
     def _refusal(self, lang: str, decision: Decision) -> str:
-        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=" ".join(decision.reasons))
+        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=_pending(lang, " ".join(decision.reasons)))
 
     def _write(self, trail: _Trail, kind: str, payload: dict[str, Any]) -> None:
         body: dict[str, Any] = {"user_id": trail.user_id, "turn": trail.turn, **payload}
@@ -6757,7 +6785,10 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
         kind = precheck.get("action_kind")
         if kind == "arrive_in_china":
             facts, ids = arrival_facts()
-            trail.notices.append(_text(lang, "arrival", facts=" ".join(facts), ids=", ".join(ids)))
+            # The first facts are the entries' statements, one for each id; the rest are Lifeline's own sentences.
+            statements, own = facts[: len(ids)], facts[len(ids) :]
+            facts_text = " ".join(filter(None, [_quoted(lang, " ".join(statements)), _pending(lang, " ".join(own))]))
+            trail.notices.append(_text(lang, "arrival", facts=facts_text, ids=", ".join(ids)))
         if kind == CASH_CAP_ARGUMENTS["action_kind"] and "cards" in result:
             self._warn_cash_cap(trail, lang, action)
         if kind == "remit_from_china" and precheck.get("ready") is False:
@@ -6781,10 +6812,10 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
                 _text(
                     lang,
                     "structuring_refused",
-                    rule=rule,
-                    quota=entries[CN_QUOTA_ENTRY]["statement"],
+                    rule=_quoted(lang, rule),
+                    quota=_quoted(lang, entries[CN_QUOTA_ENTRY]["statement"]),
                     route=entries[CN_INSTITUTION_ENTRY]["statement"],
-                    caveat=NO_SINGAPORE_PAGE,
+                    caveat=_pending(lang, NO_SINGAPORE_PAGE),
                     ids=", ".join([CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]),
                 )
             )
@@ -6807,8 +6838,8 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
                     lang,
                     "document_request_flagged",
                     provider=entries[WISE_DOCS_ENTRY]["values"]["provider"],
-                    where=entries[ids[0]]["statement"],
-                    warning=" ".join(entries[entry_id]["statement"] for entry_id in ids[1:]),
+                    where=_quoted(lang, entries[ids[0]]["statement"]),
+                    warning=_quoted(lang, " ".join(entries[entry_id]["statement"] for entry_id in ids[1:])),
                     ids=", ".join(ids),
                 )
             )
@@ -6975,7 +7006,7 @@ A cancel is a T2 action like a freeze, with one difference: the engine has to kn
         if result.status is CancelStatus.DONE:
             return _text(lang, "cancelled", receipt_id=receipt_id), result
         name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
-        return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
+        return _text(lang, name, receipt_id=receipt_id, reason=_pending(lang, result.reason or "")), result
 ```
 
 `_own_transfer` reads the student's own `receipt` entries and returns the idempotency key of the transfer behind the receipt and the rail that issued it. A receipt sent to the student is seeded into its rail on every start and never written to the ledger, so it is never found, and neither is another student's. When the model passes the word `latest`, `_latest_receipt` first resolves it to the student's most recent receipt, and `_untrusted_latest` reads its provenance from the word in the student's own turn. `_run_tool` puts the key in `Action.cancel_of` before the proposal is written, whatever the model passed, and the engine refuses under R04 a cancel whose `cancel_of` is not an executed transfer in this student's history. After the student confirms, `_carry_out` calls `_cancel`, which asks the rail, writes the whole `CancelResult` in the execution entry and a `cancel_result` note, and says the outcome: done, or the rail's own reason when it would not or could not cancel.
@@ -7083,16 +7114,20 @@ The position is never kept beside the ledger: it is the fixture's cards with the
                 _text(
                     lang,
                     "cash_cap_warning",
-                    remaining=f"{status['remaining_year']:,}",
-                    daily=f"{status['per_card_daily_cap']:,}",
-                    today=f"{status['cards_today_total']:,}",
-                    currency=currency,
+                    remaining=format_amount(status["remaining_year"], currency, lang, grouped=True),
+                    daily=format_amount(status["per_card_daily_cap"], currency, lang, grouped=True),
+                    today=format_amount(status["cards_today_total"], currency, lang, grouped=True),
                     consequence=consequence,
                     entry_id=ATM_CAP_ENTRY,
                 )
             )
         for line in reached:
-            values = {"used": f"{line['used']:,}", "cap": f"{line['cap']:,}", "level": line["level"], "currency": currency, "entry_id": ATM_CAP_ENTRY}
+            values = {
+                "used": format_amount(line["used"], currency, lang, grouped=True),
+                "cap": format_amount(line["cap"], currency, lang, grouped=True),
+                "level": line["level"],
+                "entry_id": ATM_CAP_ENTRY,
+            }
             if line["scope"] == "card_day":
                 trail.notices.append(_text(lang, "cash_cap_card_day", instrument=line["instrument_id"], **values))
             elif line["level"] == max(CASH_CAP_WARNING_PERCENTS):
@@ -7595,8 +7630,7 @@ Since the Stage 10 review `_confirm_money` offers the allowance again only when 
         self._write(trail, "note", {"kind": "rescue_cash_options", "found": found, "missing": missing})
         if found:
             out.say(_text(lang, "cash_intro"))
-            for entry_id in found:
-                out.say(f"{entries[entry_id]['statement']} ({entries[entry_id]['source_url']})")
+            out.say(_quoted(lang, " ".join(f"{entries[entry_id]['statement']} ({entries[entry_id]['source_url']})" for entry_id in found)))
         else:
             out.say(_text(lang, "cash_none"))
         if found and missing:
@@ -7617,7 +7651,7 @@ Since the Stage 10 review `_confirm_money` offers the allowance again only when 
             {"kind": "rescue_replacement", "issuer_link": link, "estimate_id": estimate_id if entry else None},
         )
         out.say(_text(lang, "replacement_link", link=link) if link else _text(lang, "replacement_no_link"))
-        out.say(f"{entry['statement']} ({entry['source_url']})" if entry else _text(lang, "estimate_none"))
+        out.say(_quoted(lang, f"{entry['statement']} ({entry['source_url']})") if entry else _text(lang, "estimate_none"))
         return "replacement_given"
 
     def _stop_standing(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
@@ -7707,7 +7741,7 @@ Since the Stage 10 review `_check_wallet` also asks `_frozen` whether the studen
             elif entry.kind == "receipt":
                 receipt = payload["receipt"]
                 key = receipt["idempotency_key"]
-                values = {"amount": receipt["amount"], "currency": receipt["currency"], "payee": payees.get(key, "")}
+                values = {"amount": format_amount(receipt["amount"], receipt["currency"], lang), "payee": payees.get(key, "")}
                 # Money is told as sent only when the receipt says completed, and as real only when
                 # neither the route nor the receipt says it was a simulation.
                 if receipt["status"] == ReceiptStatus.COMPLETED.value:
@@ -7927,22 +7961,43 @@ def render(summary: dict[str, Any], lang: str) -> str:
     no entry backs as a figure, so the note never repeats it.
     """
     texts = TEXTS.get(lang, TEXTS["en"])
-    transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
-    spread = "; ".join(texts["spread"].format(**group) for group in summary["transfers"]) or texts["none"]
+    transfers = "; ".join(
+        fill(
+            texts["group"],
+            count=group["count"],
+            corridor=group["corridor"],
+            total=format_amount(group["total"], group["currency"], lang),
+            fees=format_amount(group["fees"], group["currency"], lang),
+        )
+        for group in summary["transfers"]
+    ) or texts["no_transfers"]
+    spread = "; ".join(
+        fill(texts["spread"], spread=format_amount(group["spread"], group["currency"], lang), corridor=group["corridor"])
+        for group in summary["transfers"]
+    ) or texts["none"]
     taxes = summary["taxes"]
-    taxed = texts["taxes"].format(seqs=", ".join(str(seq) for seq in taxes["seqs"])) if taxes["on_file"] else texts["no_taxes"]
-    routes = ", ".join(texts["route"].format(**route) for route in summary["routes"]) or texts["none"]
-    savings = "; ".join(_saving(texts, comparison) for comparison in summary["comparisons"]) or texts["none"]
+    taxed = fill(texts["taxes"], seqs=", ".join(str(seq) for seq in taxes["seqs"])) if taxes["on_file"] else texts["no_taxes"]
+    routes = ", ".join(fill(texts["route"], count=route["count"], rail=route["rail"]) for route in summary["routes"]) or texts["none"]
+    savings = "; ".join(_saving(texts, comparison, lang) for comparison in summary["comparisons"]) or texts["none"]
     problems = ", ".join(
         f"{item['receipt_id'] or item.get('rail')} {texts[item['outcome']]}" for item in summary["problems"]
     ) or texts["none"]
     unusual = summary["unusual"]
     coming = summary["coming"]
     upcoming = [
-        texts["standing_due"].format(amount=run["amount"], currency=run["currency"], payee=run["payee_id"], due=run["due"])
+        fill(
+            texts["standing_due"],
+            amount=format_amount(run["amount"], run["currency"], lang),
+            payee=run["payee_id"],
+            due=format_date(date.fromisoformat(run["due"]), lang),
+        )
         for run in coming["standing_runs"]
-    ] + [texts["reminder_due"].format(due=item["due"][:10]) for item in coming["reminders"]]
-    return texts["note"].format(
+    ] + [
+        fill(texts["reminder_due"], due=format_date(datetime.fromisoformat(item["due"]).date(), lang))
+        for item in coming["reminders"]
+    ]
+    return fill(
+        texts["note"],
         month=summary["month"],
         transfers=transfers,
         spread=spread,
@@ -7951,7 +8006,8 @@ def render(summary: dict[str, Any], lang: str) -> str:
         savings=savings,
         standing=len(summary["standing_runs"]),
         problems=problems,
-        unusual=texts["unusual"].format(
+        unusual=fill(
+            texts["unusual"],
             refused=summary["refusals"]["count"],
             payees=unusual["payees_added"]["count"],
             rescues=unusual["rescues_started"]["count"],
@@ -7963,6 +8019,47 @@ def render(summary: dict[str, Any], lang: str) -> str:
 ```
 
 `render` builds the sentence from the summary's figures alone, in one of the three languages. `AgentLoop.write_monthly_notes` calls `summarize` and `render` for the month that ended, once per student, and `_run_tool` adds the rendered note to the reply when the student asks through `monthly_summary`.
+
+## Amounts and dates, `core/format.py`
+
+This is the one place an amount or a date becomes text for a student. The agent loop, the monthly note, the mandate engine's reasons and the rail rules' sentences all call it. Both functions write one plain form in every language, the form every template wrote before, and the app shows it with the student's locale. `fill` is how every language table is filled: a Decimal, a float or a date passed to it as it is raises `TypeError`, so a sentence cannot format an amount its own way.
+
+```python
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+# The values a sentence may not take as they are: each has more than one way of being written.
+UNFORMATTED = (Decimal, float, date)
+
+
+def format_amount(amount: Decimal | int | str, currency: str | None, lang: str, *, grouped: bool = False) -> str:
+    """An amount and its currency code as one phrase, such as 1200 SGD, or the bare figure with no currency.
+
+    grouped puts a comma every three digits, as the cash cap sentences have always written their figures.
+    An amount is written out in full, never with an exponent.
+    """
+    value = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    figure = format(value, ",f" if grouped else "f")
+    return f"{figure} {currency}" if currency else figure
+
+
+def format_date(moment: date | datetime, lang: str) -> str:
+    """A date as YYYY-MM-DD, and a moment as ISO 8601 to the second with its offset."""
+    if isinstance(moment, datetime):
+        return moment.isoformat(timespec="seconds")
+    return moment.isoformat()
+
+
+def fill(template: str, **values: Any) -> str:
+    """A template with its values, refusing any amount or date that did not go through the two functions above."""
+    loose = sorted(name for name, value in values.items() if isinstance(value, UNFORMATTED))
+    if loose:
+        raise TypeError(f"Format these with format_amount or format_date first: {', '.join(loose)}.")
+    return template.format(**values)
+```
+
+An amount comes back with its currency code, so the templates hold `{amount}` where they held `{amount} {currency}`. `grouped=True` keeps the comma every three digits the cash cap figures have always had. `format(value, "f")` writes an amount held with an exponent, such as `1.4E+3`, out in full.
 
 ## The reminders, `core/reminders.py`
 
@@ -8724,6 +8821,7 @@ from contracts.interfaces import Anchor, Council, Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
+    LANGUAGE_META,
     LanguageCode,
     LedgerEntry,
     Mandate,
@@ -9090,7 +9188,7 @@ def create_app(
 
     @app.get("/health")
     def health() -> Health:
-        return Health(status="ok")
+        return Health(status="ok", languages=LANGUAGE_META)
 
     @app.post("/chat")
     def chat(request: ChatRequest) -> AgentReply:
@@ -10455,6 +10553,41 @@ def test_a_cancelled_standing_run_is_not_paid_from_chat_without_confirmation():
 ```
 
 Each test in this file is a break that the Stage 10 attackers found and three skeptics failed to refute. The first group covers X17 and break C-B1. Here the student has created and confirmed a monthly rent standing mandate and cancelled this month's run. On a later turn about something else, the model proposes the run from chat. Before the fix the engine found it within the pattern and the loop paid it at once under R12. Now the engine reads the cancel from its history, the run escalates under R13, and the student is asked to confirm. The file's other tests check the same at engine level, over HTTP and after a rebuild from the ledger, that a confirmed escalation still pays, that a cancel made after a period ran applies to the next period, and that cancelling one standing mandate leaves another within its pattern. The second group covers break C-B2: one model answer that stops the standing mandate and proposes its run is refused under R12, and the entries written after the stop name the new version. The third group covers breaks A-B2, A-B3, A-B4, A-B5, A-B7 and H-B2, each with a control that the student's own words are still trusted: a stop or a skip only a paste asks for, a reminder only a paste wrote, a card or standing terms only a paste gives, an amount a paste writes in words, in Chinese numerals or with an exponent, and a payee a paste glues to more text are all refused under R01 with an `injection_suspected` entry naming the field and the paste. The fourth group covers breaks G2-B2 and G2-B3, the integrity hold, E-B4, the E-B5 follow up and the empty secrets: ledger files edited in ordinary ways load and verify names the line, a payment and a standing run are held on a ledger that cannot be trusted, a rescue freeze goes through with the hold note beside it while the reroute and the allowance stay held and a payment goes ahead again on the clean file, a blocked plan change is told to the family as a plan change, a backup card frozen earlier is not rerouted to, and in production an empty secret stops the API at start.
+
+## The Stage 13 tests
+
+### The multilingual tests, `tests/test_i18n.py`
+
+The placeholder test reads every language table and fails on a key whose placeholders differ between two languages, unless `HAND_TRANSLATED` names that placeholder for that key. With the test that every key is in every language, a key added in English without its two translations fails the suite.
+
+```python
+@pytest.mark.parametrize("table_name", TABLES)
+def test_every_key_has_the_same_placeholders_in_every_language(table_name):
+    table = TABLES[table_name]
+    # Only the named, documented exceptions may drop a placeholder, and only outside English.
+    exceptions = HAND_TRANSLATED if table is TEXTS else {}
+    differ = {}
+    for key, english in table["en"].items():
+        for lang in LANGUAGES:
+            expected = _fields(english) - (exceptions.get(key, frozenset()) if lang != "en" else frozenset())
+            if _fields(table[lang][key]) != expected:
+                differ[(key, lang)] = sorted(_fields(table[lang][key]) ^ expected)
+    assert differ == {}
+```
+
+A turn in a language Lifeline cannot detect is answered in English, and the reply says so with the code `en`, not with a guess.
+
+```python
+@pytest.mark.parametrize("text", [HINDI, SPANISH])
+def test_a_turn_in_a_language_lifeline_cannot_detect_is_answered_in_english_with_the_code_en(text):
+    s = _setup([_call("export_credentials", {})])
+
+    reply = s.loop.handle(USER, _user(text))
+
+    assert agent.detect_lang(text) == "en"
+    assert reply.lang == "en"
+    assert reply.text.startswith("Lifeline never shows card numbers")
+```
 
 ## The suites and their scenarios
 

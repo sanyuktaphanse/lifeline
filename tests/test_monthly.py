@@ -126,7 +126,7 @@ def test_a_standing_run_is_listed_with_its_entry():
     ("lang", "pieces"),
     [
         ("en", ["Lifeline's note for", "1 sent on SG>BR, total 1200 SGD, fees 5.60 SGD", "refused requests 0"]),
-        ("pt", ["Nota do Lifeline para", "1 enviadas em SG>BR, total de 1200 SGD, taxas de 5.60 SGD", "pedidos recusados 0"]),
+        ("pt", ["Nota do Lifeline para", "1 enviada(s) em SG>BR, total de 1200 SGD, taxas de 5.60 SGD", "pedidos recusados 0"]),
         ("zh", ["Lifeline 的", "在 SG>BR 上发出 1 笔，共 1200 SGD，手续费 5.60 SGD", "被拒绝的请求 0 次"]),
     ],
 )

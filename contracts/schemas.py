@@ -9,6 +9,15 @@ CurrencyCode = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
 # The languages Lifeline writes replies in. Source: the TEXTS table in core/agent.py, which a
 # test in tests/test_council.py pins to this tuple so the two cannot drift.
 LANGUAGES = ("en", "pt", "zh")
+# What the app needs to show each language: its writing direction and its name in its own script. The app reads
+# this from GET /health and never hardcodes it. A fourth language is one entry in LANGUAGES, one here and one
+# column in every TEXTS table, and tests/test_i18n.py fails until all three are there.
+# Source: docs/decisions.md, 9 October 2026.
+LANGUAGE_META: dict[str, dict[str, str]] = {
+    "en": {"direction": "ltr", "name": "English"},
+    "pt": {"direction": "ltr", "name": "Português"},
+    "zh": {"direction": "ltr", "name": "中文"},
+}
 LanguageCode = Annotated[str, Field(pattern=f"^({'|'.join(LANGUAGES)})$")]
 Corridor = Annotated[str, Field(pattern=r"^[A-Z]{2}>[A-Z]{2}$")]
 PositiveAmount = Annotated[Decimal, Field(gt=0)]

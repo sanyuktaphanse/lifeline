@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from contracts.schemas import INSTRUMENT_ID, NonNegativeAmount
+from core.format import format_amount
 from rails.knowledge.loader import load_knowledge
 
 UPI_PURPOSE_ENTRY = "in_upi_paynow_purpose_001"
@@ -89,8 +90,9 @@ def upi_refusals(amount: Decimal, currency: str, purpose: str | None, earlier_to
         refusals.append(
             (
                 UPI_CAP_ENTRY,
-                f"{amount} {currency} would take the day's UPI to PayNow total to {earlier_today + amount} "
-                f"{currency}, above the daily cap of {cap['daily_cap']} {cap['currency']}. Source: {UPI_CAP_ENTRY}.",
+                f"{format_amount(amount, currency, 'en')} would take the day's UPI to PayNow total to "
+                f"{format_amount(earlier_today + amount, currency, 'en')}, above the daily cap of "
+                f"{format_amount(cap['daily_cap'], cap['currency'], 'en')}. Source: {UPI_CAP_ENTRY}.",
             )
         )
     return refusals
@@ -303,8 +305,9 @@ def cash_cap_sentences(cards: list[dict[str, Any]]) -> tuple[bool | None, list[s
     status = cash_cap_status(cards)
     currency = status["currency"]
     sentences = [
-        f"Card {card['instrument_id']}: {card['remaining_year']:,} {currency} left this calendar year across all "
-        f"Chinese cards, and {card['remaining_today']:,} {currency} left today. Source: {ATM_CAP_ENTRY}."
+        f"Card {card['instrument_id']}: {format_amount(card['remaining_year'], currency, 'en', grouped=True)} left this "
+        f"calendar year across all Chinese cards, and {format_amount(card['remaining_today'], currency, 'en', grouped=True)} "
+        f"left today. Source: {ATM_CAP_ENTRY}."
         for card in status["cards"]
     ]
     sentences.append(entry(ATM_CAP_ENTRY)["values"]["consequence"])

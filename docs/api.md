@@ -66,9 +66,16 @@ Response `200`:
 
 ```json
 {
-  "status": "ok"
+  "status": "ok",
+  "languages": {
+    "en": {"direction": "ltr", "name": "English"},
+    "pt": {"direction": "ltr", "name": "Português"},
+    "zh": {"direction": "ltr", "name": "中文"}
+  }
 }
 ```
+
+`languages` holds every language Lifeline replies in, with its writing direction, `ltr` or `rtl`, and its name in its own script. Read it from here and never hardcode it: a new language appears here first. Amounts in every reply come as the figure and its currency code, such as 1200 SGD, and dates as ISO 8601, in every language. Showing them with the student's locale separators and date order is the app's job.
 
 ## POST /chat
 

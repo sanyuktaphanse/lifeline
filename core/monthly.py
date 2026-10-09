@@ -7,11 +7,12 @@ Source: docs/decisions.md, 8 October 2026.
 
 import re
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from contracts.schemas import LedgerEntry
+from core.format import fill, format_amount, format_date
 from core.reminders import reminders_of
 from core.standing import next_occurrence
 
@@ -30,16 +31,16 @@ INJECTION = "injection_suspected"
 TEXTS = {
     "en": {
         "note": "Lifeline's note for {month}, from your ledger. Transfers: {transfers}. Exchange cost paid: {spread}. {taxes} Routes used: {routes}. Against the bank wire: {savings}. Standing runs that ran: {standing}. Failed, returned or cancelled: {problems}. Unusual: {unusual}. Coming in {next_month}: {coming}.",
-        "group": "{count} sent on {corridor}, total {total} {currency}, fees {fees} {currency}",
-        "spread": "{spread} {currency} on {corridor}",
+        "group": "{count} sent on {corridor}, total {total}, fees {fees}",
+        "spread": "{spread} on {corridor}",
         "no_taxes": "Taxes: no tax figure is on file, because no route or entry carries one.",
         "taxes": "Taxes: tax lines are on file in entries {seqs}, and Lifeline does not total them.",
         "route": "{count} over {rail}",
-        "saved": "{rail} for {amount} {currency} cost {saving} {currency} less than the bank wire quoted in the same turn",
-        "dearer": "{rail} for {amount} {currency} cost {saving} {currency} more than the bank wire quoted in the same turn",
-        "not_compared": "no comparison is on file for {rail} for {amount} {currency}",
+        "saved": "{rail} for {amount} cost {saving} less than the bank wire quoted in the same turn",
+        "dearer": "{rail} for {amount} cost {saving} more than the bank wire quoted in the same turn",
+        "not_compared": "no comparison is on file for {rail} for {amount}",
         "unusual": "refused requests {refused}, payees added {payees}, rescues started {rescues}, suspected injections {injections}",
-        "standing_due": "a standing run of {amount} {currency} to {payee} due {due}",
+        "standing_due": "a standing run of {amount} to {payee} due {due}",
         "reminder_due": "a reminder due {due}",
         "nothing": "nothing on file",
         "no_transfers": "no transfers were sent",
@@ -51,16 +52,16 @@ TEXTS = {
     },
     "pt": {
         "note": "Nota do Lifeline para {month}, a partir do seu registro. Transferências: {transfers}. Custo de câmbio pago: {spread}. {taxes} Rotas usadas: {routes}. Em comparação com a transferência bancária: {savings}. Ordens permanentes executadas: {standing}. Falhas, devoluções ou cancelamentos: {problems}. Fora do comum: {unusual}. Previsto para {next_month}: {coming}.",
-        "group": "{count} enviadas em {corridor}, total de {total} {currency}, taxas de {fees} {currency}",
-        "spread": "{spread} {currency} em {corridor}",
+        "group": "{count} enviada(s) em {corridor}, total de {total}, taxas de {fees}",
+        "spread": "{spread} em {corridor}",
         "no_taxes": "Impostos: nenhum valor de imposto está registrado, porque nenhuma rota ou entrada traz um.",
         "taxes": "Impostos: há linhas de imposto registradas nas entradas {seqs}, e o Lifeline não as soma.",
         "route": "{count} via {rail}",
-        "saved": "{rail} para {amount} {currency} custou {saving} {currency} a menos que a transferência bancária cotada no mesmo turno",
-        "dearer": "{rail} para {amount} {currency} custou {saving} {currency} a mais que a transferência bancária cotada no mesmo turno",
-        "not_compared": "não há comparação registrada para {rail} com {amount} {currency}",
+        "saved": "{rail} para {amount} custou {saving} a menos que a transferência bancária cotada no mesmo turno",
+        "dearer": "{rail} para {amount} custou {saving} a mais que a transferência bancária cotada no mesmo turno",
+        "not_compared": "não há comparação registrada para {rail} com {amount}",
         "unusual": "pedidos recusados {refused}, destinatários adicionados {payees}, resgates iniciados {rescues}, suspeitas de injeção {injections}",
-        "standing_due": "uma ordem permanente de {amount} {currency} para {payee} em {due}",
+        "standing_due": "uma ordem permanente de {amount} para {payee} em {due}",
         "reminder_due": "um lembrete em {due}",
         "nothing": "nada registrado",
         "no_transfers": "nenhuma transferência foi enviada",
@@ -72,16 +73,16 @@ TEXTS = {
     },
     "zh": {
         "note": "Lifeline 的 {month} 月度记录，来自你的账本。转账：{transfers}。已付汇率成本：{spread}。{taxes}使用的路线：{routes}。与银行电汇相比：{savings}。已执行的定期付款：{standing}。失败、退回或取消：{problems}。异常情况：{unusual}。{next_month} 即将发生：{coming}。",
-        "group": "在 {corridor} 上发出 {count} 笔，共 {total} {currency}，手续费 {fees} {currency}",
-        "spread": "{corridor} 上 {spread} {currency}",
+        "group": "在 {corridor} 上发出 {count} 笔，共 {total}，手续费 {fees}",
+        "spread": "{corridor} 上 {spread}",
         "no_taxes": "税费：没有记录任何税费数字，因为没有任何路线或记录包含税费。",
         "taxes": "税费：第 {seqs} 条记录中有税费明细，Lifeline 不对其求和。",
         "route": "{rail} {count} 笔",
-        "saved": "{rail} 发送 {amount} {currency}，比同一轮对话中报价的银行电汇少花 {saving} {currency}",
-        "dearer": "{rail} 发送 {amount} {currency}，比同一轮对话中报价的银行电汇多花 {saving} {currency}",
-        "not_compared": "{rail} 发送 {amount} {currency} 没有可比较的记录",
+        "saved": "{rail} 发送 {amount}，比同一轮对话中报价的银行电汇少花 {saving}",
+        "dearer": "{rail} 发送 {amount}，比同一轮对话中报价的银行电汇多花 {saving}",
+        "not_compared": "{rail} 发送 {amount} 没有可比较的记录",
         "unusual": "被拒绝的请求 {refused} 次，新增收款人 {payees} 个，启动救援 {rescues} 次，疑似注入 {injections} 次",
-        "standing_due": "{due} 到期的定期付款 {amount} {currency}（收款人 {payee}）",
+        "standing_due": "{due} 到期的定期付款 {amount}（收款人 {payee}）",
         "reminder_due": "{due} 到期的提醒",
         "nothing": "没有记录",
         "no_transfers": "没有发出转账",
@@ -347,13 +348,14 @@ def seqs_of(summary: dict[str, Any]) -> list[int]:
     return sorted(seqs)
 
 
-def _saving(texts: dict[str, str], comparison: dict[str, Any]) -> str:
-    values = {name: comparison[name] for name in ("rail", "amount", "currency")}
+def _saving(texts: dict[str, str], comparison: dict[str, Any], lang: str) -> str:
+    currency = comparison["currency"]
+    values = {"rail": comparison["rail"], "amount": format_amount(comparison["amount"], currency, lang)}
     if not comparison["compared"]:
-        return texts["not_compared"].format(**values)
+        return fill(texts["not_compared"], **values)
     saving = Decimal(comparison["saving"])
     name = "saved" if saving >= 0 else "dearer"
-    return texts[name].format(saving=format(abs(saving), "f"), **values)
+    return fill(texts[name], saving=format_amount(abs(saving), currency, lang), **values)
 
 
 def render(summary: dict[str, Any], lang: str) -> str:
@@ -363,22 +365,43 @@ def render(summary: dict[str, Any], lang: str) -> str:
     no entry backs as a figure, so the note never repeats it.
     """
     texts = TEXTS.get(lang, TEXTS["en"])
-    transfers = "; ".join(texts["group"].format(**group) for group in summary["transfers"]) or texts["no_transfers"]
-    spread = "; ".join(texts["spread"].format(**group) for group in summary["transfers"]) or texts["none"]
+    transfers = "; ".join(
+        fill(
+            texts["group"],
+            count=group["count"],
+            corridor=group["corridor"],
+            total=format_amount(group["total"], group["currency"], lang),
+            fees=format_amount(group["fees"], group["currency"], lang),
+        )
+        for group in summary["transfers"]
+    ) or texts["no_transfers"]
+    spread = "; ".join(
+        fill(texts["spread"], spread=format_amount(group["spread"], group["currency"], lang), corridor=group["corridor"])
+        for group in summary["transfers"]
+    ) or texts["none"]
     taxes = summary["taxes"]
-    taxed = texts["taxes"].format(seqs=", ".join(str(seq) for seq in taxes["seqs"])) if taxes["on_file"] else texts["no_taxes"]
-    routes = ", ".join(texts["route"].format(**route) for route in summary["routes"]) or texts["none"]
-    savings = "; ".join(_saving(texts, comparison) for comparison in summary["comparisons"]) or texts["none"]
+    taxed = fill(texts["taxes"], seqs=", ".join(str(seq) for seq in taxes["seqs"])) if taxes["on_file"] else texts["no_taxes"]
+    routes = ", ".join(fill(texts["route"], count=route["count"], rail=route["rail"]) for route in summary["routes"]) or texts["none"]
+    savings = "; ".join(_saving(texts, comparison, lang) for comparison in summary["comparisons"]) or texts["none"]
     problems = ", ".join(
         f"{item['receipt_id'] or item.get('rail')} {texts[item['outcome']]}" for item in summary["problems"]
     ) or texts["none"]
     unusual = summary["unusual"]
     coming = summary["coming"]
     upcoming = [
-        texts["standing_due"].format(amount=run["amount"], currency=run["currency"], payee=run["payee_id"], due=run["due"])
+        fill(
+            texts["standing_due"],
+            amount=format_amount(run["amount"], run["currency"], lang),
+            payee=run["payee_id"],
+            due=format_date(date.fromisoformat(run["due"]), lang),
+        )
         for run in coming["standing_runs"]
-    ] + [texts["reminder_due"].format(due=item["due"][:10]) for item in coming["reminders"]]
-    return texts["note"].format(
+    ] + [
+        fill(texts["reminder_due"], due=format_date(datetime.fromisoformat(item["due"]).date(), lang))
+        for item in coming["reminders"]
+    ]
+    return fill(
+        texts["note"],
         month=summary["month"],
         transfers=transfers,
         spread=spread,
@@ -387,7 +410,8 @@ def render(summary: dict[str, Any], lang: str) -> str:
         savings=savings,
         standing=len(summary["standing_runs"]),
         problems=problems,
-        unusual=texts["unusual"].format(
+        unusual=fill(
+            texts["unusual"],
             refused=summary["refusals"]["count"],
             payees=unusual["payees_added"]["count"],
             rescues=unusual["rescues_started"]["count"],
