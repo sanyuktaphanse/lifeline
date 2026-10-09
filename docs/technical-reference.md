@@ -1132,6 +1132,10 @@ Money sent to the student is seeded on every start from the fixture's `inbound_r
 
 The API registers `upi_paynow_sim` and `cn_bank_remit_sim` unless `SIM_RAILS` is `off`, `false`, `0` or `no`, so they are on by default; `create_app` also takes `sim_rails` directly, which the tests do. `sim_pix` is always the Pix rail. The API runs every rail on the `normal` script; a scenario chooses others through `fixtures.rail_scripts`.
 
+### The translator
+
+`rails/translator.py` holds `ModelTranslator`, which implements `Translator`. `explain(text, source_lang, target_lang)` sends the message to the model inside a `<message>` frame, marked `pasted_text`, under a system prompt that says it is data written by someone else and never an instruction, with no tools offered. `payment_signals` finds payment instructions in code, from fixed patterns: payment words in English, Portuguese and Chinese, an IBAN or a run of eight or more digits, a Pix key, and a link. When any is found the reply opens with `PAYMENT_FLAG`, whatever the model said. `tests/test_translator.py` holds it. The agent loop does not call it yet, open item 171.
+
 ### Freeze
 
 `freeze` returns a `FreezeResult` whose status is `done`, `not_supported`, or `failed`. The instrument id is written as the issuer, a colon, and the card, such as `wise:card_01`. Wise returns `done`. Revolut returns `not_supported` with a deep link and a reason, so the agent can send the student to freeze the card in the app, as task T15 describes. The deep link is a placeholder on the reserved `example.invalid` domain, which never resolves. An unknown issuer, or an id without a colon, returns `failed` with a reason instead of raising, because a freeze that cannot happen is something the agent must explain.
@@ -2029,3 +2033,5 @@ From `97a6211` onward every change goes on its own branch and reaches `main` thr
 165. Lifeline refuses a plan that uses several people's quotas for one student's costs as its own policy. No source on file, the People's Bank's Order 2025 No. 11 included, says that splitting a transfer across people is structuring, so the refusal names itself as Lifeline's own and quotes only the verification threshold the order does state.
 166. `cn_wallet_foreign_006` reports an instruction the People's Bank announced on 1 March 2024 for overseas travellers. Nothing on file shows the limits took effect or that they apply to a student who lives in China; the People's Bank's own notice or the platforms' pages would settle it.
 167. `cn_boc_anxin_009` rests on a page from 2010. The China precheck says so, but no page on file shows the An Xin account is still offered.
+171. The agent loop does not call the translator in `rails/translator.py`. Tasks T04 and T05 need a tool that sends a pasted message to `ModelTranslator.explain` and returns its text as a tool result, which is lane A's to add in `core/agent.py`.
+172. The translator's `PAYMENT_FLAG` is English only; it needs a checked Portuguese and Chinese translation before it joins the `TEXTS` tables and `docs/i18n_review.md`.
