@@ -1,48 +1,51 @@
 - id: cn_fx_quota_001
-  statement: "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting."
+  statement: "SAFE's Detailed Rules on Measures for the Administration of Individual Foreign Exchange, explained by SAFE's spokesman on 5 January 2007, set an annual quota of 50,000 US dollars for foreign exchange purchases by domestic individuals, raised from 20,000 US dollars, and an annual quota of 50,000 US dollars for foreign exchange sales by individuals. Formalities for purchases and sales within the quota are simplified, and the authenticity of transactions exceeding the quota is examined more closely."
   country: CN
   rail: bank_fx
   kind: quota
-  source_url: "https://www.webull.com/news/13974173100655616"
-  source_type: press
-  date_checked: 2026-09-15
-  checked_by: "S"
+  source_url: "https://www.safe.gov.cn/en/2007/0105/819.html"
+  source_type: regulator
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, X28]
+  note: "Claude Code opened SAFE's page on 9 October 2026, dispatched on 5 January 2007: the spokesman's press conference on the Detailed Rules. The entry moved from a news aggregator's report of 5 December 2025. The page is from 2007 and does not itself show the quota is unchanged today."
 - id: cn_edu_remit_002
-  statement: "Tuition and living costs above the quota can be remitted with documents without consuming the quota. The payment goes to the institution's account, the daily cap is 50,000 US dollars equivalent, and more than two weeks should be allowed."
+  statement: "HSBC China's International Education Payment System is for HSBC Premier, Premier Elite, Global Private Banking and Advance customers, and covers more than 1,000 educational institutes in the US, UK, Canada, Australia and Hong Kong SAR. Through it, a foreign currency purchase for an overseas education remittance need not use the SAFE annual facilitation quota when the application includes documents that meet regulatory and HSBC's requirements, such as payment proof for tuition fees and living expenses. Accumulative daily limits equivalent to 50,000 US dollars apply to the relevant transactions, and HSBC strongly recommends allowing more than 2 weeks to process remittances."
   country: CN
   rail: bank_remittance
   kind: rule
   source_url: "https://www.hsbc.com.cn/en-cn/international/products/education-payment/"
   source_type: bank
-  date_checked: 2026-09-15
-  checked_by: "S"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, T31, X28]
+  note: "Claude Code opened the page on 9 October 2026. The page carries no date. The two weeks advice sits in collapsed FAQ sections. Singapore is not among the places the page names, so the rails that cite this entry say no sourced Singapore page is on file."
 - id: cn_edu_docs_003
-  statement: "The documents required are the admission letter or student card, the student's resident ID, the passport and visa for the destination, relationship proof such as the household registration or birth certificate, and payment proof matching the amount. Originals or scans of originals are accepted."
+  statement: "For HSBC China's education payments, the documents for review are payment proof whose transaction amount and details match the institution, the academic term, the foreign exchange purchase and the remittance amount; the admission letter or student ID; the student's resident ID; the passport and visa; and relationship certificates, which are a birth certificate or the household registration booklet. They are uploaded through HSBC's mobile banking as photos or scans of the original documents. Photos or scans of copies are not accepted, and HSBC does not accept documents by email or other channels."
   country: CN
   rail: bank_remittance
   kind: documents
   source_url: "https://www.hsbc.com.cn/en-cn/international/products/education-payment/"
   source_type: bank
-  date_checked: 2026-09-15
-  checked_by: "S"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, precheck.remit_from_china]
+  note: "Claude Code opened the page on 9 October 2026. The page carries no date and says HSBC may adjust the document list from time to time."
 - id: cn_cdd_004
-  statement: "From 1 January 2026, cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification under the joint due diligence measures of the People's Bank, the financial regulator, and the securities regulator. Splitting a transfer across people is structuring."
+  statement: "From 1 January 2026, under the Administrative Measures on Customer Due Diligence and Retention of Customer Identification Data and Transaction Records of Financial Institutions, issued jointly by the People's Bank of China, the National Financial Regulatory Administration and the China Securities Regulatory Commission, a financial institution or money transfer business sending a customer's funds abroad must verify the accuracy of the remitter's information when a single remittance is 5,000 yuan or more, or 1,000 US dollars or more in foreign currency."
   country: CN
   rail: all
   kind: rule
-  source_url: "https://www.webull.com/news/13974173100655616"
-  source_type: press
-  date_checked: 2026-09-15
-  checked_by: "S"
+  source_url: "https://www.pbc.gov.cn/tiaofasi/144941/144957/5916164/index.html"
+  source_type: regulator
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [X28, T36]
-  note: "Verify against the PBOC text."
+  note: "Claude Code opened the People's Bank page on 9 October 2026. It holds the Chinese text of Order 2025 No. 11, published on 28 November 2025; the statement translates Article 34 and Article 52. The order says nothing about splitting a transfer across people, so Lifeline's refusal of a plan that uses several people's quotas is its own policy, recorded in docs/decisions.md on 9 October 2026."
 - id: cn_atm_cap_005
   statement: "Overseas cash withdrawals on all of an individual's Chinese bank cards, including supplementary cards, are capped at 100,000 yuan per calendar year and 10,000 yuan per card per day. Exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year. The rule took effect on 1 January 2018."
   country: CN
@@ -50,8 +53,8 @@
   kind: limit
   source_url: "https://www.safe.gov.cn/en/2017/1230/1397.html"
   source_type: regulator
-  date_checked: 2026-09-15
-  checked_by: "S"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T37, precheck.overseas_cash]
   values:
@@ -59,59 +62,62 @@
     per_card_daily_cap: 10000
     currency: CNY
     consequence: "Exceeding the annual cap bars overseas withdrawals for the rest of that year and the following year."
+  note: "Claude Code opened the page on 9 October 2026, dispatched on 30 December 2017. It is SAFE's English translation, where the original Chinese prevails, and it says the current and second years, which the statement reads as the rest of that year and the following year."
 - id: cn_wallet_foreign_006
-  statement: "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars, raised from 1,000 and 10,000 US dollars. The People's Bank announced the change on 1 March 2024."
+  statement: "On 1 March 2024 a deputy governor of the People's Bank of China told a press briefing that the central bank will instruct platforms such as Alipay and Tenpay to raise the limits for overseas travellers using mobile payments: the single transaction limit from 1,000 US dollars to 5,000 US dollars, and the annual cumulative transaction limit from 10,000 US dollars to 50,000 US dollars."
   country: CN
   rail: wallet
   kind: limit
   source_url: "https://english.www.gov.cn/news/202403/01/content_WS65e1dacdc6d0868f4e8e487b.html"
   source_type: government
-  date_checked: 2026-09-15
-  checked_by: "S"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T38, precheck.arrive_in_china]
   values:
     single_transaction_limit: 5000
     annual_limit: 50000
     currency: USD
+  note: "Claude Code opened the page on 9 October 2026. It is a Xinhua report on the State Council's English portal, updated 1 March 2024, of an announced change; it does not show the change took effect, and the People's Bank's own notice or the platforms' pages would be better."
 - id: cn_wise_in_007
-  statement: "Wise sends CNY into China to Alipay, WeChat, and UnionPay for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay."
+  statement: "Wise sends CNY into China to UnionPay, Alipay and Weixin, up to 33,000 yuan per transaction to UnionPay and 50,000 yuan per transfer to Alipay or to Weixin. For UnionPay, Wise supports both mainland and non mainland recipients, and the banks available depend on whether the recipient holds a Mainland Chinese National ID."
   country: CN
   rail: wise
   kind: limit
   source_url: "https://wise.com/help/articles/2955298/guide-to-cny-transfers"
   source_type: operator
-  date_checked: 2026-09-15
-  checked_by: "S"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, T38, precheck.arrive_in_china, router.SG>CN]
   values:
     alipay_per_transfer: 50000
     unionpay_per_transfer: 33000
     currency: CNY
-    recipient_condition: "a Chinese national ID"
+  note: "Claude Code opened the page on 9 October 2026. It shows no date to readers."
 - id: cn_wise_out_008
-  statement: "Wise sends money out of China only for foreigners with a Chinese tax record, up to 100,000 yuan per transfer, with an annual total tied to post tax income. Alipay does not let non mainland users send money abroad."
+  statement: "Wise lets a customer send money from CNY if they are not mainland Chinese, which includes people from Taiwan, Hong Kong or Macau, are working or have worked in China, and have a valid tax record from the China tax authority showing taxes paid within the last 3 years. One transfer can send at most 300,000 yuan from a China bank app or 50,000 yuan from Alipay, and an overall limit, in general the salary earned in China after deducting the tax paid there, caps the total."
   country: CN
   rail: wise
   kind: limit
-  source_url: "https://wise.com/en-cn/blog/alipay-transaction-limit"
+  source_url: "https://wise.com/help/articles/2955298/guide-to-cny-transfers"
   source_type: operator
-  date_checked: 2026-09-15
-  checked_by: "S"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, T38]
+  note: "Claude Code opened the page on 9 October 2026. The entry moved from Wise's blog of 2 February 2024, which gave 100,000 yuan per transfer, to Wise's help article on CNY transfers."
 - id: cn_boc_anxin_009
-  statement: "Bank of China's An Xin account is an SGD savings account in the student's own name at Bank of China Singapore Branch, for students holding an admission letter from a university or college in Singapore. It is applied for at a branch of Bank of China in China with the originals of the passport, the ID card or Hukou book, and the enrollment or admission letter, and once it is approved, money can be remitted to it with the customer reference number the Singapore Branch provides."
+  statement: "Bank of China's page on the An Xin account, from 2010, says it is an SGD savings account at Bank of China Singapore Branch for applicants who hold a valid passport and an admission letter from a university or college in Singapore and are 14 years old or above. It is applied for at the Beijing, Shanghai, Guangdong, Shenzhen, Jiangsu, Zhejiang, Shandong, Liaoning, Shenyang, Fujian or Tianjin branch of Bank of China or their designated sub branches, with the originals of the passport, the ID card or Hukou book, and the enrollment or admission letter. Once the application is approved, money can be remitted to it with the customer reference number the Singapore Branch provides, and the student then activates the account in person at the Singapore Branch with the passport and student's pass."
   country: CN
   rail: bank_remittance
   kind: documents
   source_url: "https://www.boc.cn/en/pbservice/pb4/201005/t20100520_1323963.html"
   source_type: bank
-  date_checked: 2026-10-08
-  checked_by: "SP"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T31, T36, cn_bank_remit_sim, precheck.remit_from_china]
   values:
     documents: [passport, ID card or Hukou book, enrollment or admission letter]
-  note: "The page gives no date and no time for a remittance to arrive. Check the service is still offered."
+  note: "Claude Code opened the page on 9 October 2026. The page shows no date of its own; its address and its promotion running to 31 December 2010 date it to 2010. It gives no time for a remittance to arrive. Check with Bank of China that the service is still offered."

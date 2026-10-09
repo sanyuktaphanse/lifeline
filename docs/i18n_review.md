@@ -70,6 +70,7 @@ These changed translations before the reviewers read them, so a native speaker s
 2. The two wrapper sentences, `quoted_in_english` and `english_pending`, are new; the next section lists them.
 3. Every template that held an amount followed by `{currency}` now holds the amount alone, because `format_amount` writes the currency code after the figure. The filled sentences are the same as before.
 4. In Portuguese, `group` in `core/monthly.py` now reads `enviada(s)`. Scenario T35 and `tests/test_monthly.py` held the old `1 enviadas` and were changed with it.
+5. On 9 October 2026, after the knowledge audit, `structuring_refused` gained `{policy}`, Lifeline's own policy sentence behind `english_pending`, and a lead in before the quoted rule: `What the due diligence measures say:`, `O que dizem as regras de diligência devida:` and `尽职调查办法的规定：`. No reviewer has read the new wording. The arrival sentence that the Wise route was not the student's is gone.
 
 ## The two wrapper sentences
 
@@ -92,7 +93,7 @@ These reach a Portuguese or Chinese student in English. A template carries an en
 | --- | --- |
 | `rails/knowledge/*.yaml` | Every entry's `statement` and the `consequence` value of `cn_atm_cap_005`, sourced quotations shown in the arrival facts, the structuring refusal, the document request flag, a rescue's cash options and its card estimate |
 | `core/mandate.py` | Every refusal reason the engine writes, carried by `refused` |
-| `rails/sim/rules.py` | The refusal reasons of UPI to PayNow, Pix and the China rail, `no_duration`, `NO_FOREIGN_CARD_CASH`, `NO_SINGAPORE_PAGE`, the arrival sentence that the Wise route is not the student's, the document request sentence for a provider with no entry, and the cash cap precheck sentences |
+| `rails/sim/rules.py` | The refusal reasons of UPI to PayNow, Pix and the China rail, `no_duration`, `NO_FOREIGN_CARD_CASH`, `NO_SINGAPORE_PAGE`, `STRUCTURING_POLICY`, `ANXIN_CAVEAT`, the document request sentence for a provider with no entry, and the cash cap precheck sentences |
 | `core/agent.py` | The errors of `record_cash_withdrawal` and `update_plan`, carried by `withdrawal_not_recorded`; the rail reasons carried by `no_route_refused`, `cancel_not_supported`, `cancel_failed` and `freeze_failed`; and `REDACTION_MARKER`, `[redacted]` |
 | `core/agent.py` | Plan field names in `plan_updated` and `plan_update_skipped`, such as `backup_instrument`, and status codes in `transfer_not_completed` and `notice_transfer_status`, such as `in_transit`, which are identifiers rather than sentences |
 

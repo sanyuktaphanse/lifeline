@@ -2342,6 +2342,7 @@ from contracts.interfaces import Router
 from contracts.schemas import PrecheckResult, Route, RouteStatus
 from rails.sim.rules import (
     WISE_INBOUND_ENTRY,
+    ANXIN_CAVEAT,
     arrival_facts,
     CN_CDD_ENTRY,
     CN_FUNDING_ENTRY,
@@ -2529,6 +2530,7 @@ class FakeRouter(Router):
                     entry(CN_QUOTA_ENTRY)["statement"],
                     entry(CN_CDD_ENTRY)["statement"],
                     no_duration(CN_FUNDING_ENTRY),
+                    ANXIN_CAVEAT,
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],
@@ -2897,11 +2899,25 @@ WISE_INBOUND_ENTRY = "cn_wise_in_007"
 # Source: docs/decisions.md, 8 October 2026. No entry on file covers cash on a foreign card in China;
 # cn_atm_cap_005 covers Chinese cards used abroad, not this.
 NO_FOREIGN_CARD_CASH = "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
-# Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
+# Source: cn_edu_remit_002, whose page names the US, UK, Canada, Australia and Hong Kong SAR, and the audit of
+# 9 October 2026 in docs/knowledge_audit.md.
 NO_SINGAPORE_PAGE = (
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
     "UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file "
     f"for it. Source: {CN_INSTITUTION_ENTRY}."
+)
+# Source: docs/decisions.md, 9 October 2026, the knowledge corrections. cn_cdd_004's order gives a verification
+# threshold and says nothing about splitting across people, so the refusal is Lifeline's own policy.
+STRUCTURING_POLICY = (
+    "Refusing to use several people's quotas for one student's costs is Lifeline's own policy, not a quoted "
+    "rule: no source on file says that splitting a transfer across people is structuring."
+)
+# Source: cn_boc_anxin_009, whose page dates from 2010 and names eleven branches, and docs/decisions.md,
+# 9 October 2026.
+ANXIN_CAVEAT = (
+    "The Bank of China page on file for the An Xin account is from 2010 and names only certain branches, so "
+    "whether the account is still offered, and at which branch, must be confirmed with Bank of China. "
+    f"Source: {CN_FUNDING_ENTRY}."
 )
 # Source: docs/decisions.md, Stage 9 of 8 October 2026. Lifeline's own choice, not a sourced figure: the
 # percentages of the annual cap across all cards, and of each card's daily cap, at which the cash cap warns.
@@ -3799,6 +3815,7 @@ from rails.sim.rules import (
     CN_QUOTA_ENTRY,
     DOCUMENT_CHANNELS,
     NO_SINGAPORE_PAGE,
+    STRUCTURING_POLICY,
     WISE_DOCS_ENTRY,
     arrival_facts,
     cash_cap_status,
@@ -4223,7 +4240,7 @@ TEXTS = {
         "cash_cap_year_consequence": "You have used {used} of the {cap} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
         "withdrawal_not_recorded": "Lifeline recorded no cash withdrawal. {reason}",
         "cash_cap_card_day": "Card {instrument} has withdrawn {used} today of its daily cap of {cap}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
-        "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
+        "structuring_refused": "Lifeline will not use another person's quota for your costs. {policy} What the due diligence measures say: {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
@@ -4319,7 +4336,7 @@ TEXTS = {
         "cash_cap_year_consequence": "Você já sacou {used} do limite anual de {cap} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "withdrawal_not_recorded": "O Lifeline não registrou nenhum saque em dinheiro. {reason}",
         "cash_cap_card_day": "O cartão {instrument} já sacou {used} hoje do limite diário de {cap}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
-        "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
+        "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {policy} O que dizem as regras de diligência devida: {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada: {reasons} Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
@@ -4415,7 +4432,7 @@ TEXTS = {
         "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used}，年度额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "withdrawal_not_recorded": "Lifeline 没有记录任何取现。{reason}",
         "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used}，单卡每日额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
-        "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
+        "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{policy} 尽职调查办法的规定：{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝：{reasons} 请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
@@ -6932,16 +6949,15 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
                     "entry_ids": ids,
                 },
             )
-            # The one sentence of the due diligence entry that names the rule, and the documented route
-            # above the quota with what it does not cover, each read from its entry by id.
+            # Lifeline's own policy, named as its own, the due diligence entry's verification rule, and the
+            # documented route above the quota with what it does not cover, each entry read by id.
             entries = load_knowledge()
-            statement = entries[CN_CDD_ENTRY]["statement"]
-            rule = next(sentence for sentence in re.split(r"(?<=\.) ", statement) if "structuring" in sentence)
             trail.notices.append(
                 _text(
                     lang,
                     "structuring_refused",
-                    rule=_quoted(lang, rule),
+                    policy=_pending(lang, STRUCTURING_POLICY),
+                    rule=_quoted(lang, entries[CN_CDD_ENTRY]["statement"]),
                     quota=_quoted(lang, entries[CN_QUOTA_ENTRY]["statement"]),
                     route=entries[CN_INSTITUTION_ENTRY]["statement"],
                     caveat=_pending(lang, NO_SINGAPORE_PAGE),
@@ -10636,6 +10652,21 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_inbound.py` | `test_seeding_gives_each_rail_its_receipts_and_returns_where_each_lives` | Seeding gives each rail its receipts and returns where each lives |
 | `test_inbound.py` | `test_a_block_naming_a_rail_that_is_not_built_is_refused` | A block naming a rail that is not built is refused |
 | `test_inbound.py` | `test_an_empty_block_seeds_nothing` | An empty block seeds nothing |
+| `test_knowledge_corrections.py` | `test_every_entry_the_pass_touched_is_checked_by_cc_on_the_audit_day_and_awaits_a_second_check` | Every entry the pass touched is checked by cc on the audit day and awaits a second check |
+| `test_knowledge_corrections.py` | `test_no_entry_keeps_the_placeholder_s` | No entry keeps the placeholder s |
+| `test_knowledge_corrections.py` | `test_the_pix_participants_are_the_ones_the_resolution_admits` | The pix participants are the ones the resolution admits |
+| `test_knowledge_corrections.py` | `test_the_quota_entry_drops_the_january_and_study_abroad_sentences` | The quota entry drops the january and study abroad sentences |
+| `test_knowledge_corrections.py` | `test_the_hsbc_entries_state_their_scope_and_the_upload_rule` | The hsbc entries state their scope and the upload rule |
+| `test_knowledge_corrections.py` | `test_the_due_diligence_entry_cites_the_peoples_bank_order_and_says_nothing_of_splitting` | The due diligence entry cites the peoples bank order and says nothing of splitting |
+| `test_knowledge_corrections.py` | `test_the_wallet_entry_says_the_central_bank_will_instruct_platforms_for_overseas_travellers` | The wallet entry says the central bank will instruct platforms for overseas travellers |
+| `test_knowledge_corrections.py` | `test_the_wise_inbound_entry_says_who_unionpay_serves_and_what_the_id_decides` | The wise inbound entry says who unionpay serves and what the id decides |
+| `test_knowledge_corrections.py` | `test_the_wise_outbound_entry_moves_to_the_help_article_and_its_figures` | The wise outbound entry moves to the help article and its figures |
+| `test_knowledge_corrections.py` | `test_the_bank_of_china_entry_states_its_age_and_branches` | The bank of china entry states its age and branches |
+| `test_knowledge_corrections.py` | `test_the_china_precheck_carries_the_bank_of_china_caveat` | The china precheck carries the bank of china caveat |
+| `test_knowledge_corrections.py` | `test_the_structuring_refusal_is_named_as_lifelines_own_policy` | The structuring refusal is named as lifelines own policy |
+| `test_knowledge_corrections.py` | `test_the_arrival_facts_quote_the_wise_entry_and_give_no_verdict_on_the_route` | The arrival facts quote the wise entry and give no verdict on the route |
+| `test_knowledge_corrections.py` | `test_the_nus_entry_keeps_sps_check_and_says_a_person_must_open_it_in_a_browser` | The nus entry keeps sps check and says a person must open it in a browser |
+| `test_knowledge_corrections.py` | `test_the_readme_sets_the_rule_for_pages_tools_cannot_open_and_records_s_as_a_placeholder` | The readme sets the rule for pages tools cannot open and records s as a placeholder |
 | `test_knowledge_values.py` | `test_every_entry_a_rail_reads_exists_with_its_source_and_awaits_a_second_check` | Every entry a rail reads exists with its source and awaits a second check |
 | `test_knowledge_values.py` | `test_the_nus_entry_says_sp_opened_it_because_the_tool_was_blocked` | The nus entry says sp opened it because the tool was blocked |
 | `test_knowledge_values.py` | `test_every_number_in_values_is_written_in_its_statement` | Every number in values is written in its statement |
@@ -11463,19 +11494,20 @@ fixtures:
 
 ```yaml
 - id: cn_fx_quota_001
-  statement: "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting."
+  statement: "SAFE's Detailed Rules on Measures for the Administration of Individual Foreign Exchange, explained by SAFE's spokesman on 5 January 2007, set an annual quota of 50,000 US dollars for foreign exchange purchases by domestic individuals, raised from 20,000 US dollars, and an annual quota of 50,000 US dollars for foreign exchange sales by individuals. Formalities for purchases and sales within the quota are simplified, and the authenticity of transactions exceeding the quota is examined more closely."
   country: CN
   rail: bank_fx
   kind: quota
-  source_url: "https://www.webull.com/news/13974173100655616"
-  source_type: press
-  date_checked: 2026-09-15
-  checked_by: "S"
+  source_url: "https://www.safe.gov.cn/en/2007/0105/819.html"
+  source_type: regulator
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, X28]
+  note: "Claude Code opened SAFE's page on 9 October 2026, dispatched on 5 January 2007: the spokesman's press conference on the Detailed Rules. The entry moved from a news aggregator's report of 5 December 2025. The page is from 2007 and does not itself show the quota is unchanged today."
 ```
 
-`statement` is worded exactly as the agent may say it. `country`, `rail`, and `kind` sort the fact by place, channel, and type. `source_url` and `source_type` say where the fact comes from and what kind of source that is. `date_checked` is unquoted, so YAML reads it as a date rather than as text. `checked_by` holds the initials of the first checker, and `second_check_by` is empty until a second person checks the entry, which means this entry may not appear in a demo yet. `used_by` is a list that ties the fact to the tasks and attacks that depend on it, so when a source changes it is clear which scenarios must be checked again. One entry, `cn_cdd_004`, also has a `note` recording that it still has to be confirmed against the PBOC text.
+`statement` is worded exactly as the agent may say it. `country`, `rail`, and `kind` sort the fact by place, channel, and type. `source_url` and `source_type` say where the fact comes from and what kind of source that is. `date_checked` is unquoted, so YAML reads it as a date rather than as text. `checked_by` holds the initials of the first checker, here CC for Claude Code, and `second_check_by` is empty until a second person checks the entry, which means this entry may not appear in a demo yet. `used_by` is a list that ties the fact to the tasks and attacks that depend on it, so when a source changes it is clear which scenarios must be checked again. `note` records what the checker found and what is left to do; this entry's note says its page is from 2007 and does not itself show the quota is unchanged today.
 
 `tests/test_knowledge.py` reads every file in the folder with this helper:
 

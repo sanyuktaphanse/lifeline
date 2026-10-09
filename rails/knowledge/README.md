@@ -7,8 +7,11 @@ This folder holds the facts Lifeline is allowed to state about money rules, limi
 1. The agent may only assert facts that exist as entries in this folder. When no entry covers a question, the agent says it has no sourced figure and does not guess.
 2. Every entry needs two initials, one in `checked_by` and one in `second_check_by`, before it is used in a demo. An entry whose `second_check_by` is empty has been checked once and must not appear in a demo yet.
 3. Every entry cites its source with an address that starts with `https://`, and `date_checked` must be no more than 30 days old. `tests/test_knowledge.py` enforces the fields, the address, and the age, so a stale entry fails the build until someone checks it again.
+4. When a page that tools cannot open, such as one behind a bot challenge, is the source, a person opens it in a browser and checks it. The entry's `note` says so and names the sections to expand, such as the FAQ question titles, and only a person's initials go in `checked_by` for it.
 
 `CC` in `checked_by` means Claude Code checked the entry against the page it opened; a person replaces it with their initials once they have checked it too.
+
+`S` in `checked_by` was a placeholder that named nobody. It stood on the eight China entries first checked on 15 September 2026, and the corrections of 9 October 2026 after `docs/knowledge_audit.md` replaced it with `CC` on every entry they rewrote.
 
 ## Entry format
 

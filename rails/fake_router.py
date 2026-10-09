@@ -6,6 +6,7 @@ from contracts.interfaces import Router
 from contracts.schemas import PrecheckResult, Route, RouteStatus
 from rails.sim.rules import (
     WISE_INBOUND_ENTRY,
+    ANXIN_CAVEAT,
     arrival_facts,
     CN_CDD_ENTRY,
     CN_FUNDING_ENTRY,
@@ -193,6 +194,7 @@ class FakeRouter(Router):
                     entry(CN_QUOTA_ENTRY)["statement"],
                     entry(CN_CDD_ENTRY)["statement"],
                     no_duration(CN_FUNDING_ENTRY),
+                    ANXIN_CAVEAT,
                 ],
                 ready=None,
                 rule_ids=[CN_FUNDING_ENTRY, CN_QUOTA_ENTRY, CN_CDD_ENTRY],

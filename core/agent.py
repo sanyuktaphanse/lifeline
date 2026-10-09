@@ -68,6 +68,7 @@ from rails.sim.rules import (
     CN_QUOTA_ENTRY,
     DOCUMENT_CHANNELS,
     NO_SINGAPORE_PAGE,
+    STRUCTURING_POLICY,
     WISE_DOCS_ENTRY,
     arrival_facts,
     cash_cap_status,
@@ -491,7 +492,7 @@ TEXTS = {
         "cash_cap_year_consequence": "You have used {used} of the {cap} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
         "withdrawal_not_recorded": "Lifeline recorded no cash withdrawal. {reason}",
         "cash_cap_card_day": "Card {instrument} has withdrawn {used} today of its daily cap of {cap}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
-        "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
+        "structuring_refused": "Lifeline will not use another person's quota for your costs. {policy} What the due diligence measures say: {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
         "unknown_token": "That confirmation was not found, so nothing was sent.",
@@ -587,7 +588,7 @@ TEXTS = {
         "cash_cap_year_consequence": "Você já sacou {used} do limite anual de {cap} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "withdrawal_not_recorded": "O Lifeline não registrou nenhum saque em dinheiro. {reason}",
         "cash_cap_card_day": "O cartão {instrument} já sacou {used} hoje do limite diário de {cap}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
-        "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
+        "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {policy} O que dizem as regras de diligência devida: {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
         "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada: {reasons} Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
@@ -683,7 +684,7 @@ TEXTS = {
         "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used}，年度额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "withdrawal_not_recorded": "Lifeline 没有记录任何取现。{reason}",
         "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used}，单卡每日额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
-        "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
+        "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{policy} 尽职调查办法的规定：{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
         "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝：{reasons} 请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
@@ -1953,16 +1954,15 @@ class AgentLoop:
                     "entry_ids": ids,
                 },
             )
-            # The one sentence of the due diligence entry that names the rule, and the documented route
-            # above the quota with what it does not cover, each read from its entry by id.
+            # Lifeline's own policy, named as its own, the due diligence entry's verification rule, and the
+            # documented route above the quota with what it does not cover, each entry read by id.
             entries = load_knowledge()
-            statement = entries[CN_CDD_ENTRY]["statement"]
-            rule = next(sentence for sentence in re.split(r"(?<=\.) ", statement) if "structuring" in sentence)
             trail.notices.append(
                 _text(
                     lang,
                     "structuring_refused",
-                    rule=_quoted(lang, rule),
+                    policy=_pending(lang, STRUCTURING_POLICY),
+                    rule=_quoted(lang, entries[CN_CDD_ENTRY]["statement"]),
                     quota=_quoted(lang, entries[CN_QUOTA_ENTRY]["statement"]),
                     route=entries[CN_INSTITUTION_ENTRY]["statement"],
                     caveat=_pending(lang, NO_SINGAPORE_PAGE),

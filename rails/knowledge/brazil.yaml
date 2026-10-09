@@ -1,17 +1,17 @@
 - id: br_pix_instant_001
-  statement: "Pix is the payment scheme of the Banco Central do Brasil for instant payments, in which the funds become available to the payee in real time, 24 hours a day and every day of the year. Its participants are institutions authorized to operate by the Banco Central do Brasil."
+  statement: "Pix is the payment scheme of the Banco Central do Brasil for instant payments, in which the funds become available to the payee in real time, 24 hours a day and every day of the year. Its participants are financial institutions, payment institutions and government entities that adhere to the Pix Regulation and meet the requirements for joining the scheme. Participation is mandatory for the financial institutions and payment institutions authorized to operate by the Banco Central do Brasil that have more than half a million active customer accounts."
   country: BR
   rail: pix
   kind: rule
   source_url: "https://www.bcb.gov.br/content/estabilidadefinanceira/pix/Pix_Regulation/Resolution_BCB_1.pdf"
   source_type: regulator
-  date_checked: 2026-10-08
-  checked_by: "SP"
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T29, sim_pix]
   values:
     typical_duration_hours: 0
-  note: "From Resolution BCB 1 of 12 August 2020, the English text: the regulation's definition of an instant payment, and the rule on who participates. The duration of zero hours stands for the statement's real time."
+  note: "From Resolution BCB 1 of 12 August 2020, the English text: the regulation's definition of an instant payment, its definition of a participant, and the rule on whose participation is mandatory. The duration of zero hours stands for the statement's real time. Claude Code opened the PDF on 9 October 2026; the file is dated 9 January 2024, and the resolution also admits payment institutions not yet authorized and the National Treasury Secretariat."
 - id: br_pix_keys_002
   statement: "A Pix payee is reached through a Pix key linked to their transactional account, which may be a cell phone number, an e-mail address, a CPF registration number, a CNPJ registration number, or a random key."
   country: BR

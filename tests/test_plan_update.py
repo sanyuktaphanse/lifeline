@@ -193,9 +193,9 @@ def test_the_arrival_precheck_gives_the_wallet_route_the_wise_route_quoted_whole
     assert result.rule_ids == [WALLET_FOREIGN_ENTRY, WISE_INBOUND_ENTRY]
     assert result.review_triggers[0] == entries[WALLET_FOREIGN_ENTRY]["statement"]
     assert result.review_triggers[1] == entries[WISE_INBOUND_ENTRY]["statement"]
-    assert "Chinese national ID" in result.review_triggers[1]
-    assert "is not this student's route" in result.review_triggers[2]
-    assert result.review_triggers[3] == "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
+    assert "Mainland Chinese National ID" in result.review_triggers[1]
+    assert result.review_triggers[2] == "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
+    assert len(result.review_triggers) == 3
     assert "cn_atm_cap_005" not in " ".join(result.review_triggers)
 
 
