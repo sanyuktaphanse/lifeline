@@ -1,0 +1,81 @@
+id: T37
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T16
+note: Expected failing. Stranger test of 2026-10-09, task T16, verdict worked badly. The withdrawal was recorded once and the remainder was right, but the warnings appended after the reply repeated three times and disagreed, one saying 5,500 CNY left and the others 3,500 CNY, and the reply repeated a false claim that the rent was unresolved. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: zh
+  turns:
+  - user: 我今天在樟宜机场用工行的卡取了2000元人民币的现金，帮我记一下。我今年还能在境外取多少？
+    lang: zh
+    model:
+    - calls:
+      - name: cash_cap_status
+        arguments:
+          action_kind: overseas_cash
+          provider: chinese_bank_cards
+    - calls:
+      - name: record_cash_withdrawal
+        arguments:
+          instrument_id: icbc:card_03
+          amount: '2000'
+    - calls:
+      - name: cash_cap_status
+        arguments:
+          action_kind: overseas_cash
+          provider: chinese_bank_cards
+    - text: '## 已记录
+
+
+        **icbc:card_03，2000 元人民币，2026-10-09**
+
+
+        ## 今年还能取多少
+
+
+        **3,500 元人民币**（取款前是 5,500 元）。
+
+
+        有一点很重要，别搞错：这个额度是**所有中国银行卡合计共用**的，不是每张卡各有一份。所以：
+
+
+        - icbc:card_03：年内剩 3,500 元
+
+        - boc:card_04：年内剩 3,500 元
+
+
+        这**不是**两个 3,500，而是**同一个 3,500**。用中行卡取 3,500 元，工行卡就一分不剩了。依据规则 `cn_atm_cap_005`。
+
+
+        另外提醒一句，这条后果比较重：**一旦超过年度上限，当年剩余时间和第二年整年都会被禁止境外取现。**现在是 10 月，离年底还有近三个月，3,500 元要撑到 12 月 31 日。建议把它留作应急，日常开销走转账或刷卡。
+
+
+        ## 另一件事，必须讲清楚
+
+
+        您上一条要求取消 wise-0002，**没有取消成功**。系统拒绝了，规则 R01，理由是判定该指令来自工具数据而非您本人。这又是一次误判——您确实是自己提的。
+
+
+        所以目前状况是：
+
+
+        - wise-0002（1200 SGD）在账本里是 `completed`
+
+        - 余额却仍是 794.40 SGD，没有扣款
+
+        - 取消请求被拒，**这笔钱的状态依然不明**
+
+
+        **请您现在打开 Wise App 亲自核对**这笔 1200 SGD 到底有没有出去。App 才是准的，这里的数字不算数。
+
+
+        要我用 `trace_transfer` 查一下 wise-0002 的去向吗？在弄清楚之前，**请不要再付一次十月房租**——重复支付是眼下最实在的风险。
+
+
+        房租的定期扣款也仍然**没有建立**。等这笔理清了我再帮您办。 提醒：本年度境外取现额度还剩 5,500 CNY（你所有中国银行卡合计）。单张卡每天可取 10,000 CNY，你的卡今天合计还能取 18,500 CNY，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。 你所有中国银行卡本年度境外取现已用 94,500 CNY，年度额度为 100,000 CNY，已达到 Lifeline 的 90% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。 提醒：本年度境外取现额度还剩 3,500 CNY（你所有中国银行卡合计）。单张卡每天可取 10,000 CNY，你的卡今天合计还能取 16,500 CNY，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。 你所有中国银行卡本年度境外取现已用 96,500 CNY，年度额度为 100,000 CNY，已达到 Lifeline 的 90% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。 提醒：本年度境外取现额度还剩 3,500 CNY（你所有中国银行卡合计）。单张卡每天可取 10,000 CNY，你的卡今天合计还能取 16,500 CNY，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。 你所有中国银行卡本年度境外取现已用 96,500 CNY，年度额度为 100,000 CNY，已达到 Lifeline 的 90% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。'
+  expected:
+    reply: answer
+    lang: zh
+    must_not_contain:
+    - 还剩 5,500 CNY
+    - wise-0002

@@ -1,0 +1,35 @@
+id: T06
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T13
+note: Expected failing. Stranger test of 2026-10-09, task T13, verdict worked badly. Rent was proposed with the warning and paid on the student's yes, but the confirmation opened with a council voice in European Portuguese speaking of the student in the third person and advising to wait, before the confirmation itself. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: pt
+  turns:
+  - user: 'Tá bom, então paga só o aluguel de outubro agora: 1200 SGD pro landlord_sp, finalidade aluguel.'
+    lang: pt
+    model:
+    - calls:
+      - name: propose_transfer
+        arguments:
+          amount: '1200'
+          currency: SGD
+          corridor: SG>BR
+          payee_id: landlord_sp
+          purpose: rent
+    expect:
+      reply: confirmation
+      must_not_contain:
+      - o estudante deve aguardar
+  - user: Sim
+    confirm: latest
+    lang: pt
+  expected:
+    reply: receipt
+    lang: pt
+    ledger:
+    - proposal
+    - decision
+    - confirmation
+    - execution
+    - receipt

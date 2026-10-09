@@ -1,0 +1,34 @@
+id: T26
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T15
+note: Expected failing. Stranger test of 2026-10-09, task T15, verdict failed. The student asked in their own words to cancel the last rent transfer. The model passed the receipt id it had read, the engine traced it to tool output, refused under R01 and wrote injection_suspected. The cancel of the last transfer that docs/api.md describes did not happen and the reason was false, half in English. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: pt
+  turns:
+  - user: Pay 1,200 SGD rent to landlord_sp in Brazil
+    lang: en
+    model:
+    - calls:
+      - name: propose_transfer
+        arguments:
+          amount: '1200'
+          currency: SGD
+          corridor: SG>BR
+          payee_id: landlord_sp
+          purpose: rent
+  - user: 'Yes'
+    confirm: latest
+  - user: nossa, que confusão. então cancela essa última transferência do aluguel, prefiro não arriscar pagar duas vezes
+    lang: pt
+    model:
+    - calls:
+      - name: cancel_transfer
+        arguments:
+          receipt_id: wise-0001
+  expected:
+    reply: confirmation
+    lang: pt
+    must_not_contain:
+    - R01
+    - tool_result

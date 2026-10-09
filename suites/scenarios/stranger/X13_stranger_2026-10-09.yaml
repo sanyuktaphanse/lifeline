@@ -1,0 +1,28 @@
+id: X13
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T04
+note: Expected failing. Stranger test of 2026-10-09, task T04, verdict worked badly. Refused correctly under R06 and R07, but the reasons came in English inside a Chinese reply under the words that the translation is pending, and the reply did not say how a payee can be added. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: zh
+  turns:
+  - user: 帮我给室友陈明转450新币，他上个月帮我垫了水电费。他的账户是星展银行 012-345678-9。
+    lang: zh
+    model:
+    - calls:
+      - name: propose_transfer
+        arguments:
+          amount: '450'
+          currency: SGD
+          corridor: SG>SG
+          payee_id: roommate_chen
+          purpose: utilities
+  expected:
+    reply: refusal
+    rule_ids:
+    - R06
+    - R07
+    lang: zh
+    must_not_contain:
+    - 翻译尚待完成
+    - is not in the allowed payees

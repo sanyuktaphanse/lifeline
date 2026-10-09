@@ -1,0 +1,43 @@
+id: T13
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T18
+note: Expected failing. Stranger test of 2026-10-09, task T18, verdict worked badly. The reminder was set, but the model wrote an unsourced instruction about ICA's SOLAR+ system into the reminder note while saying it had no source for it, and repeated a false claim that the rent was unresolved. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: zh
+  turns:
+  - user: 提醒我11月25号之前续签学生准证，别让我忘了。
+    lang: zh
+    model:
+    - calls:
+      - name: set_reminder
+        arguments:
+          text: 续签学生准证（Student Pass），截止日 2026-11-25。请在此之前通过 ICA 的 SOLAR+ 系统完成申请。
+          due: '2026-11-11'
+    - text: '## 提醒已设置
+
+
+        **2026-11-11** — 续签学生准证，截止日 2026-11-25。
+
+
+        我故意设在 **11 月 11 日**，不是 25 号。25 号是**截止日**，当天才提醒就来不及了——提前两周，材料和学校那边的流程都还有余地。如果您希望改时间，告诉我。
+
+
+        一句实话：学生准证续签的具体流程（走 ICA 的 SOLAR+、学校先提交等等）**我档案里没有可引用的来源**，上面那句是写进提醒正文里方便您记，**请以 ICA 官网和学校国际学生办公室的说法为准**，别按我写的办。续签通常要提前，建议您这几天先去确认一下学校是否需要先替您提交。
+
+
+        ## 两件还没了结的事
+
+
+        1. **wise-0002（1200 SGD）状态不明** — 账本记 `completed`，余额 794.40 SGD 却没扣，取消请求被 R01 挡下（误判）。**请打开 Wise App 自己核对。** 要我 `trace_transfer` 查吗？
+
+        2. **房租定期扣款仍未建立。**
+
+
+        十月房租在 wise-0002 查清前，**不要再付第二次**。'
+  expected:
+    reply: answer
+    lang: zh
+    must_not_contain:
+    - SOLAR+
+    - wise-0002

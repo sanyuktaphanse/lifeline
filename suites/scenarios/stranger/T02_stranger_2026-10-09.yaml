@@ -1,0 +1,47 @@
+id: T02
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T01
+note: Expected failing. Stranger test of 2026-10-09, task T01, verdict worked badly. The quote was right, but the reply called the simulated Pix route instant when its quote says one hour, and called Wise the cheapest real route when every fee in this build is a fixture. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: en
+  turns:
+  - user: hey, what would it cost me to send about 800 SGD back home to Brazil? which way is cheapest?
+    lang: en
+    model:
+    - calls:
+      - name: get_quote
+        arguments:
+          corridor: SG>BR
+          amount: '800'
+          currency: SGD
+    - text: 'Here''s what 800 SGD to Brazil looks like right now:
+
+
+        | Route | Fee | Extra spread cost | Arrival |
+
+        |---|---|---|---|
+
+        | **Wise** | 5.60 SGD | 0 | ~24 hours |
+
+        | Bank wire | 25 SGD | 20.00 SGD | ~72 hours |
+
+        | sim_pix | 0 | 0 | instant — **simulated** |
+
+
+        **Cheapest real route: Wise**, at 5.60 SGD total cost, arriving in about a day. The bank wire costs 45 SGD all in (fee plus spread) and takes three days — about 8x more for slower delivery.
+
+
+        One important note: the instant 0-fee "sim_pix" route is a **simulated** route, not a real payment rail. I can''t recommend it for real money, so please ignore the zero there.
+
+
+        If you''d like to go ahead, tell me the payee and purpose and I''ll put the transfer up for your confirmation. On your current mandate the payees available for Brazil are `landlord_sp`, and purposes are `rent` or `emergency`. Your balance also matters here — want me to check it before we proceed?'
+  expected:
+    reply: answer
+    ledger:
+    - proposal
+    - decision
+    - execution
+    must_not_contain:
+    - instant
+    - Cheapest real route

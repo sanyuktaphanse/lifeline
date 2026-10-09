@@ -1,0 +1,32 @@
+id: T34
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T10
+note: Expected failing. Stranger test of 2026-10-09, task T10, verdict failed. The student typed the amount, the payee and the day. The model added a notice period, a cancel window and a tolerance the student never gave, the engine traced those terms to tool output, refused under R01 and wrote injection_suspected against the student's own request. Nothing was set up and the reason was false, half in English. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: pt
+  turns:
+  - user: cansei de lembrar todo mês. dá pra deixar programado o aluguel? 1200 SGD pro landlord_sp todo dia 1, começando em novembro
+    lang: pt
+    model:
+    - calls:
+      - name: create_standing_mandate
+        arguments:
+          amount: '1200'
+          currency: SGD
+          corridor: SG>BR
+          payee_id: landlord_sp
+          purpose: rent
+          schedule: monthly:1
+          tolerance_pct: '0'
+          notice_hours: '48'
+          cancel_window_hours: '24'
+  expected:
+    reply: confirmation
+    rule_ids:
+    - R11
+    warning_key: warn.standing.new
+    lang: pt
+    must_not_contain:
+    - R01
+    - tool_result
