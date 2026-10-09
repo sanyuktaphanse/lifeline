@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -178,12 +179,27 @@ def test_nothing_about_money_reaches_an_anchor_line_or_entry_and_the_student_onl
     _pay_rent(loop)
 
     [entry] = _anchors(ledger)
-    line = (tmp_path / "anchors.jsonl").read_text(encoding="utf-8")
-    for text in (json.dumps(entry.payload), line):
+    raw = (tmp_path / "anchors.jsonl").read_text(encoding="utf-8")
+    line = json.loads(raw)
+    # The fields are checked by name, because a random hash or the microseconds of a time can hold "1200" by
+    # chance: a hash or a time field must match its strict form, which has no room for a money detail, and
+    # every other field must not hold one. Pinning the field names means a new field cannot slip past.
+    assert set(entry.payload) == {"user_id", "turn", "mandate_id", "head_hash", "head_seq", "anchor_id", "anchored_at"}
+    assert set(line) == {"head_hash", "seq", "user_hash", "anchored_at", "signature"}
+    for record, hashes in ((entry.payload, ("head_hash",)), (line, ("head_hash", "user_hash", "signature"))):
+        for name in hashes:
+            assert re.fullmatch(r"[0-9a-f]{64}", record[name])
+        datetime.fromisoformat(record["anchored_at"])
+    assert re.fullmatch(r"local:[0-9a-f]{32}", entry.payload["anchor_id"])
+    rest = [
+        {name: value for name, value in entry.payload.items() if name not in ("head_hash", "anchor_id", "anchored_at")},
+        {name: value for name, value in line.items() if name not in ("head_hash", "user_hash", "signature", "anchored_at")},
+    ]
+    for record in rest:
         for detail in ("1200", "2300", "landlord_sp", "SGD", "rent", "wise"):
-            assert detail not in text
+            assert detail not in json.dumps(record)
     # The line outside the ledger holds only a hash of the student's id, never the id.
-    assert USER not in line
+    assert USER not in raw
 
 
 def test_an_hourly_anchor_fires_when_the_last_anchor_is_older_than_an_hour_and_not_before(tmp_path):
