@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -26,6 +27,7 @@ from contracts.schemas import (
     Role,
     Source,
     StandingEvent,
+    Tier,
     ToolCall,
 )
 from contracts.interfaces import ModelAdapter
@@ -65,6 +67,9 @@ SWAP_REPORT_PATH = ROOT / "evidence" / "report-swap.md"
 # Empty or all runs every scenario marked live. Source: docs/decisions.md, decision 135.
 LIVE_LIMIT_VARIABLE = "LIVE_SCENARIO_LIMIT"
 LIVE_LIMIT_ALL = ("", "all")
+# How long one live model call may take before it fails its run, so a hung call never stalls a live run.
+# Source: docs/decisions.md, decision 142.
+LIVE_CALL_TIMEOUT_SECONDS = 60
 # Each run anchors into a directory of its own under this one, removed when the run ends, so no
 # scenario writes into data/. Git ignores it, and it stays inside the repository, as CLAUDE.md rule 9 asks.
 RUNS_TMP = ROOT / ".harness_tmp"
@@ -131,6 +136,10 @@ class RunResult:
     skipped: list[str] = field(default_factory=list)
     # The text of every reply, kept so a live failure shows what the model did. Each passed the reply guard.
     replies: list[str] = field(default_factory=list)
+    # The action trail as the ledger holds it, and in live mode how many read triples were set aside before
+    # the ledger kinds were compared.
+    trail: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    stripped: int = 0
 
     @property
     def passed(self) -> bool:
@@ -331,6 +340,37 @@ class _Checks:
         return True
 
 
+def _read_key(kind: str, payload: dict[str, Any]) -> str | None:
+    """The idempotency key an entry of a triple names, from its action or, for a decision, from the entry."""
+    if kind == "decision":
+        return payload.get("idempotency_key")
+    return (payload.get("action") or {}).get("idempotency_key")
+
+
+def strip_read_triples(trail: list[tuple[str, dict[str, Any]]]) -> tuple[list[str], int]:
+    """The trail's kinds without the proposal, decision and execution of every allowed T0 action, and how many went.
+
+    A triple is set aside only whole: three entries in a row, one key across all three, and a decision that
+    allowed the action at T0. A refused read, a read with anything between its entries, and every action above
+    T0 stay. Source: docs/decisions.md, decision 138.
+    """
+    kinds: list[str] = []
+    stripped = 0
+    index = 0
+    while index < len(trail):
+        window = trail[index : index + 3]
+        if [kind for kind, _ in window] == ["proposal", "decision", "execution"]:
+            keys = {_read_key(kind, payload) for kind, payload in window}
+            decision = window[1][1].get("decision") or {}
+            if len(keys) == 1 and None not in keys and decision.get("allowed") is True and decision.get("tier") == Tier.T0.value:
+                stripped += 1
+                index += 3
+                continue
+        kinds.append(trail[index][0])
+        index += 1
+    return kinds, stripped
+
+
 def _scripted_text(run: dict[str, Any], fixtures: dict[str, Any]) -> str:
     """Everything a scenario's script would have the model or the council say in this run."""
     texts = [response.get("text", "") for turn in run["turns"] for response in turn.get("model", [])]
@@ -519,6 +559,8 @@ def _error_line(error: Exception, live: "LiveProvider | None") -> str:
         return f"error: {type(error).__name__}: {error}"
     if isinstance(error, ScenarioError):
         return f"error: {type(error).__name__}: {error}"
+    if isinstance(error, ModelCallTimeout):
+        return f"error: {type(error).__name__}, {error}"
     if isinstance(error, ModelAdapterError):
         return f"error: {type(error).__name__} from {error.provider or 'an unnamed provider'}, status {error.status_code or 'none'}"
     return f"error: {type(error).__name__}"
@@ -620,16 +662,28 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], run_dir: Pa
         result.failures.append(_error_line(error, live))
         result.checked, result.skipped = checks.checked, checks.skipped
         return result
+    # In live mode the expected trail sets aside the reads the scripted run of the same scenario writes, so both
+    # sides of the comparison hold only the kinds that change something.
+    reference = run_scenario_run(scenario, run) if live is not None and "ledger" in expected else None
     try:
-        return _judge_run(result, expected, replies, ledger, checks)
+        return _judge_run(result, expected, replies, ledger, checks, reference)
     finally:
         result.checked, result.skipped = checks.checked, checks.skipped
 
 
 def _judge_run(
-    result: RunResult, expected: dict[str, Any], replies: list[AgentReply], ledger: HashChainLedger, checks: _Checks
+    result: RunResult,
+    expected: dict[str, Any],
+    replies: list[AgentReply],
+    ledger: HashChainLedger,
+    checks: _Checks,
+    reference: RunResult | None = None,
 ) -> RunResult:
-    """The checks made once every turn has run: the final reply, every reply, and the ledger."""
+    """The checks made once every turn has run: the final reply, every reply, and the ledger.
+
+    `reference` is the scripted run of the same scenario, given only in live mode, where reads are set aside on
+    both sides before the ledger kinds are compared. The scripted mode compares the trail exactly.
+    """
     final = {key: value for key, value in expected.items() if key not in RUN_CHECKS}
     if replies:
         result.failures += _judge("final reply", replies[-1], final, checks)
@@ -643,9 +697,17 @@ def _judge_run(
             checks,
         )
     checks.checked += sum(name in expected for name in ("ledger", "anchors", "notes", "verify"))
-    kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
-    if "ledger" in expected and kinds != expected["ledger"]:
-        result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
+    result.trail = [(entry.kind, entry.payload) for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
+    kinds = [kind for kind, _ in result.trail]
+    wanted = expected.get("ledger")
+    if reference is not None:
+        kinds, result.stripped = strip_read_triples(result.trail)
+        # The expectation is the scripted trail's kinds, so its reads are found there; an expectation the
+        # scripted run does not meet is compared as written.
+        if [kind for kind, _ in reference.trail] == wanted:
+            wanted = strip_read_triples(reference.trail)[0]
+    if "ledger" in expected and kinds != wanted:
+        result.failures.append(f"ledger kinds were {kinds}, expected {wanted}")
     # Anchor entries are left out of the trail, so a scenario asserts them by their count.
     anchors = sum(entry.kind == ANCHOR_KIND for entry in ledger.entries())
     if "anchors" in expected and anchors != expected["anchors"]:
@@ -705,6 +767,10 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
     return results
 
 
+class ModelCallTimeout(ModelAdapterError):
+    """A live call that gave no answer within the run's time limit."""
+
+
 class LiveRefused(Exception):
     """A live run that did not start, with the reason in plain words for the person who ran it."""
 
@@ -721,6 +787,7 @@ class LiveProvider:
     name: str
     settings: Mapping[str, str]
     build: Callable[[Mapping[str, str]], ModelAdapter] = ProviderModelAdapter
+    call_timeout: float = LIVE_CALL_TIMEOUT_SECONDS
     loop_calls: int = 0
     council_calls: int = 0
     # Which provider answered each call, read from the message, so a fallback that answered shows in the report.
@@ -748,9 +815,34 @@ class _Recording(ModelAdapter):
             self._live.council_calls += 1
         else:
             self._live.loop_calls += 1
-        message = self._inner.complete(messages, tools)
+        message = self._within_time_limit(messages, tools)
         self._live.answered_by[message.provider or "unnamed"] += 1
         return message
+
+    def _within_time_limit(self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]) -> Message:
+        """The provider's answer, or ModelCallTimeout once the limit passes with none.
+
+        The call runs on a daemon thread, which a timed out call is left on, so neither the rest of the run
+        nor the end of the process waits for it.
+        """
+        outcome: dict[str, Any] = {}
+
+        def call() -> None:
+            try:
+                outcome["message"] = self._inner.complete(messages, tools)
+            except BaseException as error:  # anti-pattern: SILENT-EXCEPT ok, the error is raised again on the calling thread below
+                outcome["error"] = error
+
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        worker.join(self._live.call_timeout)
+        if worker.is_alive():
+            raise ModelCallTimeout(
+                f"{self._live.name} gave no answer within {self._live.call_timeout:g} seconds", provider=self._live.name
+            )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["message"]
 
 
 def resolve_provider(name: str, env: Mapping[str, str]) -> str:
@@ -876,10 +968,19 @@ def render_live_report(
     for lang in sorted({lang for run in runs for lang in run.langs}):
         chosen = Counter(run.status for run in runs if lang in run.langs)
         lines.append(_row(lang, sum(chosen.values()), chosen[PASSED], chosen[FAILED], chosen[SKIPPED]))
-    lines += ["", "## Runs", "", _row("Id", "Suite", "Title", "Languages", "Result", "Checks skipped"), _row(*["---"] * 6)]
+    lines += [
+        "",
+        "## Runs",
+        "",
+        "Reads stripped counts the allowed T0 triples, a proposal, its decision and its execution, set aside before "
+        "the ledger kinds were compared, because a live model may read before it acts.",
+        "",
+        _row("Id", "Suite", "Title", "Languages", "Result", "Checks skipped", "Reads stripped"),
+        _row(*["---"] * 7),
+    ]
     for result in results:
         for run in result.runs:
-            lines.append(_row(result.id, result.suite, result.title, ", ".join(run.langs), run.status, len(run.skipped)))
+            lines.append(_row(result.id, result.suite, result.title, ", ".join(run.langs), run.status, len(run.skipped), run.stripped))
     failed = [(result, number, run) for result in results for number, run in enumerate(result.runs, start=1) if run.status == FAILED]
     if failed:
         lines += ["", "## Failures", "", "Each failure keeps every reply of its run as the student saw it, after the reply guard.", ""]
