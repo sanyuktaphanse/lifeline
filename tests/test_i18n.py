@@ -164,7 +164,8 @@ def test_the_arrival_facts_are_quoted_in_english_behind_the_wrapper(lang):
     reply = s.loop.handle(USER, _user("chegando", lang=lang))
 
     assert f"{_lead(lang)}{load_knowledge()['cn_wallet_foreign_006']['statement']}" in reply.text
-    assert f"{_lead(lang, PENDING)}{rules.arrival_facts()[0][2]} {rules.NO_FOREIGN_CARD_CASH}" in reply.text
+    assert f"{_lead(lang, PENDING)}{rules.NO_FOREIGN_CARD_CASH}" in reply.text
+    assert "not this student's route" not in reply.text
     assert WISE_INBOUND_ENTRY in reply.text
 
 
@@ -176,9 +177,9 @@ def test_the_structuring_refusal_quotes_its_entries_behind_the_wrapper(lang):
     reply = s.loop.handle(USER, _user("enviar", lang=lang))
 
     statement = load_knowledge()[CN_CDD_ENTRY]["statement"]
-    rule = next(sentence for sentence in re.split(r"(?<=\.) ", statement) if "structuring" in sentence)
-    assert f"{_lead(lang)}{rule}" in reply.text
+    assert f"{_lead(lang)}{statement}" in reply.text
     assert reply.text.count(_lead(lang)) == 2
+    assert f"{_lead(lang, PENDING)}{rules.STRUCTURING_POLICY}" in reply.text
     assert f"{_lead(lang, PENDING)}{rules.NO_SINGAPORE_PAGE}" in reply.text
 
 
@@ -246,8 +247,15 @@ def test_the_english_only_sentences_outside_any_table_are_pinned():
         "Card icbc:card_03: 5,000 CNY left this calendar year across all Chinese cards, and 5,000 CNY left today. "
         "Source: cn_atm_cap_005."
     )
-    assert rules.arrival_facts()[0][2] == (
-        "That route is for recipients with a Chinese national ID, so it is not this student's route. Source: cn_wise_in_007."
+    assert rules.arrival_facts()[0][2] == rules.NO_FOREIGN_CARD_CASH
+    assert rules.STRUCTURING_POLICY == (
+        "Refusing to use several people's quotas for one student's costs is Lifeline's own policy, not a quoted "
+        "rule: no source on file says that splitting a transfer across people is structuring."
+    )
+    assert rules.ANXIN_CAVEAT == (
+        "The Bank of China page on file for the An Xin account is from 2010 and names only certain branches, so "
+        "whether the account is still offered, and at which branch, must be confirmed with Bank of China. "
+        "Source: cn_boc_anxin_009."
     )
 
 

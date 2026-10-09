@@ -34,11 +34,25 @@ WISE_INBOUND_ENTRY = "cn_wise_in_007"
 # Source: docs/decisions.md, 8 October 2026. No entry on file covers cash on a foreign card in China;
 # cn_atm_cap_005 covers Chinese cards used abroad, not this.
 NO_FOREIGN_CARD_CASH = "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
-# Source: open item 86 in docs/technical-reference.md, from S's check of the HSBC page.
+# Source: cn_edu_remit_002, whose page names the US, UK, Canada, Australia and Hong Kong SAR, and the audit of
+# 9 October 2026 in docs/knowledge_audit.md.
 NO_SINGAPORE_PAGE = (
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, "
     "UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file "
     f"for it. Source: {CN_INSTITUTION_ENTRY}."
+)
+# Source: docs/decisions.md, 9 October 2026, the knowledge corrections. cn_cdd_004's order gives a verification
+# threshold and says nothing about splitting across people, so the refusal is Lifeline's own policy.
+STRUCTURING_POLICY = (
+    "Refusing to use several people's quotas for one student's costs is Lifeline's own policy, not a quoted "
+    "rule: no source on file says that splitting a transfer across people is structuring."
+)
+# Source: cn_boc_anxin_009, whose page dates from 2010 and names eleven branches, and docs/decisions.md,
+# 9 October 2026.
+ANXIN_CAVEAT = (
+    "The Bank of China page on file for the An Xin account is from 2010 and names only certain branches, so "
+    "whether the account is still offered, and at which branch, must be confirmed with Bank of China. "
+    f"Source: {CN_FUNDING_ENTRY}."
 )
 # Source: docs/decisions.md, Stage 9 of 8 October 2026. Lifeline's own choice, not a sourced figure: the
 # percentages of the annual cap across all cards, and of each card's daily cap, at which the cash cap warns.
@@ -179,9 +193,10 @@ def several_quotas(user_context: dict[str, Any]) -> bool:
 
 
 def structuring_refusal() -> tuple[list[str], list[str]]:
-    """Why splitting across people is refused, and the documented route above the quota, by its entries."""
+    """Why splitting across people is refused, as Lifeline's own policy, beside the verification rule and the
+    documented route above the quota, by their entries."""
     ids = [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
-    return [*(entry(entry_id)["statement"] for entry_id in ids), NO_SINGAPORE_PAGE], ids
+    return [STRUCTURING_POLICY, *(entry(entry_id)["statement"] for entry_id in ids), NO_SINGAPORE_PAGE], ids
 
 
 class ChineseCard(BaseModel):
@@ -317,13 +332,9 @@ def cash_cap_sentences(cards: list[dict[str, Any]]) -> tuple[bool | None, list[s
 def arrival_facts() -> tuple[list[str], list[str]]:
     """What a foreign student arriving in China is told, from cn_wallet_foreign_006 and cn_wise_in_007 only.
 
-    The wallet entry is the student's route. The Wise entry is quoted whole and said not to be the
-    student's route, because it names its recipients' condition. Cash on a foreign card has no entry.
+    Both entries are quoted whole. Lifeline gives no verdict on whether the Wise route fits the student,
+    because its page says UnionPay serves recipients with or without a mainland ID and the ID decides only
+    the banks. Cash on a foreign card has no entry.
     """
-    condition = entry(WISE_INBOUND_ENTRY)["values"]["recipient_condition"]
-    not_yours = (
-        f"That route is for recipients with {condition}, so it is not this student's route. "
-        f"Source: {WISE_INBOUND_ENTRY}."
-    )
     ids = [WALLET_FOREIGN_ENTRY, WISE_INBOUND_ENTRY]
-    return [*(entry(entry_id)["statement"] for entry_id in ids), not_yours, NO_FOREIGN_CARD_CASH], ids
+    return [*(entry(entry_id)["statement"] for entry_id in ids), NO_FOREIGN_CARD_CASH], ids

@@ -1,6 +1,6 @@
 id: T38
 live: true
-note: A foreign student arriving in Shenzhen sets up payments and a backup. The plan fixture has two cards, the Wise debit card as primary, no backup, and no phone wallet. In turn one the scripted model runs the precheck arrive_in_china, and the loop says, from cn_wallet_foreign_006 and cn_wise_in_007 only, the limits for a foreign card in Alipay and WeChat Pay as the student's wallet route, the Wise route into China quoted whole with its condition of a Chinese national ID and the sentence that it is not this student's route, and that Lifeline has no sourced entry for cash withdrawals on a foreign card in China. cn_atm_cap_005 is not used, because it covers Chinese cards used abroad. In turn two the model calls update_plan to set the Revolut card as the backup and record that a phone wallet now holds the card; the engine allows it at T1, the execution entry holds the two fields changed, and the loop says what is now set. The cash plan is left alone. update_plan can change only the backup card, the backup route, the wallet flag and the cash plan, which the unit tests prove field by field. Both entries were checked once by S and wait for a second check.
+note: A foreign student arriving in Shenzhen sets up payments and a backup. The plan fixture has two cards, the Wise debit card as primary, no backup, and no phone wallet. In turn one the scripted model runs the precheck arrive_in_china, and the loop says, from cn_wallet_foreign_006 and cn_wise_in_007 only, the People's Bank's announcement that platforms such as Alipay and Tenpay will raise the limits for overseas travellers, the Wise route into China quoted whole, with what Wise says about who UnionPay serves and what the mainland ID decides and no verdict of Lifeline's on whether that route fits the student, and that Lifeline has no sourced entry for cash withdrawals on a foreign card in China. cn_atm_cap_005 is not used, because it covers Chinese cards used abroad. In turn two the model calls update_plan to set the Revolut card as the backup and record that a phone wallet now holds the card; the engine allows it at T1, the execution entry holds the two fields changed, and the loop says what is now set. The cash plan is left alone. update_plan can change only the backup card, the backup route, the wallet flag and the cash plan, which the unit tests prove field by field. Both entries were rewritten and checked by Claude Code on 9 October 2026 after the knowledge audit and wait for a second check.
 fixtures:
   plan:
     backup_instrument: null
@@ -8,7 +8,7 @@ fixtures:
 expected:
   reply: answer
   ledger: [proposal, decision, execution, proposal, decision, execution]
-  must_not_contain: ["cn_atm_cap_005"]
+  must_not_contain: ["cn_atm_cap_005", "not this student's route"]
 runs:
   - lang: en
     turns:
@@ -21,9 +21,8 @@ runs:
         expect:
           must_contain:
             - "Arriving in China, from the sources on file:"
-            - "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars"
-            - "for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay."
-            - "so it is not this student's route."
+            - "will instruct platforms such as Alipay and Tenpay to raise the limits for overseas travellers using mobile payments"
+            - "For UnionPay, Wise supports both mainland and non mainland recipients, and the banks available depend on whether the recipient holds a Mainland Chinese National ID."
             - "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
             - "Sources: cn_wallet_foreign_006, cn_wise_in_007."
       - user: Make my Revolut card the backup, and I have added my card to Alipay on my phone.
@@ -45,8 +44,7 @@ runs:
         expect:
           must_contain:
             - "抵达中国，根据已记录的来源："
-            - "a Chinese national ID"
-            - "so it is not this student's route."
+            - "Mainland Chinese National ID"
             - "来源：cn_wallet_foreign_006, cn_wise_in_007。"
       - user: 把我的 Revolut 卡设为备用卡，我已经把卡绑定到手机上的支付宝了。
         model:

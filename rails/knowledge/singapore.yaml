@@ -31,4 +31,4 @@
   checked_by: "SP"
   second_check_by: ""
   used_by: [T36, cn_bank_remit_sim]
-  note: "SP opened the page in a browser on 8 October 2026 because the site's bot protection blocked the tool, and confirmed these sentences in its FAQ. The statement holds only those sentences."
+  note: "SP opened the page in a browser on 8 October 2026 because the site's bot protection blocked the tool, and confirmed these sentences in its FAQ. The statement holds only those sentences. The page sits behind a bot challenge for tools, so a person must check it in a browser: expand the FAQs How do I pay fees via telegraphic transfer?, Can my parent / guardian pay fees on my behalf? and How do I make e-payment?, titles taken from the archived copy of 20 August 2026."

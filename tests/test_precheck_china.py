@@ -219,7 +219,7 @@ def test_a_pasted_payment_instruction_beside_the_document_request_cannot_produce
 
 # X28, the structuring refusal.
 
-from rails.sim.rules import CN_CDD_ENTRY, CN_INSTITUTION_ENTRY, CN_QUOTA_ENTRY, NO_SINGAPORE_PAGE  # noqa: E402
+from rails.sim.rules import CN_CDD_ENTRY, CN_INSTITUTION_ENTRY, CN_QUOTA_ENTRY, NO_SINGAPORE_PAGE, STRUCTURING_POLICY  # noqa: E402
 from core.agent import SENDER_ROLES  # noqa: E402
 
 
@@ -232,12 +232,13 @@ def test_more_than_one_persons_quota_is_not_ready_and_offers_the_documented_rout
     assert result.ready is False
     assert result.rule_ids == [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
     assert result.review_triggers == [
+        STRUCTURING_POLICY,
         entries[CN_CDD_ENTRY]["statement"],
         entries[CN_QUOTA_ENTRY]["statement"],
         entries[CN_INSTITUTION_ENTRY]["statement"],
         NO_SINGAPORE_PAGE,
     ]
-    assert "Splitting a transfer across people is structuring." in result.review_triggers[0]
+    assert "structuring" not in result.review_triggers[1]
 
 
 def test_the_open_item_sentence_says_the_hsbc_entry_covers_other_countries_and_no_singapore_page_is_on_file():
@@ -292,7 +293,8 @@ def test_a_split_quota_writes_a_structuring_note_and_the_loop_refuses_in_the_stu
     assert note["senders"] == ["parent", "aunt_or_uncle"]
     assert note["entry_ids"] == [CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]
     assert reply.text.startswith(opening)
-    assert "Splitting a transfer across people is structuring." in reply.text
+    assert STRUCTURING_POLICY in reply.text
+    assert load_knowledge()[CN_CDD_ENTRY]["statement"] in reply.text
     assert CN_CDD_ENTRY in reply.text and CN_INSTITUTION_ENTRY in reply.text and CN_QUOTA_ENTRY in reply.text
     assert NO_SINGAPORE_PAGE in reply.text
     assert not any(e.kind == "proposal" and e.payload["action"]["type"] == "transfer" for e in s.ledger.entries())

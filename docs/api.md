@@ -861,7 +861,7 @@ Two optional fields carry what the chat tool carries, so the app can run the doc
 The loop maps the action kind, the provider, the channel and every sender to these fixed values before the proposal is written, so a raw address or a name sent in any field never reaches the ledger. The response's `provider` is the mapped one.
 
 
-For money from China, `action_kind` `remit_from_china` returns only what knowledge entries say: the Bank of China checklist for funding the student's own account as the documents, and as the review triggers the Chinese side's annual quota, its identity rule, and that no duration is on file. `rule_ids` names the entries. Request:
+For money from China, `action_kind` `remit_from_china` returns only what knowledge entries say: the Bank of China checklist for funding the student's own account as the documents, and as the review triggers the Chinese side's annual quota, the People's Bank's rule that the remitter's information is verified from 5,000 yuan, that no duration is on file, and that the Bank of China page is from 2010 and names only certain branches. `rule_ids` names the entries. Request:
 
 ```json
 {
@@ -883,9 +883,10 @@ Response `200`:
     "enrollment or admission letter"
   ],
   "review_triggers": [
-    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting.",
-    "From 1 January 2026, cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification under the joint due diligence measures of the People's Bank, the financial regulator, and the securities regulator. Splitting a transfer across people is structuring.",
-    "Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009."
+    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. A news report of 5 December 2025 quotes banking industry insiders saying the quota remains unchanged under the new due diligence rules.",
+    "From 1 January 2026, under the Administrative Measures on Customer Due Diligence and Retention of Customer Identification Data and Transaction Records of Financial Institutions, issued jointly by the People's Bank of China, the National Financial Regulatory Administration and the China Securities Regulatory Commission, a financial institution or money transfer business sending a customer's funds abroad must verify the accuracy of the remitter's information when a single remittance is 5,000 yuan or more, or 1,000 US dollars or more in foreign currency.",
+    "Lifeline has no sourced duration on file for this transfer. Source: cn_boc_anxin_009.",
+    "The Bank of China page on file for the An Xin account is from 2010 and names only certain branches, so whether the account is still offered, and at which branch, must be confirmed with Bank of China. Source: cn_boc_anxin_009."
   ],
   "ready": null,
   "rule_ids": [
@@ -921,7 +922,7 @@ Response `200` with the demo fixture:
 }
 ```
 
-For a foreign student arriving in China, `action_kind` `arrive_in_china` returns the foreign card wallet limits from `cn_wallet_foreign_006`, the Wise route into China from `cn_wise_in_007` quoted whole with the sentence that it is not this student's route, and that no entry covers cash on a foreign card in China. Request:
+For a foreign student arriving in China, `action_kind` `arrive_in_china` returns the foreign card wallet limits from `cn_wallet_foreign_006`, the Wise route into China from `cn_wise_in_007` quoted whole, with no verdict of Lifeline's on whether it fits the student, and that no entry covers cash on a foreign card in China. Request:
 
 ```json
 {"user_id": "student_001", "action_kind": "arrive_in_china", "provider": "alipay"}
@@ -935,9 +936,8 @@ Response `200`:
   "action_kind": "arrive_in_china",
   "documents_likely": [],
   "review_triggers": [
-    "Foreign bank cards linked to Alipay and WeChat Pay have a single transaction limit of 5,000 US dollars and an annual limit of 50,000 US dollars, raised from 1,000 and 10,000 US dollars. The People's Bank announced the change on 1 March 2024.",
-    "Wise sends CNY into China to Alipay, WeChat, and UnionPay for recipients with a Chinese national ID, up to 50,000 yuan per transfer to Alipay and 33,000 yuan per transfer to UnionPay.",
-    "That route is for recipients with a Chinese national ID, so it is not this student's route. Source: cn_wise_in_007.",
+    "On 1 March 2024 a deputy governor of the People's Bank of China told a press briefing that the central bank will instruct platforms such as Alipay and Tenpay to raise the limits for overseas travellers using mobile payments: the single transaction limit from 1,000 US dollars to 5,000 US dollars, and the annual cumulative transaction limit from 10,000 US dollars to 50,000 US dollars.",
+    "Wise sends CNY into China to UnionPay, Alipay and Weixin, up to 33,000 yuan per transaction to UnionPay and 50,000 yuan per transfer to Alipay or to Weixin. For UnionPay, Wise supports both mainland and non mainland recipients, and the banks available depend on whether the recipient holds a Mainland Chinese National ID.",
     "Lifeline has no sourced entry for cash withdrawals on a foreign card in China."
   ],
   "ready": null,
@@ -989,9 +989,10 @@ Response `200`. The ledger's proposal holds `"senders": ["parent", "aunt_or_uncl
   "action_kind": "remit_from_china",
   "documents_likely": [],
   "review_triggers": [
-    "From 1 January 2026, cross border remittances of 5,000 yuan or 1,000 US dollars or more per transaction require customer identity verification under the joint due diligence measures of the People's Bank, the financial regulator, and the securities regulator. Splitting a transfer across people is structuring.",
-    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting.",
-    "Tuition and living costs above the quota can be remitted with documents without consuming the quota. The payment goes to the institution's account, the daily cap is 50,000 US dollars equivalent, and more than two weeks should be allowed.",
+    "Refusing to use several people's quotas for one student's costs is Lifeline's own policy, not a quoted rule: no source on file says that splitting a transfer across people is structuring.",
+    "From 1 January 2026, under the Administrative Measures on Customer Due Diligence and Retention of Customer Identification Data and Transaction Records of Financial Institutions, issued jointly by the People's Bank of China, the National Financial Regulatory Administration and the China Securities Regulatory Commission, a financial institution or money transfer business sending a customer's funds abroad must verify the accuracy of the remitter's information when a single remittance is 5,000 yuan or more, or 1,000 US dollars or more in foreign currency.",
+    "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. A news report of 5 December 2025 quotes banking industry insiders saying the quota remains unchanged under the new due diligence rules.",
+    "HSBC China's International Education Payment System is for HSBC Premier, Premier Elite, Global Private Banking and Advance customers, and covers more than 1,000 educational institutes in the US, UK, Canada, Australia and Hong Kong SAR. Through it, a foreign currency purchase for an overseas education remittance need not use the SAFE annual facilitation quota when the application includes documents that meet regulatory and HSBC's requirements, such as payment proof for tuition fees and living expenses. Accumulative daily limits equivalent to 50,000 US dollars apply to the relevant transactions, and HSBC strongly recommends allowing more than 2 weeks to process remittances.",
     "The route above the quota rests on HSBC's education payment page, which lists institutions in the US, UK, Canada, Australia and Hong Kong, not Singapore, and Lifeline has no sourced Singapore page on file for it. Source: cn_edu_remit_002."
   ],
   "ready": false,
