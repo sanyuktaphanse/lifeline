@@ -21,6 +21,7 @@ from contracts.interfaces import Anchor, Council, Ledger, ModelAdapter
 from contracts.schemas import (
     AgentReply,
     Decision,
+    LANGUAGE_META,
     LanguageCode,
     LedgerEntry,
     Mandate,
@@ -143,6 +144,8 @@ class VerifyResult(BaseModel):
 
 class Health(BaseModel):
     status: str
+    # Each language Lifeline replies in, with its writing direction and its own name. Source: LANGUAGE_META.
+    languages: dict[str, dict[str, str]]
 
 
 class Reminder(BaseModel):
@@ -432,7 +435,7 @@ def create_app(
 
     @app.get("/health")
     def health() -> Health:
-        return Health(status="ok")
+        return Health(status="ok", languages=LANGUAGE_META)
 
     @app.post("/chat")
     def chat(request: ChatRequest) -> AgentReply:

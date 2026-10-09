@@ -54,6 +54,7 @@ from core.anchor_local import DEVELOPMENT_ANCHOR_SECRET
 from core.ledger import GENESIS_PREV_HASH
 from core.monthly import is_month, month_of, previous_month, render, seqs_of, summarize
 from core.mandate import DEVELOPMENT_CONFIRM_SECRET
+from core.format import fill, format_amount, format_date
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
 from core.standing import next_occurrence, occurrence_containing, period_of
@@ -423,23 +424,34 @@ REQUIRED_ARGUMENTS = {
     "record_cash_withdrawal": ("instrument_id", "amount"),
 }
 
+# Source: docs/decisions.md, 9 October 2026. Text Lifeline holds only in English, a sourced statement, a rule's
+# reason or a rail's message, enters a reply in another language behind this key's one sentence, which says that
+# what follows is quoted in English from the source on file. In English the key adds nothing.
+QUOTED = "quoted_in_english"
+# The placeholders a language other than English may leave out of a key, because that language carries a hand
+# translation of the English value in their place. The placeholder test in tests/test_i18n.py reads this, and
+# docs/i18n_review.md names each one. Source: docs/decisions.md, 9 October 2026.
+HAND_TRANSLATED: dict[str, frozenset[str]] = {
+    "cash_cap_warning": frozenset({"consequence"}),
+    "cash_cap_year_consequence": frozenset({"consequence"}),
+}
 TEXTS = {
     "en": {
-        "confirm": "Please confirm: send {amount} {currency} to {payee} for {purpose} over {rail}, fee {fee} {currency} and exchange cost {spread} {currency}. Nothing moves until you confirm.",
-        "sent": "Done. {amount} {currency} was sent over {rail}. Receipt {receipt_id}.",
-        "transfer_failed": "The transfer of {amount} {currency} over {rail} failed, and no money arrived. Receipt {receipt_id}.",
-        "transfer_not_completed": "The transfer of {amount} {currency} over {rail} is not completed; its status is {status}. Receipt {receipt_id}.",
+        "confirm": "Please confirm: send {amount} to {payee} for {purpose} over {rail}, fee {fee} and exchange cost {spread}. Nothing moves until you confirm.",
+        "sent": "Done. {amount} was sent over {rail}. Receipt {receipt_id}.",
+        "transfer_failed": "The transfer of {amount} over {rail} failed, and no money arrived. Receipt {receipt_id}.",
+        "transfer_not_completed": "The transfer of {amount} over {rail} is not completed; its status is {status}. Receipt {receipt_id}.",
         "simulated": "This was a simulation. No real money moved.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
         "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
         "plan_updated": "Your plan now has: {fields}.",
         "plan_update_skipped": "After a restart Lifeline could not apply an earlier change to your plan's {fields}, because your plan no longer allows it, so that part of your plan stays as it was.",
-        "cash_cap_warning": "Warning: {remaining} {currency} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} {currency} a day and your cards together may still withdraw {today} {currency} today, so you can reach the cap. {consequence} Source: {entry_id}.",
-        "cash_cap_year": "You have used {used} {currency} of the {cap} {currency} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
-        "cash_cap_year_consequence": "You have used {used} {currency} of the {cap} {currency} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
+        "cash_cap_warning": "Warning: {remaining} is left of the overseas cash withdrawal cap for this calendar year, counting all your Chinese bank cards together. One card may withdraw {daily} a day and your cards together may still withdraw {today} today, so you can reach the cap. {consequence} Source: {entry_id}.",
+        "cash_cap_year": "You have used {used} of the {cap} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
+        "cash_cap_year_consequence": "You have used {used} of the {cap} overseas cash withdrawal cap for this calendar year across all your Chinese bank cards, which has reached Lifeline's {level} percent warning line. {consequence} Source: {entry_id}.",
         "withdrawal_not_recorded": "Lifeline recorded no cash withdrawal. {reason}",
-        "cash_cap_card_day": "Card {instrument} has withdrawn {used} {currency} today of its daily cap of {cap} {currency}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
+        "cash_cap_card_day": "Card {instrument} has withdrawn {used} today of its daily cap of {cap}, which has reached Lifeline's {level} percent warning line. Source: {entry_id}.",
         "structuring_refused": "Lifeline will not use another person's quota for your costs. {rule} The documented route above the quota: {quota} {route} {caveat} Sources: {ids}.",
         "document_request_flagged": "This is not how {provider} collects documents. What the source on file says: {where} Send nothing in reply to that message, and check in the {provider} app or website instead. {warning} Sources: {ids}.",
         "credentials": "Lifeline never shows card numbers, card tokens or recovery codes. Revealing stored credentials is a tier T3 action, so it is refused: {reasons} Open your card issuer's app to see them.",
@@ -451,12 +463,12 @@ TEXTS = {
         "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
         "notice_injection_any": "A request that did not come from the student was blocked.",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
-        "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee} {currency}. Confirm to send over it.",
+        "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
         "no_route_refused": "No route is available for this transfer right now, so nothing was sent. The rail said: {reason}",
         "too_many_steps": "I stopped before finishing. Please ask again.",
-        "confirm_standing": "Please confirm: send {amount} {currency} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
-        "standing_created": "Done. Standing mandate {standing_id} sends {amount} {currency} to {payee} on schedule {schedule}.",
+        "confirm_standing": "Please confirm: send {amount} to {payee} for {purpose} on schedule {schedule}, within {tolerance} percent. You will be told {notice} hours before each run and can cancel it for {cancel} hours after that. Nothing is set up until you confirm.",
+        "standing_created": "Done. Standing mandate {standing_id} sends {amount} to {payee} on schedule {schedule}.",
         "confirm_payee": "Please confirm: add {payee} ({display_name}) as a payee. A new payee can receive money only {hours} hours after being added. Nothing changes until you confirm.",
         "confirm_freeze": "Please confirm: freeze card {instrument}. Nothing changes until you confirm.",
         "confirm_cancel": "Please confirm: cancel transfer {receipt_id}. Nothing changes until you confirm.",
@@ -506,10 +518,10 @@ TEXTS = {
         "notice_freeze_failed": "Lifeline could not freeze card {instrument}.",
         "notice_not_frozen": "No card was frozen through Lifeline.",
         "notice_rerouted": "Payments now use the backup card {instrument}.",
-        "notice_sent": "{amount} {currency} was sent to {payee}.",
+        "notice_sent": "{amount} was sent to {payee}.",
         "notice_simulated": "That transfer was a simulation and no real money moved.",
-        "notice_transfer_failed": "A transfer of {amount} {currency} to {payee} failed, and no money arrived.",
-        "notice_transfer_status": "A transfer of {amount} {currency} to {payee} was started and is {status}.",
+        "notice_transfer_failed": "A transfer of {amount} to {payee} failed, and no money arrived.",
+        "notice_transfer_status": "A transfer of {amount} to {payee} was started and is {status}.",
         "notice_refused": "Lifeline refused an action under rules {rules}.",
         "notice_not_confirmed": "A confirmation was not completed, so that action did not happen.",
         "notice_injection": "A request to move money that did not come from the student was blocked.",
@@ -517,40 +529,41 @@ TEXTS = {
         "notice_identity_locked": "The safety question was answered wrongly {count} times, so the rescue was locked and nothing else was done.",
         "notice_money_skipped": "The student did not take emergency money.",
         "notice_standing": "{count} standing payments were stopped.",
+        "quoted_in_english": "{text}",
     },
     "pt": {
-        "confirm": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) via {rail}, taxa de {fee} {currency} e custo de câmbio de {spread} {currency}. Nada é enviado antes da sua confirmação.",
-        "sent": "Pronto. {amount} {currency} enviados via {rail}. Recibo {receipt_id}.",
-        "transfer_failed": "A transferência de {amount} {currency} via {rail} falhou, e nenhum dinheiro chegou. Recibo {receipt_id}.",
-        "transfer_not_completed": "A transferência de {amount} {currency} via {rail} não foi concluída; o status é {status}. Recibo {receipt_id}.",
+        "confirm": "Confirme: enviar {amount} para {payee} ({purpose}) via {rail}, taxa de {fee} e custo de câmbio de {spread}. Nada é enviado antes da sua confirmação.",
+        "sent": "Pronto. {amount} enviados via {rail}. Recibo {receipt_id}.",
+        "transfer_failed": "A transferência de {amount} via {rail} falhou, e nenhum dinheiro chegou. Recibo {receipt_id}.",
+        "transfer_not_completed": "A transferência de {amount} via {rail} não foi concluída; o status é {status}. Recibo {receipt_id}.",
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
-        "refused": "Não posso fazer isso. Regras: {rules}.",
+        "refused": "Não posso fazer isso. Regras: {rules}. {reasons}",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
         "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
         "plan_updated": "Seu plano agora tem: {fields}.",
         "plan_update_skipped": "Depois de um reinício o Lifeline não conseguiu aplicar uma mudança anterior em {fields} do seu plano, porque o seu plano não permite mais, então essa parte do plano ficou como estava.",
-        "cash_cap_warning": "Atenção: restam {remaining} {currency} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} {currency} por dia e seus cartões juntos ainda podem sacar {today} {currency} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
-        "cash_cap_year": "Você já sacou {used} {currency} do limite anual de {cap} {currency} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
-        "cash_cap_year_consequence": "Você já sacou {used} {currency} do limite anual de {cap} {currency} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "cash_cap_warning": "Atenção: restam {remaining} do limite anual de saques em dinheiro no exterior, somando todos os seus cartões bancários chineses. Um cartão pode sacar {daily} por dia e seus cartões juntos ainda podem sacar {today} hoje, então você pode atingir o limite. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
+        "cash_cap_year": "Você já sacou {used} do limite anual de {cap} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
+        "cash_cap_year_consequence": "Você já sacou {used} do limite anual de {cap} para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de {level} por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: {entry_id}.",
         "withdrawal_not_recorded": "O Lifeline não registrou nenhum saque em dinheiro. {reason}",
-        "cash_cap_card_day": "O cartão {instrument} já sacou {used} {currency} hoje do limite diário de {cap} {currency}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
+        "cash_cap_card_day": "O cartão {instrument} já sacou {used} hoje do limite diário de {cap}, o que atingiu o aviso de {level} por cento do Lifeline. Fonte: {entry_id}.",
         "structuring_refused": "O Lifeline não vai usar a cota de outra pessoa para os seus custos. {rule} O caminho documentado acima da cota: {quota} {route} {caveat} Fontes: {ids}.",
         "document_request_flagged": "Não é assim que a {provider} recebe documentos. O que diz a fonte registrada: {where} Não envie nada em resposta a essa mensagem e confira no app ou no site da {provider}. {warning} Fontes: {ids}.",
-        "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada. Abra o app do emissor do cartão para vê-los.",
+        "credentials": "O Lifeline nunca mostra números de cartão, tokens de cartão ou códigos de recuperação. Revelar credenciais guardadas é uma ação de nível T3, então foi recusada: {reasons} Abra o app do emissor do cartão para vê-los.",
         "unknown_token": "Essa confirmação não foi encontrada, então nada foi enviado.",
-        "held_entry": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o seu registro falhou na verificação na entrada {seq}. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
+        "held_entry": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o registro do Lifeline falhou na verificação na entrada {seq}. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
         "held_store": "O Lifeline pausou todos os pagamentos e ações confirmadas, porque o armazenamento de âncoras não corresponde ao registro. Nada foi feito. Seu saldo e seu histórico ainda podem ser lidos, e isto espera até o registro estar íntegro.",
         "backup_frozen": "Seu cartão reserva {backup} também está bloqueado, então o Lifeline não passou seus pagamentos para ele.",
         "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
         "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
         "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
-        "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee} {currency}. Confirme para enviar por ela.",
+        "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
         "no_route_refused": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado. A via disse: {reason}",
         "too_many_steps": "Parei antes de terminar. Pergunte de novo, por favor.",
-        "confirm_standing": "Confirme: enviar {amount} {currency} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
-        "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} {currency} para {payee} no agendamento {schedule}.",
+        "confirm_standing": "Confirme: enviar {amount} para {payee} ({purpose}) no agendamento {schedule}, com tolerância de {tolerance} por cento. Você será avisado {notice} horas antes de cada envio e poderá cancelar durante {cancel} horas depois do aviso. Nada é configurado antes da sua confirmação.",
+        "standing_created": "Pronto. A ordem permanente {standing_id} envia {amount} para {payee} no agendamento {schedule}.",
         "confirm_payee": "Confirme: adicionar {payee} ({display_name}) como destinatário. Um novo destinatário só pode receber dinheiro {hours} horas depois de adicionado. Nada muda antes da sua confirmação.",
         "confirm_freeze": "Confirme: bloquear o cartão {instrument}. Nada muda antes da sua confirmação.",
         "confirm_cancel": "Confirme: cancelar a transferência {receipt_id}. Nada muda antes da sua confirmação.",
@@ -600,37 +613,38 @@ TEXTS = {
         "notice_freeze_failed": "O Lifeline não conseguiu bloquear o cartão {instrument}.",
         "notice_not_frozen": "Nenhum cartão foi bloqueado pelo Lifeline.",
         "notice_rerouted": "Os pagamentos agora usam o cartão reserva {instrument}.",
-        "notice_sent": "{amount} {currency} foram enviados para {payee}.",
+        "notice_sent": "{amount} foram enviados para {payee}.",
         "notice_simulated": "Essa transferência foi uma simulação e nenhum dinheiro real foi movimentado.",
-        "notice_transfer_failed": "Uma transferência de {amount} {currency} para {payee} falhou, e nenhum dinheiro chegou.",
-        "notice_transfer_status": "Uma transferência de {amount} {currency} para {payee} foi iniciada e está {status}.",
+        "notice_transfer_failed": "Uma transferência de {amount} para {payee} falhou, e nenhum dinheiro chegou.",
+        "notice_transfer_status": "Uma transferência de {amount} para {payee} foi iniciada e está {status}.",
         "notice_refused": "O Lifeline recusou uma ação pelas regras {rules}.",
         "notice_not_confirmed": "Uma confirmação não foi concluída, então essa ação não aconteceu.",
         "notice_injection": "Um pedido para movimentar dinheiro que não veio do estudante foi bloqueado.",
         "notice_identity_failed": "Uma resposta errada foi dada à pergunta de segurança.",
         "notice_identity_locked": "A pergunta de segurança foi respondida errado {count} vezes, então o resgate foi travado e nada mais foi feito.",
-        "notice_money_skipped": "O estudante não recebeu dinheiro de emergência.",
+        "notice_money_skipped": "O estudante não aceitou dinheiro de emergência.",
         "notice_standing": "{count} ordens permanentes foram interrompidas.",
+        "quoted_in_english": "O trecho a seguir está em inglês, citado da fonte registrada: {text}",
     },
     "zh": {
-        "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），手续费 {fee} {currency}，汇率成本 {spread} {currency}。确认之前不会转出任何资金。",
-        "sent": "已完成。{amount} {currency} 已通过 {rail} 发出。回执 {receipt_id}。",
-        "transfer_failed": "通过 {rail} 发送的 {amount} {currency} 转账失败，没有资金到账。回执 {receipt_id}。",
-        "transfer_not_completed": "通过 {rail} 发送的 {amount} {currency} 转账尚未完成，当前状态为 {status}。回执 {receipt_id}。",
+        "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount}（用途：{purpose}），手续费 {fee}，汇率成本 {spread}。确认之前不会转出任何资金。",
+        "sent": "已完成。{amount} 已通过 {rail} 发出。回执 {receipt_id}。",
+        "transfer_failed": "通过 {rail} 发送的 {amount} 转账失败，没有资金到账。回执 {receipt_id}。",
+        "transfer_not_completed": "通过 {rail} 发送的 {amount} 转账尚未完成，当前状态为 {status}。回执 {receipt_id}。",
         "simulated": "这是一次模拟，没有真实资金转出。",
-        "refused": "我不能这样做。规则：{rules}。",
+        "refused": "我不能这样做。规则：{rules}。{reasons}",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
         "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
         "plan_updated": "你的计划现在为：{fields}。",
         "plan_update_skipped": "重启后，Lifeline 无法应用之前对你计划中 {fields} 的修改，因为你的计划已不再允许，所以这部分计划保持不变。",
-        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining} {currency}（你所有中国银行卡合计）。单张卡每天可取 {daily} {currency}，你的卡今天合计还能取 {today} {currency}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
-        "cash_cap_year": "你所有中国银行卡本年度境外取现已用 {used} {currency}，年度额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
-        "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used} {currency}，年度额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "cash_cap_warning": "提醒：本年度境外取现额度还剩 {remaining}（你所有中国银行卡合计）。单张卡每天可取 {daily}，你的卡今天合计还能取 {today}，因此可能达到上限。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
+        "cash_cap_year": "你所有中国银行卡本年度境外取现已用 {used}，年度额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
+        "cash_cap_year_consequence": "你所有中国银行卡本年度境外取现已用 {used}，年度额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：{entry_id}。",
         "withdrawal_not_recorded": "Lifeline 没有记录任何取现。{reason}",
-        "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used} {currency}，单卡每日额度为 {cap} {currency}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
+        "cash_cap_card_day": "卡片 {instrument} 今天已取现 {used}，单卡每日额度为 {cap}，已达到 Lifeline 的 {level}% 提醒线。来源：{entry_id}。",
         "structuring_refused": "Lifeline 不会用其他人的额度来支付你的费用。{rule} 超出额度的有据可查的途径：{quota} {route} {caveat} 来源：{ids}。",
         "document_request_flagged": "这不是 {provider} 收取文件的方式。有来源的说明如下：{where} 不要通过该消息发送任何东西，请改在 {provider} 的应用或网站中查看。{warning} 来源：{ids}。",
-        "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝。请在发卡机构的应用中查看。",
+        "credentials": "Lifeline 从不显示卡号、卡片令牌或恢复码。显示已存储的凭据属于 T3 级操作，因此被拒绝：{reasons} 请在发卡机构的应用中查看。",
         "unknown_token": "未找到该确认，因此没有发送任何资金。",
         "held_entry": "Lifeline 已暂停所有付款和已确认的操作，因为账本在第 {seq} 条记录处未通过验证。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
         "held_store": "Lifeline 已暂停所有付款和已确认的操作，因为锚定存储与账本不一致。没有执行任何操作。你的余额和记录仍可查看，此操作将等到账本恢复完整。",
@@ -639,12 +653,12 @@ TEXTS = {
         "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
         "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
-        "retry": "{failed} 执行失败，密钥 {key} 下没有产生任何扣款。下一个最佳路线是 {rail}，手续费 {fee} {currency}。确认后将通过该路线发送。",
+        "retry": "{failed} 执行失败，在 {key} 下没有产生任何扣款。次优路线是 {rail}，手续费 {fee}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
         "no_route_refused": "目前没有可用于这笔转账的路线，因此没有发送任何资金。支付通道的说明：{reason}",
         "too_many_steps": "我在完成之前停止了。请重新提问。",
-        "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount} {currency}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
-        "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount} {currency}。",
+        "confirm_standing": "请确认：按计划 {schedule} 向 {payee} 发送 {amount}（用途：{purpose}），允许偏差 {tolerance}%。每次付款前 {notice} 小时会通知你，通知后 {cancel} 小时内可以取消。确认之前不会设置任何内容。",
+        "standing_created": "已完成。定期授权 {standing_id} 将按计划 {schedule} 向 {payee} 发送 {amount}。",
         "confirm_payee": "请确认：将 {payee}（{display_name}）添加为收款人。新收款人在添加 {hours} 小时后才能收款。确认之前不会有任何更改。",
         "confirm_freeze": "请确认：冻结卡片 {instrument}。确认之前不会有任何更改。",
         "confirm_cancel": "请确认：取消转账 {receipt_id}。确认之前不会有任何更改。",
@@ -694,10 +708,10 @@ TEXTS = {
         "notice_freeze_failed": "Lifeline 无法冻结卡片 {instrument}。",
         "notice_not_frozen": "没有卡片通过 Lifeline 被冻结。",
         "notice_rerouted": "付款现在使用备用卡 {instrument}。",
-        "notice_sent": "{amount} {currency} 已发送给 {payee}。",
+        "notice_sent": "{amount} 已发送给 {payee}。",
         "notice_simulated": "该转账是一次模拟，没有真实资金转出。",
-        "notice_transfer_failed": "一笔发给 {payee} 的 {amount} {currency} 转账失败，没有资金到账。",
-        "notice_transfer_status": "一笔发给 {payee} 的 {amount} {currency} 转账已发起，当前状态为 {status}。",
+        "notice_transfer_failed": "一笔发给 {payee} 的 {amount} 转账失败，没有资金到账。",
+        "notice_transfer_status": "一笔发给 {payee} 的 {amount} 转账已发起，当前状态为 {status}。",
         "notice_refused": "Lifeline 根据规则 {rules} 拒绝了一项操作。",
         "notice_not_confirmed": "有一项确认未完成，因此该操作没有发生。",
         "notice_injection": "一项并非来自学生本人的转账请求已被阻止。",
@@ -705,6 +719,7 @@ TEXTS = {
         "notice_identity_locked": "安全问题被答错 {count} 次，因此救援已锁定，没有执行任何其他操作。",
         "notice_money_skipped": "学生没有领取紧急资金。",
         "notice_standing": "{count} 项定期付款已被停止。",
+        "quoted_in_english": "以下内容为英文原文，引自已记录的来源：{text}",
     },
 }
 
@@ -1046,7 +1061,12 @@ def _now() -> datetime:
 
 
 def _text(lang: str, name: str, **values: Any) -> str:
-    return TEXTS.get(lang, TEXTS["en"])[name].format(**values)
+    return fill(TEXTS.get(lang, TEXTS["en"])[name], **values)
+
+
+def _quoted(lang: str, text: str) -> str:
+    """English text inside a reply, behind the sentence that says it is quoted in English. Nothing when empty."""
+    return _text(lang, QUOTED, text=text) if text else ""
 
 
 def _action_json(action: Action) -> dict[str, Any]:
@@ -1057,15 +1077,14 @@ def _decision_json(decision: Decision) -> dict[str, Any]:
     return decision.model_dump(mode="json", exclude={"confirmation_token"})
 
 
-def _route_values(action: Action, route: Route) -> dict[str, Any]:
+def _route_values(lang: str, action: Action, route: Route) -> dict[str, Any]:
     return {
-        "amount": action.amount,
-        "currency": action.currency,
+        "amount": format_amount(action.amount or Decimal(0), action.currency, lang),
         "payee": action.payee_id,
         "purpose": action.purpose,
         "rail": route.rail,
-        "fee": route.fee,
-        "spread": route.spread_cost,
+        "fee": format_amount(route.fee, action.currency, lang),
+        "spread": format_amount(route.spread_cost, action.currency, lang),
     }
 
 
@@ -1645,7 +1664,7 @@ class AgentLoop:
             )
         if decision.tier is Tier.T3:
             name = "credentials" if action.type is ActionType.EXPORT_CREDENTIALS else "settings"
-            text = _text(lang, name, reasons=" ".join(decision.reasons))
+            text = _text(lang, name, reasons=_quoted(lang, " ".join(decision.reasons)))
             return self._reply(trail, lang, text, decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
@@ -1663,7 +1682,7 @@ class AgentLoop:
         if "withdrawal_recorded" in result:
             self._warn_cash_cap(trail, lang, action)
         elif action.type is ActionType.RECORD_CASH_WITHDRAWAL:
-            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=result.get("error", "")))
+            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=_quoted(lang, result.get("error", ""))))
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
@@ -1805,16 +1824,20 @@ class AgentLoop:
                 _text(
                     lang,
                     "cash_cap_warning",
-                    remaining=f"{status['remaining_year']:,}",
-                    daily=f"{status['per_card_daily_cap']:,}",
-                    today=f"{status['cards_today_total']:,}",
-                    currency=currency,
+                    remaining=format_amount(status["remaining_year"], currency, lang, grouped=True),
+                    daily=format_amount(status["per_card_daily_cap"], currency, lang, grouped=True),
+                    today=format_amount(status["cards_today_total"], currency, lang, grouped=True),
                     consequence=consequence,
                     entry_id=ATM_CAP_ENTRY,
                 )
             )
         for line in reached:
-            values = {"used": f"{line['used']:,}", "cap": f"{line['cap']:,}", "level": line["level"], "currency": currency, "entry_id": ATM_CAP_ENTRY}
+            values = {
+                "used": format_amount(line["used"], currency, lang, grouped=True),
+                "cap": format_amount(line["cap"], currency, lang, grouped=True),
+                "level": line["level"],
+                "entry_id": ATM_CAP_ENTRY,
+            }
             if line["scope"] == "card_day":
                 trail.notices.append(_text(lang, "cash_cap_card_day", instrument=line["instrument_id"], **values))
             elif line["level"] == max(CASH_CAP_WARNING_PERCENTS):
@@ -1859,7 +1882,7 @@ class AgentLoop:
         kind = precheck.get("action_kind")
         if kind == "arrive_in_china":
             facts, ids = arrival_facts()
-            trail.notices.append(_text(lang, "arrival", facts=" ".join(facts), ids=", ".join(ids)))
+            trail.notices.append(_text(lang, "arrival", facts=_quoted(lang, " ".join(facts)), ids=", ".join(ids)))
         if kind == CASH_CAP_ARGUMENTS["action_kind"] and "cards" in result:
             self._warn_cash_cap(trail, lang, action)
         if kind == "remit_from_china" and precheck.get("ready") is False:
@@ -1883,8 +1906,8 @@ class AgentLoop:
                 _text(
                     lang,
                     "structuring_refused",
-                    rule=rule,
-                    quota=entries[CN_QUOTA_ENTRY]["statement"],
+                    rule=_quoted(lang, rule),
+                    quota=_quoted(lang, entries[CN_QUOTA_ENTRY]["statement"]),
                     route=entries[CN_INSTITUTION_ENTRY]["statement"],
                     caveat=NO_SINGAPORE_PAGE,
                     ids=", ".join([CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]),
@@ -1909,8 +1932,8 @@ class AgentLoop:
                     lang,
                     "document_request_flagged",
                     provider=entries[WISE_DOCS_ENTRY]["values"]["provider"],
-                    where=entries[ids[0]]["statement"],
-                    warning=" ".join(entries[entry_id]["statement"] for entry_id in ids[1:]),
+                    where=_quoted(lang, entries[ids[0]]["statement"]),
+                    warning=_quoted(lang, " ".join(entries[entry_id]["statement"] for entry_id in ids[1:])),
                     ids=", ".join(ids),
                 )
             )
@@ -1949,7 +1972,7 @@ class AgentLoop:
             if selected is None:
                 return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
             pending.routes, pending.selected_route = routes, selected
-            text = _text(lang, "confirm", **_route_values(action, selected))
+            text = _text(lang, "confirm", **_route_values(lang, action, selected))
             said = self._council_text(lang, advice)
             if said:
                 text = f"{text} {said}"
@@ -1969,12 +1992,11 @@ class AgentLoop:
             text = _text(
                 lang,
                 "confirm_standing",
-                amount=action.amount,
-                currency=action.currency,
+                amount=format_amount(action.amount or Decimal(0), action.currency, lang),
                 payee=action.payee_id,
                 purpose=action.purpose,
                 schedule=terms.schedule,
-                tolerance=terms.tolerance_pct,
+                tolerance=format_amount(terms.tolerance_pct, None, lang),
                 notice=terms.notice_hours,
                 cancel=terms.cancel_window_hours,
             )
@@ -2277,7 +2299,7 @@ class AgentLoop:
             "payee_added",
             payee=payee,
             display_name=name or payee,
-            allowed_from=allowed_from.isoformat(timespec="seconds"),
+            allowed_from=format_date(allowed_from, lang),
         )
 
     def _with_payee(self, user_id: str, payee: str, added_at: datetime) -> dict[str, Any]:
@@ -2316,8 +2338,7 @@ class AgentLoop:
             lang,
             "standing_created",
             standing_id=standing.id,
-            amount=standing.amount,
-            currency=action.currency,
+            amount=format_amount(standing.amount, action.currency, lang),
             payee=standing.payee_id,
             schedule=standing.schedule,
         )
@@ -2488,7 +2509,7 @@ class AgentLoop:
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if isinstance(receipt, RailError):
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(receipt)), decision=decision)
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_quoted(lang, str(receipt))), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -2587,8 +2608,7 @@ class AgentLoop:
         text = _text(
             lang,
             name,
-            amount=receipt.amount,
-            currency=receipt.currency,
+            amount=format_amount(receipt.amount, receipt.currency, lang),
             rail=receipt.rail,
             receipt_id=receipt.receipt_id,
             status=receipt.status.value,
@@ -2621,7 +2641,7 @@ class AgentLoop:
             return _text(lang, "frozen", instrument=instrument), result
         if result.status is FreezeStatus.NOT_SUPPORTED:
             return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
-        return _text(lang, "freeze_failed", instrument=instrument, reason=result.reason), result
+        return _text(lang, "freeze_failed", instrument=instrument, reason=_quoted(lang, result.reason or "")), result
 
     def _own_transfer(self, user_id: str, receipt_id: str) -> tuple[str | None, str | None]:
         """The idempotency key and the rail of the student's own transfer behind a receipt, from the
@@ -2668,7 +2688,7 @@ class AgentLoop:
         if result.status is CancelStatus.DONE:
             return _text(lang, "cancelled", receipt_id=receipt_id), result
         name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
-        return _text(lang, name, receipt_id=receipt_id, reason=result.reason), result
+        return _text(lang, name, receipt_id=receipt_id, reason=_quoted(lang, result.reason or "")), result
 
     def _offer_next_route(
         self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
@@ -2684,7 +2704,7 @@ class AgentLoop:
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
             # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
             # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=str(error)))
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_quoted(lang, str(error))))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -2694,7 +2714,7 @@ class AgentLoop:
             selected_route=selected,
         )
         text = _text(
-            lang, "retry", failed=failed.rail, key=action.idempotency_key, **_route_values(action, selected)
+            lang, "retry", failed=failed.rail, key=action.idempotency_key, **_route_values(lang, action, selected)
         )
         return self._reply(trail, lang, text, confirmation=confirmation)
 
@@ -2723,7 +2743,7 @@ class AgentLoop:
         return min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
 
     def _refusal(self, lang: str, decision: Decision) -> str:
-        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=" ".join(decision.reasons))
+        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=_quoted(lang, " ".join(decision.reasons)))
 
     def _write(self, trail: _Trail, kind: str, payload: dict[str, Any]) -> None:
         body: dict[str, Any] = {"user_id": trail.user_id, "turn": trail.turn, **payload}
@@ -3396,8 +3416,7 @@ class AgentLoop:
         self._write(trail, "note", {"kind": "rescue_cash_options", "found": found, "missing": missing})
         if found:
             out.say(_text(lang, "cash_intro"))
-            for entry_id in found:
-                out.say(f"{entries[entry_id]['statement']} ({entries[entry_id]['source_url']})")
+            out.say(_quoted(lang, " ".join(f"{entries[entry_id]['statement']} ({entries[entry_id]['source_url']})" for entry_id in found)))
         else:
             out.say(_text(lang, "cash_none"))
         if found and missing:
@@ -3418,7 +3437,7 @@ class AgentLoop:
             {"kind": "rescue_replacement", "issuer_link": link, "estimate_id": estimate_id if entry else None},
         )
         out.say(_text(lang, "replacement_link", link=link) if link else _text(lang, "replacement_no_link"))
-        out.say(f"{entry['statement']} ({entry['source_url']})" if entry else _text(lang, "estimate_none"))
+        out.say(_quoted(lang, f"{entry['statement']} ({entry['source_url']})") if entry else _text(lang, "estimate_none"))
         return "replacement_given"
 
     def _stop_standing(self, user_id: str, plan: Plan, rescue: _Rescue, lang: str, trail: _Trail, out: _Outcome) -> str:
@@ -3502,7 +3521,7 @@ class AgentLoop:
             elif entry.kind == "receipt":
                 receipt = payload["receipt"]
                 key = receipt["idempotency_key"]
-                values = {"amount": receipt["amount"], "currency": receipt["currency"], "payee": payees.get(key, "")}
+                values = {"amount": format_amount(receipt["amount"], receipt["currency"], lang), "payee": payees.get(key, "")}
                 # Money is told as sent only when the receipt says completed, and as real only when
                 # neither the route nor the receipt says it was a simulation.
                 if receipt["status"] == ReceiptStatus.COMPLETED.value:

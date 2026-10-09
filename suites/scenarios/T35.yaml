@@ -50,7 +50,7 @@ runs:
         expect:
           must_contain:
             - "Nota do Lifeline para"
-            - "Transferências: 1 enviadas em SG>BR, total de 1200 SGD, taxas de 5.60 SGD."
+            - "Transferências: 1 enviada(s) em SG>BR, total de 1200 SGD, taxas de 5.60 SGD."
             - "Custo de câmbio pago: 0 SGD em SG>BR."
             - "Impostos: nenhum valor de imposto está registrado, porque nenhuma rota ou entrada traz um."
             - "Rotas usadas: 1 via wise."
