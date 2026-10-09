@@ -282,3 +282,42 @@ def test_the_env_example_names_the_anthropic_default_in_a_comment_and_leaves_the
     assert DEFAULT_ANTHROPIC_MODEL == "claude-opus-5"
     assert lines[index - 1] == "# ANTHROPIC_MODEL defaults to claude-opus-5 on purpose; leave it empty to use that default."
     assert all(line.startswith("#") or "=" in line for line in lines)
+
+
+# A hung call fails its run instead of waiting.
+
+
+def test_a_live_call_that_does_not_answer_in_time_fails_the_run_and_the_next_run_goes_on(tmp_path):
+    import threading
+    import time
+
+    from core.fake_adapter import FakeModelAdapter
+    from core.harness import LIVE_CALL_TIMEOUT_SECONDS, LiveProvider
+    from tests.test_live_harness import _live as live
+
+    release = threading.Event()
+
+    class Hung(FakeModelAdapter):
+        def complete(self, messages, tools):
+            release.wait(5)
+            return super().complete(messages, tools)
+
+    second = {**SCRIPTED, "id": "T07"}
+    suites = _suites(tmp_path, SCRIPTED, second)
+    built = []
+
+    def build(env):
+        built.append(env)
+        return Hung([]) if len(built) == 1 else FakeModelAdapter([*ANSWERS, _propose()])
+
+    provider = LiveProvider("anthropic", {"MODEL_PROVIDER": "anthropic"}, build=build, call_timeout=0.2)
+    started = time.monotonic()
+    hung, fine = live(suites, provider)
+    release.set()
+
+    assert LIVE_CALL_TIMEOUT_SECONDS == 60
+    assert time.monotonic() - started < 3
+    assert hung.runs[0].failures == ["error: ModelCallTimeout, anthropic gave no answer within 0.2 seconds"]
+    assert fine.status == PASSED
+    assert provider.loop_calls == 3
+    assert provider.answered_by == {"anthropic": 2}

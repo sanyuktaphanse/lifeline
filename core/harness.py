@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -66,6 +67,9 @@ SWAP_REPORT_PATH = ROOT / "evidence" / "report-swap.md"
 # Empty or all runs every scenario marked live. Source: docs/decisions.md, decision 135.
 LIVE_LIMIT_VARIABLE = "LIVE_SCENARIO_LIMIT"
 LIVE_LIMIT_ALL = ("", "all")
+# How long one live model call may take before it fails its run, so a hung call never stalls a live run.
+# Source: docs/decisions.md, decision 142.
+LIVE_CALL_TIMEOUT_SECONDS = 60
 # Each run anchors into a directory of its own under this one, removed when the run ends, so no
 # scenario writes into data/. Git ignores it, and it stays inside the repository, as CLAUDE.md rule 9 asks.
 RUNS_TMP = ROOT / ".harness_tmp"
@@ -555,6 +559,8 @@ def _error_line(error: Exception, live: "LiveProvider | None") -> str:
         return f"error: {type(error).__name__}: {error}"
     if isinstance(error, ScenarioError):
         return f"error: {type(error).__name__}: {error}"
+    if isinstance(error, ModelCallTimeout):
+        return f"error: {type(error).__name__}, {error}"
     if isinstance(error, ModelAdapterError):
         return f"error: {type(error).__name__} from {error.provider or 'an unnamed provider'}, status {error.status_code or 'none'}"
     return f"error: {type(error).__name__}"
@@ -761,6 +767,10 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
     return results
 
 
+class ModelCallTimeout(ModelAdapterError):
+    """A live call that gave no answer within the run's time limit."""
+
+
 class LiveRefused(Exception):
     """A live run that did not start, with the reason in plain words for the person who ran it."""
 
@@ -777,6 +787,7 @@ class LiveProvider:
     name: str
     settings: Mapping[str, str]
     build: Callable[[Mapping[str, str]], ModelAdapter] = ProviderModelAdapter
+    call_timeout: float = LIVE_CALL_TIMEOUT_SECONDS
     loop_calls: int = 0
     council_calls: int = 0
     # Which provider answered each call, read from the message, so a fallback that answered shows in the report.
@@ -804,9 +815,34 @@ class _Recording(ModelAdapter):
             self._live.council_calls += 1
         else:
             self._live.loop_calls += 1
-        message = self._inner.complete(messages, tools)
+        message = self._within_time_limit(messages, tools)
         self._live.answered_by[message.provider or "unnamed"] += 1
         return message
+
+    def _within_time_limit(self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]) -> Message:
+        """The provider's answer, or ModelCallTimeout once the limit passes with none.
+
+        The call runs on a daemon thread, which a timed out call is left on, so neither the rest of the run
+        nor the end of the process waits for it.
+        """
+        outcome: dict[str, Any] = {}
+
+        def call() -> None:
+            try:
+                outcome["message"] = self._inner.complete(messages, tools)
+            except BaseException as error:  # anti-pattern: SILENT-EXCEPT ok, the error is raised again on the calling thread below
+                outcome["error"] = error
+
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        worker.join(self._live.call_timeout)
+        if worker.is_alive():
+            raise ModelCallTimeout(
+                f"{self._live.name} gave no answer within {self._live.call_timeout:g} seconds", provider=self._live.name
+            )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["message"]
 
 
 def resolve_provider(name: str, env: Mapping[str, str]) -> str:
