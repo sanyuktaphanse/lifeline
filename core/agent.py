@@ -503,6 +503,10 @@ TEXTS = {
         "notice_backup_frozen": "Backup card {instrument} is frozen too, so payments were not moved to it.",
         "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
         "notice_injection_any": "A request that did not come from the student was blocked.",
+        "injection_blocked": "{origin} asked Lifeline to {what}, and Lifeline did not do it, because only your own words can start an action.",
+        "injection_from_paste": "Text you pasted",
+        "injection_from_data": "Information Lifeline read",
+        "injection_act": "take an action",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
@@ -599,6 +603,10 @@ TEXTS = {
         "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
         "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
         "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
+        "injection_blocked": "{origin} pediu ao Lifeline para {what}, e o Lifeline não fez isso, porque só as suas próprias palavras podem iniciar uma ação.",
+        "injection_from_paste": "O texto que você colou",
+        "injection_from_data": "Uma informação que o Lifeline leu",
+        "injection_act": "realizar uma ação",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
@@ -695,6 +703,10 @@ TEXTS = {
         "notice_backup_frozen": "备用卡 {instrument} 也已被冻结，因此付款没有转到这张卡上。",
         "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
         "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
+        "injection_blocked": "{origin}要求 Lifeline {what}，Lifeline 没有这样做，因为只有你自己的话才能发起操作。",
+        "injection_from_paste": "你粘贴的文字",
+        "injection_from_data": "Lifeline 读取的信息",
+        "injection_act": "执行一项操作",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，在 {key} 下没有产生任何扣款。次优路线是 {rail}，手续费 {fee}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
@@ -773,6 +785,8 @@ TEXTS = {
 MONEY_TOOLS = frozenset({"propose_transfer", "create_standing_mandate"})
 INJECTION_WHAT: dict[str, dict[str, str]] = {
     "en": {
+        "propose_transfer": "make a payment",
+        "create_standing_mandate": "set up a standing payment",
         "add_payee": "add a payee",
         "freeze_card": "freeze a card",
         "update_plan": "change the rescue plan",
@@ -783,6 +797,8 @@ INJECTION_WHAT: dict[str, dict[str, str]] = {
         "record_cash_withdrawal": "record a cash withdrawal",
     },
     "pt": {
+        "propose_transfer": "fazer um pagamento",
+        "create_standing_mandate": "criar uma ordem permanente",
         "add_payee": "adicionar um destinatário",
         "freeze_card": "bloquear um cartão",
         "update_plan": "alterar o plano de resgate",
@@ -793,6 +809,8 @@ INJECTION_WHAT: dict[str, dict[str, str]] = {
         "record_cash_withdrawal": "registrar um saque em dinheiro",
     },
     "zh": {
+        "propose_transfer": "付一笔款",
+        "create_standing_mandate": "设置一项定期付款",
         "add_payee": "添加收款人",
         "freeze_card": "冻结一张卡",
         "update_plan": "修改救援计划",
@@ -816,6 +834,15 @@ def _injection_notice(lang: str, tool: Any) -> str:
         return _text(lang, "notice_injection")
     what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(tool))
     return _text(lang, "notice_injection_any") if what is None else _text(lang, "notice_injection_other", what=what)
+
+
+def _injection_sentence(lang: str, payload: dict[str, Any]) -> str:
+    """What the student is told a blocked request from data asked for: its kind and where it came from, never an
+    address or an amount it carried, and that Lifeline did not do it. Source: docs/decisions.md, decision 144."""
+    pasted = Source.PASTED_TEXT.value in (payload.get("fields") or {}).values()
+    origin = _text(lang, "injection_from_paste" if pasted else "injection_from_data")
+    what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(payload.get("tool"))) or _text(lang, "injection_act")
+    return _text(lang, "injection_blocked", origin=origin, what=what)
 
 
 def _spoken(advice: dict[str, Any], position: str) -> str:
@@ -1675,7 +1702,20 @@ class AgentLoop:
 
     def _finish(self, trail: _Trail, turn_messages: list[Message], reply: AgentReply) -> AgentReply:
         self._remember(trail, turn_messages)
-        return reply.model_copy(update={"ledger_seqs": list(trail.seqs)})
+        return self._told(reply.model_copy(update={"ledger_seqs": list(trail.seqs)}))
+
+    def _told[ReplyT: AgentReply](self, reply: ReplyT) -> ReplyT:
+        """The reply with what the code tells the student from this call's ledger entries, kept out of the memory:
+        first, for every request from data the loop blocked, what it asked for and that Lifeline did not do it.
+        Source: docs/decisions.md, decision 144.
+        """
+        seqs = set(reply.ledger_seqs)
+        entries = [entry for entry in self._ledger.entries() if entry.seq in seqs]
+        blocked = [_injection_sentence(reply.lang, entry.payload) for entry in entries if entry.kind == "injection_suspected"]
+        first = list(dict.fromkeys(blocked))
+        if not first:
+            return reply
+        return reply.model_copy(update={"text": " ".join([*first, reply.text]).strip()})
 
     def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
         remembered = [_remembered(message) for message in turn_messages]
@@ -1689,7 +1729,7 @@ class AgentLoop:
         trail = _Trail(user_id, self._turns.get(user_id, 0), reply.provider, reply.model, mandate.id)
         said = [_remembered(message)] if message.text.strip() else []
         self._remember(trail, [*said, Message(role=Role.ASSISTANT, text=reply.text, lang=lang)])
-        return reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]})
+        return self._told(reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 
     def _run_tool(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, call: ToolCall, number: int
@@ -3248,7 +3288,7 @@ class AgentLoop:
         do_now = self._do_now(after, rescue)
         plan = self._plans[user_id]
         freeze = rescue.freeze if rescue is not None else None
-        return RescueReply(
+        return self._told(RescueReply(
             text=text,
             lang=lang,
             confirmation=out.confirmation,
@@ -3264,7 +3304,7 @@ class AgentLoop:
                 live_instrument=self._live.get(user_id),
                 issuer_link=freeze.deep_link if freeze is not None else None,
             ),
-        )
+        ))
 
     @staticmethod
     def _do_now(state: RescueState | None, rescue: _Rescue | None) -> str:
