@@ -1163,7 +1163,7 @@ The earlier code recognised a missing Anthropic key by matching the text of a `T
 
 ### Settings in .env.example and the DashScope limit
 
-`ANTHROPIC_MODEL` and `DASHSCOPE_MODEL` are listed in `.env.example` with no values, following the rule that the example file carries names only. DashScope calls send `max_tokens` 2048, with a comment citing the decision as its source.
+`ANTHROPIC_MODEL` and `DASHSCOPE_MODEL` are listed in `.env.example` with no values, following the rule that the example file carries names only. The Anthropic default, `claude-opus-5`, is the model chosen on purpose, and a comment line above `ANTHROPIC_MODEL` in `.env.example` says so; the value stays empty so the rule holds, and an empty value uses `DEFAULT_ANTHROPIC_MODEL` in `core/model_adapter.py`. The first live run of 9 October answered every one of its 63 Anthropic calls on that model. DashScope calls send `max_tokens` 2048, with a comment citing the decision as its source.
 
 ### Follow up: the multi step tool loop and ledger copies
 

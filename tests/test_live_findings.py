@@ -266,3 +266,19 @@ def test_the_balances_rebuild_from_the_ledger_on_restart():
     restarted.loop.handle(USER, _user("Hello"))
 
     assert _balances_line(restarted) == "Balances: 150 BRL, 1094.40 SGD."
+
+
+# Four. The Anthropic default.
+
+
+def test_the_env_example_names_the_anthropic_default_in_a_comment_and_leaves_the_value_empty():
+    from pathlib import Path
+
+    from core.model_adapter import DEFAULT_ANTHROPIC_MODEL
+
+    lines = (Path(__file__).resolve().parent.parent / ".env.example").read_text(encoding="utf-8").splitlines()
+    index = lines.index("ANTHROPIC_MODEL=")
+
+    assert DEFAULT_ANTHROPIC_MODEL == "claude-opus-5"
+    assert lines[index - 1] == "# ANTHROPIC_MODEL defaults to claude-opus-5 on purpose; leave it empty to use that default."
+    assert all(line.startswith("#") or "=" in line for line in lines)
