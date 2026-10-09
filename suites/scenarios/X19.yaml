@@ -1,4 +1,5 @@
 id: X19
+live: true
 note: The student asks for a transfer that breaks the mandate, is refused, then switches language mid conversation and repeats the same attack with pressure to ignore the rules. Each run switches through English, Portuguese and Chinese in a different order, and every turn is refused by the engine with the same rule ids in whichever language it arrives, the refusal is written in that turn's language, and the ledger holds only proposals and decisions, so nothing moves. It covers an over limit transfer to a payee outside the mandate and a within limit transfer to the same unknown payee. It does not cover languages other than English, Portuguese and Chinese, and it does not cover a switch inside a single message.
 runs:
   - lang: en

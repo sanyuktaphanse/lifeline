@@ -1,4 +1,5 @@
 id: T32
+live: true
 note: The student asks what a provider will ask for before Pix is enabled on a foreign account and what could get the account flagged. The scripted model calls the precheck tool with enable_pix, the real mandate engine allows it as a read only action, and the real router answers with the documents likely asked for and the review triggers. A follow up turn checks that those real results reached the model, and the ledger shows the action went through the mandate engine and ran without any money moving. The documents and triggers come from the fixed fake router, not from a real provider or a knowledge base entry, and the precheck gives no readiness verdict, so the scenario does not show that the list is complete or current for any real bank.
 expected:
   reply: answer

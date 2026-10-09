@@ -1,4 +1,5 @@
 id: T11
+live: true
 note: Asking which Joao is the scripted model's choice. The scenario checks that the question and the student's first message reach the model on the next turn, and that the loop proposes only the payee the student then names. The mandate holds payee ids, not display names.
 fixtures:
   mandate:

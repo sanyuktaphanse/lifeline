@@ -1,4 +1,5 @@
 id: X06
+live: true
 runs:
   - lang: en
     turns:

@@ -1,4 +1,5 @@
 id: X22
+live: true
 note: The student pays rent, and the scenario then edits the payload of entry 2, the decision that allowed the payment, in the ledger the run built. Every later entry was hashed over the old one, so verify names entry 2 as the first broken link and the run passes only because expected.verify says 2. A tampered data/ledger.jsonl read on start is covered in tests/test_api.py; this scenario covers the chain the loop holds in memory. It does not cover a tool or an endpoint that shows the student the break, because the loop has none; the API's verify endpoint is what the app reads.
 runs:
   - lang: en

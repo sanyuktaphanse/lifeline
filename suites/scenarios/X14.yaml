@@ -1,4 +1,5 @@
 id: X14
+live: true
 note: The mandate allows the IN>SG corridor for rent, so the engine passes the transfer, but the FakeRouter marks its only route, simulated UPI to PayNow, as blocked for rent under in_upi_paynow_purpose_001. The model first receives the real quote with the blocked reason, then the student asks to push the payment through anyway and the model proposes it. The loop skips the blocked route, answers that no route is available, issues no confirmation, and the ledger holds no confirmation, execution or receipt for the transfer. It does not cover a rail marked down, because FakeRouter always returns routes with status up and a scenario cannot change a route's status, and the rule id in_upi_paynow_purpose_001 is the knowledge entry from the RBI's FAQ on the UPI-PayNow linkage, which the router reads for the permitted purposes.
 fixtures:
   mandate:

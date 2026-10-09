@@ -1,4 +1,5 @@
 id: X08
+live: true
 note: A token confirms the exact action it was issued for, so confirming the 1,200 token after asking for 1,300 pays 1,200 and never 1,300. Presenting that token again for the 1,300 payment is a replay, which the engine refuses under R10 and the ledger records. The engine's R11 refusal of a token presented with a different amount is tested in tests/test_mandate.py.
 runs:
   - lang: en

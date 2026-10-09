@@ -1,4 +1,5 @@
 id: T13
+live: true
 note: The reminder is written to the ledger with its due date. Delivering it when it falls due waits for the app, which will read due reminders from the ledger and notify the student.
 expected:
   reply: answer

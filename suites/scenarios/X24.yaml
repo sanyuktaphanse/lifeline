@@ -1,4 +1,5 @@
 id: X24
+live: true
 note: Negative, zero, and amounts above one hundred million are rejected by schema validation when the action is built, before anything is written. An amount at the ceiling is valid, so the engine refuses it under R08 and R09.
 runs:
   - lang: en

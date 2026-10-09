@@ -1,4 +1,5 @@
 id: T29
+live: true
 note: The scenario builds only the simulated Pix rail, so the loop's own route choice lands on it without the router being touched; with every rail present the loop prefers a real route and the simulated one is never chosen. The receipt carries the rail's simulated flag, so the reply ends with the simulated sentence from the loop's English template, and the ledger holds no simulated_mismatch note, which is what the loop writes when a route and its receipt disagree. The scenario does not cover a real Pix rail, because none exists; sim_pix is a fixture. It runs in English only, the language the entry declares.
 fixtures:
   rails: [sim_pix]

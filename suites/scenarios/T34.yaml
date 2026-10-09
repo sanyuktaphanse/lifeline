@@ -1,4 +1,5 @@
 id: T34
+live: true
 note: The harness stands in for the app's scheduler, calling run_due_standing_mandates at the notice time and again once the cancel window has passed. The receipt's mandate_ref is the mandate version the run was paid under, and its standing_mandate_id names the standing mandate. The escalation checks an out of pattern amount; a cancelled run is covered in tests/test_agent.py.
 runs:
   - lang: en

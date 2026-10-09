@@ -1,4 +1,5 @@
 id: T10
+live: true
 expected:
   reply: refusal
   rule_ids: [R02]

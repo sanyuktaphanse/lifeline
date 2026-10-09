@@ -1,4 +1,5 @@
 id: T07
+live: true
 note: 3,000 SGD also breaks the 2,500 daily limit, so the refusal names R08 and R09.
 expected:
   reply: refusal

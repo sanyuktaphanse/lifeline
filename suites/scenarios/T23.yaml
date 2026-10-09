@@ -1,4 +1,5 @@
 id: T23
+live: true
 note: Each run leaves the turn's language unset, so the loop detects it from the student's own words rather than being told. The first run mixes a Portuguese question with an English request, and because the entry is declared at tier T2 it carries the whole T2 trail rather than a read, proposing the rent transfer and confirming it, so the confirmation prompt and the receipt are asserted in the Portuguese the loop detected and the ledger holds a proposal, a decision, a confirmation, an execution, and a receipt. The second run is plain English on a balance read and is answered in English. Typos are not covered, because detect_lang matches whole words from PORTUGUESE_WORDS and a misspelt word is not detected; a scenario with a typo would claim a tolerance the code does not have. Only the answer in the second run is scripted model text; the Portuguese confirmation prompt and receipt in the first run come from the loop's own templates.
 runs:
   - lang: pt

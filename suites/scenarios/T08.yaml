@@ -1,4 +1,5 @@
 id: T08
+live: true
 runs:
   - lang: en
     turns:
