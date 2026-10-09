@@ -50,12 +50,17 @@ def test_the_pix_participants_are_the_ones_the_resolution_admits():
         assert words in statement
 
 
-def test_the_quota_entry_drops_the_january_and_study_abroad_sentences():
-    statement = load_knowledge()["cn_fx_quota_001"]["statement"]
+def test_the_quota_entry_cites_safes_own_page_and_drops_the_news_sentences():
+    entry = load_knowledge()["cn_fx_quota_001"]
+    statement = entry["statement"]
 
-    assert "January 2026" not in statement and "Study abroad" not in statement
-    assert "Individuals in China have an annual facilitation quota of 50,000 US dollars" in statement
-    assert "5 December 2025" in statement
+    assert entry["source_url"] == "https://www.safe.gov.cn/en/2007/0105/819.html"
+    assert entry["source_type"] == "regulator"
+    assert "values" not in entry
+    for gone in ("January 2026", "Study abroad", "5 December 2025", "news report", "insiders"):
+        assert gone not in statement
+    for words in ("annual quota of 50,000 US dollars", "5 January 2007", "Detailed Rules"):
+        assert words in statement
 
 
 def test_the_hsbc_entries_state_their_scope_and_the_upload_rule():
@@ -139,6 +144,14 @@ def test_the_nus_entry_keeps_sps_check_and_says_a_person_must_open_it_in_a_brows
     assert entry["checked_by"] == "SP"
     assert str(entry["date_checked"]) == "2026-10-08"
     assert "bot challenge" in entry["note"] and "browser" in entry["note"]
+    for question in (
+        "How long will it take for NUS to receive my Convera GlobalPay payment?",
+        "Can someone else pay using Convera Globalpay on my behalf?",
+        "How long does it take for a successful payment through Flywire to be reflected in EduRec",
+    ):
+        assert question in entry["note"]
+    for wrong in ("How do I pay fees via telegraphic transfer?", "Can my parent / guardian", "How do I make e-payment?"):
+        assert wrong not in entry["note"]
 
 
 def test_the_readme_sets_the_rule_for_pages_tools_cannot_open_and_records_s_as_a_placeholder():

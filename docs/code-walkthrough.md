@@ -11494,19 +11494,20 @@ fixtures:
 
 ```yaml
 - id: cn_fx_quota_001
-  statement: "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. Study abroad fees are a permitted purpose. The quota was confirmed unchanged in January 2026 reporting."
+  statement: "SAFE's Detailed Rules on Measures for the Administration of Individual Foreign Exchange, explained by SAFE's spokesman on 5 January 2007, set an annual quota of 50,000 US dollars for foreign exchange purchases by domestic individuals, raised from 20,000 US dollars, and an annual quota of 50,000 US dollars for foreign exchange sales by individuals. Formalities for purchases and sales within the quota are simplified, and the authenticity of transactions exceeding the quota is examined more closely."
   country: CN
   rail: bank_fx
   kind: quota
-  source_url: "https://www.webull.com/news/13974173100655616"
-  source_type: press
-  date_checked: 2026-09-15
-  checked_by: "S"
+  source_url: "https://www.safe.gov.cn/en/2007/0105/819.html"
+  source_type: regulator
+  date_checked: 2026-10-09
+  checked_by: "CC"
   second_check_by: ""
   used_by: [T36, X28]
+  note: "Claude Code opened SAFE's page on 9 October 2026, dispatched on 5 January 2007: the spokesman's press conference on the Detailed Rules. The entry moved from a news aggregator's report of 5 December 2025. The page is from 2007 and does not itself show the quota is unchanged today."
 ```
 
-`statement` is worded exactly as the agent may say it. `country`, `rail`, and `kind` sort the fact by place, channel, and type. `source_url` and `source_type` say where the fact comes from and what kind of source that is. `date_checked` is unquoted, so YAML reads it as a date rather than as text. `checked_by` holds the initials of the first checker, and `second_check_by` is empty until a second person checks the entry, which means this entry may not appear in a demo yet. `used_by` is a list that ties the fact to the tasks and attacks that depend on it, so when a source changes it is clear which scenarios must be checked again. One entry, `cn_cdd_004`, also has a `note` recording that it still has to be confirmed against the PBOC text.
+`statement` is worded exactly as the agent may say it. `country`, `rail`, and `kind` sort the fact by place, channel, and type. `source_url` and `source_type` say where the fact comes from and what kind of source that is. `date_checked` is unquoted, so YAML reads it as a date rather than as text. `checked_by` holds the initials of the first checker, here CC for Claude Code, and `second_check_by` is empty until a second person checks the entry, which means this entry may not appear in a demo yet. `used_by` is a list that ties the fact to the tasks and attacks that depend on it, so when a source changes it is clear which scenarios must be checked again. `note` records what the checker found and what is left to do; this entry's note says its page is from 2007 and does not itself show the quota is unchanged today.
 
 `tests/test_knowledge.py` reads every file in the folder with this helper:
 

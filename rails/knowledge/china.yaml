@@ -1,15 +1,15 @@
 - id: cn_fx_quota_001
-  statement: "Individuals in China have an annual facilitation quota of 50,000 US dollars for buying foreign currency. A news report of 5 December 2025 quotes banking industry insiders saying the quota remains unchanged under the new due diligence rules."
+  statement: "SAFE's Detailed Rules on Measures for the Administration of Individual Foreign Exchange, explained by SAFE's spokesman on 5 January 2007, set an annual quota of 50,000 US dollars for foreign exchange purchases by domestic individuals, raised from 20,000 US dollars, and an annual quota of 50,000 US dollars for foreign exchange sales by individuals. Formalities for purchases and sales within the quota are simplified, and the authenticity of transactions exceeding the quota is examined more closely."
   country: CN
   rail: bank_fx
   kind: quota
-  source_url: "https://www.webull.com/news/13974173100655616"
-  source_type: press
+  source_url: "https://www.safe.gov.cn/en/2007/0105/819.html"
+  source_type: regulator
   date_checked: 2026-10-09
   checked_by: "CC"
   second_check_by: ""
   used_by: [T36, X28]
-  note: "Claude Code opened the page on 9 October 2026. It is a news aggregator reposting a Zhitongcaijing article dated 5 December 2025, and the figure is the view of banking industry insiders. The page says nothing about study abroad. A primary SAFE page would be better and none is on file."
+  note: "Claude Code opened SAFE's page on 9 October 2026, dispatched on 5 January 2007: the spokesman's press conference on the Detailed Rules. The entry moved from a news aggregator's report of 5 December 2025. The page is from 2007 and does not itself show the quota is unchanged today."
 - id: cn_edu_remit_002
   statement: "HSBC China's International Education Payment System is for HSBC Premier, Premier Elite, Global Private Banking and Advance customers, and covers more than 1,000 educational institutes in the US, UK, Canada, Australia and Hong Kong SAR. Through it, a foreign currency purchase for an overseas education remittance need not use the SAFE annual facilitation quota when the application includes documents that meet regulatory and HSBC's requirements, such as payment proof for tuition fees and living expenses. Accumulative daily limits equivalent to 50,000 US dollars apply to the relevant transactions, and HSBC strongly recommends allowing more than 2 weeks to process remittances."
   country: CN
