@@ -4245,6 +4245,7 @@ TEXTS = {
         "notice_money_skipped": "The student did not take emergency money.",
         "notice_standing": "{count} standing payments were stopped.",
         "quoted_in_english": "{text}",
+        "english_pending": "{text}",
     },
     "pt": {
         "confirm": "Confirme: enviar {amount} para {payee} ({purpose}) via {rail}, taxa de {fee} e custo de câmbio de {spread}. Nada é enviado antes da sua confirmação.",
@@ -4340,6 +4341,7 @@ TEXTS = {
         "notice_money_skipped": "O estudante não aceitou dinheiro de emergência.",
         "notice_standing": "{count} ordens permanentes foram interrompidas.",
         "quoted_in_english": "O trecho a seguir está em inglês, citado da fonte registrada: {text}",
+        "english_pending": "O texto a seguir está em inglês, e a tradução está pendente: {text}",
     },
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount}（用途：{purpose}），手续费 {fee}，汇率成本 {spread}。确认之前不会转出任何资金。",
@@ -4435,6 +4437,7 @@ TEXTS = {
         "notice_money_skipped": "学生没有领取紧急资金。",
         "notice_standing": "{count} 项定期付款已被停止。",
         "quoted_in_english": "以下内容为英文原文，引自已记录的来源：{text}",
+        "english_pending": "以下内容为英文，翻译尚待完成：{text}",
     },
 }
 ```
@@ -4735,8 +4738,15 @@ def _text(lang: str, name: str, **values: Any) -> str:
 
 
 def _quoted(lang: str, text: str) -> str:
-    """English text inside a reply, behind the sentence that says it is quoted in English. Nothing when empty."""
+    """A knowledge entry's statement inside a reply, behind the sentence that says it is quoted in English from
+    the source on file. Nothing when empty."""
     return _text(lang, QUOTED, text=text) if text else ""
+
+
+def _pending(lang: str, text: str) -> str:
+    """Lifeline's own English, such as a rule's reason or a rail's message, behind the sentence that says it is
+    in English and its translation is pending. Nothing when empty."""
+    return _text(lang, PENDING, text=text) if text else ""
 
 
 def _action_json(action: Action) -> dict[str, Any]:
@@ -5122,7 +5132,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
             )
         if decision.tier is Tier.T3:
             name = "credentials" if action.type is ActionType.EXPORT_CREDENTIALS else "settings"
-            text = _text(lang, name, reasons=_quoted(lang, " ".join(decision.reasons)))
+            text = _text(lang, name, reasons=_pending(lang, " ".join(decision.reasons)))
             return self._reply(trail, lang, text, decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
@@ -5140,7 +5150,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         if "withdrawal_recorded" in result:
             self._warn_cash_cap(trail, lang, action)
         elif action.type is ActionType.RECORD_CASH_WITHDRAWAL:
-            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=_quoted(lang, result.get("error", ""))))
+            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=_pending(lang, result.get("error", ""))))
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
@@ -5898,7 +5908,7 @@ A standing run moves money without a confirmation, so since the Stage 10 review 
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if isinstance(receipt, RailError):
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_quoted(lang, str(receipt))), decision=decision)
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_pending(lang, str(receipt))), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -6036,7 +6046,7 @@ Since the Stage 10 review it first asks `_held`, so a run paid from chat on a le
             return _text(lang, "frozen", instrument=instrument), result
         if result.status is FreezeStatus.NOT_SUPPORTED:
             return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
-        return _text(lang, "freeze_failed", instrument=instrument, reason=_quoted(lang, result.reason or "")), result
+        return _text(lang, "freeze_failed", instrument=instrument, reason=_pending(lang, result.reason or "")), result
 ```
 
 `_carry_out` finishes a confirmed payee or freeze. The waiting confirmation is removed first and its token recorded as consumed, so the same token cannot be used twice, the confirmation is written with the engine's decision, and the action joins the history. `_add_payee` adds the payee to the student's mandate and records the time as `payee_added_at`, which is what R14 reads. `model_copy(update=...)` builds a new mandate with the changed fields rather than editing the old one, and `|` joins two sets. The new mandate replaces the old one in `self._mandates`, so the next turn is checked against it. The execution entry records the action, and a `note` of kind `payee_added` records the payee, the display name, when it was added, and when it can first receive money. The reply tells the student that time. `_freeze` finds the rail by the issuer, the part of the card id before the colon, so `wise:card_01` goes to the rail stored under `wise`. With no such rail the result is a `failed` `FreezeResult` with a reason, not an error, because a freeze that cannot happen is something the student must be told. The whole `FreezeResult` is written in the execution entry, so `not_supported` and its deep link are kept in the ledger. The reply depends on the status: `done` says the card is frozen, `not_supported` says Lifeline could not do it directly and gives the issuer's link, and `failed` gives the reason and tells the student to use the issuer's app. `_add_payee` first checks whether the payee became allowed while the confirmation waited; if so it only replies `payee_exists`, and writes no execution and no new version. Otherwise `_new_version` makes the change. It copies the current mandate with the next version id, the payee added, and the addition time recorded, stores it in `_versions`, and makes it current. The `payee_added` note records `new_mandate_id`, while the entry itself carries the version that authorised the change. `version_id` lets the rebuild reuse the id the ledger recorded instead of computing one. `_freeze` now returns the text and the `FreezeResult` together as a tuple, and `_carry_out` passes the result to `_reply` as `freeze`.
@@ -6056,7 +6066,7 @@ Since the Stage 10 review it first asks `_held`, so a run paid from chat on a le
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
             # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
             # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_quoted(lang, str(error))))
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_pending(lang, str(error))))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -6099,7 +6109,7 @@ When a rail fails, `_pay_on_route` has already written the note: it checks the h
         return min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
 
     def _refusal(self, lang: str, decision: Decision) -> str:
-        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=_quoted(lang, " ".join(decision.reasons)))
+        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=_pending(lang, " ".join(decision.reasons)))
 
     def _write(self, trail: _Trail, kind: str, payload: dict[str, Any]) -> None:
         body: dict[str, Any] = {"user_id": trail.user_id, "turn": trail.turn, **payload}
@@ -6775,7 +6785,10 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
         kind = precheck.get("action_kind")
         if kind == "arrive_in_china":
             facts, ids = arrival_facts()
-            trail.notices.append(_text(lang, "arrival", facts=_quoted(lang, " ".join(facts)), ids=", ".join(ids)))
+            # The first facts are the entries' statements, one for each id; the rest are Lifeline's own sentences.
+            statements, own = facts[: len(ids)], facts[len(ids) :]
+            facts_text = " ".join(filter(None, [_quoted(lang, " ".join(statements)), _pending(lang, " ".join(own))]))
+            trail.notices.append(_text(lang, "arrival", facts=facts_text, ids=", ".join(ids)))
         if kind == CASH_CAP_ARGUMENTS["action_kind"] and "cards" in result:
             self._warn_cash_cap(trail, lang, action)
         if kind == "remit_from_china" and precheck.get("ready") is False:
@@ -6802,7 +6815,7 @@ def _canonical_precheck(arguments: dict[str, Any]) -> dict[str, Any]:
                     rule=_quoted(lang, rule),
                     quota=_quoted(lang, entries[CN_QUOTA_ENTRY]["statement"]),
                     route=entries[CN_INSTITUTION_ENTRY]["statement"],
-                    caveat=NO_SINGAPORE_PAGE,
+                    caveat=_pending(lang, NO_SINGAPORE_PAGE),
                     ids=", ".join([CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]),
                 )
             )
@@ -6993,7 +7006,7 @@ A cancel is a T2 action like a freeze, with one difference: the engine has to kn
         if result.status is CancelStatus.DONE:
             return _text(lang, "cancelled", receipt_id=receipt_id), result
         name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
-        return _text(lang, name, receipt_id=receipt_id, reason=_quoted(lang, result.reason or "")), result
+        return _text(lang, name, receipt_id=receipt_id, reason=_pending(lang, result.reason or "")), result
 ```
 
 `_own_transfer` reads the student's own `receipt` entries and returns the idempotency key of the transfer behind the receipt and the rail that issued it. A receipt sent to the student is seeded into its rail on every start and never written to the ledger, so it is never found, and neither is another student's. When the model passes the word `latest`, `_latest_receipt` first resolves it to the student's most recent receipt, and `_untrusted_latest` reads its provenance from the word in the student's own turn. `_run_tool` puts the key in `Action.cancel_of` before the proposal is written, whatever the model passed, and the engine refuses under R04 a cancel whose `cancel_of` is not an executed transfer in this student's history. After the student confirms, `_carry_out` calls `_cancel`, which asks the rail, writes the whole `CancelResult` in the execution entry and a `cancel_result` note, and says the outcome: done, or the rail's own reason when it would not or could not cancel.

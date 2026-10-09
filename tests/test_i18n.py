@@ -14,7 +14,7 @@ import pytest
 
 from contracts.schemas import LANGUAGE_META, LANGUAGES
 from core import agent, mandate, monthly
-from core.agent import HAND_TRANSLATED, INJECTION_WHAT, QUOTED, REDACTION_MARKER, TEXTS, _text
+from core.agent import HAND_TRANSLATED, INJECTION_WHAT, PENDING, QUOTED, REDACTION_MARKER, TEXTS, _text
 from core.format import fill, format_amount, format_date
 from rails.knowledge.loader import load_knowledge
 from rails.sim import rules
@@ -36,9 +36,10 @@ def _fields(template: str) -> set[str]:
     return {name for _, name, _, _ in string.Formatter().parse(template) if name}
 
 
-def _lead(lang: str) -> str:
-    """The wrapper's own sentence in a language, without the quoted text."""
-    return TEXTS[lang][QUOTED].replace("{text}", "")
+def _lead(lang: str, key: str = QUOTED) -> str:
+    """A wrapper's own sentence in a language, without the text it wraps. QUOTED wraps sourced text, PENDING
+    wraps Lifeline's own English sentences."""
+    return TEXTS[lang][key].replace("{text}", "")
 
 
 # One. The inventory.
@@ -94,13 +95,35 @@ def test_the_hand_translation_of_the_consequence_says_what_the_entry_says():
 # The wrapper for English inside a reply in another language.
 
 
-def test_the_wrapper_is_a_no_op_in_english_and_one_sentence_before_the_text_elsewhere():
-    assert TEXTS["en"][QUOTED] == "{text}"
+@pytest.mark.parametrize("key", [QUOTED, PENDING])
+def test_each_wrapper_is_a_no_op_in_english_and_one_sentence_before_the_text_elsewhere(key):
+    assert TEXTS["en"][key] == "{text}"
+    for lang in LANGUAGES:
+        assert _fields(TEXTS[lang][key]) == {"text"}
+        assert TEXTS[lang][key].endswith("{text}")
     for lang in ("pt", "zh"):
-        assert TEXTS[lang][QUOTED].endswith("{text}")
-        assert _lead(lang).strip()
-    assert agent._quoted("pt", "") == ""
-    assert agent._quoted("en", "Source: x.") == "Source: x."
+        assert _lead(lang, key).strip()
+
+
+def test_the_two_wrappers_say_different_things_in_every_other_language():
+    for lang in ("pt", "zh"):
+        assert _lead(lang, QUOTED) != _lead(lang, PENDING)
+
+
+def test_the_wrappers_add_nothing_to_empty_text_or_to_english():
+    for wrap in (agent._quoted, agent._pending):
+        assert wrap("pt", "") == ""
+        assert wrap("en", "Source: x.") == "Source: x."
+
+
+def test_only_a_knowledge_entrys_statement_is_wrapped_as_sourced_and_never_as_pending():
+    tree = ast.parse(inspect.getsource(agent))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and getattr(node.func, "id", "") in ("_quoted", "_pending")]
+    sourced = [ast.unparse(call.args[1]) for call in calls if call.func.id == "_quoted"]
+    pending = [ast.unparse(call.args[1]) for call in calls if call.func.id == "_pending"]
+    assert sourced and pending
+    assert [arg for arg in sourced if "statement" not in arg and arg != "rule"] == []
+    assert [arg for arg in pending if "statement" in arg] == []
 
 
 @pytest.mark.parametrize("lang", ["pt", "zh"])
@@ -112,7 +135,8 @@ def test_a_refusal_in_another_language_carries_its_reasons_in_english_behind_the
     assert not reply.decision.allowed
     reasons = " ".join(reply.decision.reasons)
     assert reasons
-    assert f"{_lead(lang)}{reasons}" in reply.text
+    assert f"{_lead(lang, PENDING)}{reasons}" in reply.text
+    assert _lead(lang, QUOTED) not in reply.text
 
 
 @pytest.mark.parametrize("lang", ["pt", "zh"])
@@ -121,7 +145,7 @@ def test_the_credentials_refusal_carries_its_reasons_behind_the_wrapper(lang):
 
     reply = s.loop.handle(USER, _user("card number", lang=lang))
 
-    assert f"{_lead(lang)}{' '.join(reply.decision.reasons)}" in reply.text
+    assert f"{_lead(lang, PENDING)}{' '.join(reply.decision.reasons)}" in reply.text
 
 
 def test_an_english_refusal_is_unchanged_by_the_wrapper():
@@ -140,6 +164,7 @@ def test_the_arrival_facts_are_quoted_in_english_behind_the_wrapper(lang):
     reply = s.loop.handle(USER, _user("chegando", lang=lang))
 
     assert f"{_lead(lang)}{load_knowledge()['cn_wallet_foreign_006']['statement']}" in reply.text
+    assert f"{_lead(lang, PENDING)}{rules.arrival_facts()[0][2]} {rules.NO_FOREIGN_CARD_CASH}" in reply.text
     assert WISE_INBOUND_ENTRY in reply.text
 
 
@@ -154,6 +179,7 @@ def test_the_structuring_refusal_quotes_its_entries_behind_the_wrapper(lang):
     rule = next(sentence for sentence in re.split(r"(?<=\.) ", statement) if "structuring" in sentence)
     assert f"{_lead(lang)}{rule}" in reply.text
     assert reply.text.count(_lead(lang)) == 2
+    assert f"{_lead(lang, PENDING)}{rules.NO_SINGAPORE_PAGE}" in reply.text
 
 
 @pytest.mark.parametrize("lang", ["pt", "zh"])

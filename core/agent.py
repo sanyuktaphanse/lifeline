@@ -424,10 +424,12 @@ REQUIRED_ARGUMENTS = {
     "record_cash_withdrawal": ("instrument_id", "amount"),
 }
 
-# Source: docs/decisions.md, 9 October 2026. Text Lifeline holds only in English, a sourced statement, a rule's
-# reason or a rail's message, enters a reply in another language behind this key's one sentence, which says that
-# what follows is quoted in English from the source on file. In English the key adds nothing.
+# Source: docs/decisions.md, 9 October 2026. Text Lifeline holds only in English enters a reply in another language
+# behind one sentence that says why it is English. A knowledge entry's statement follows QUOTED, which says it is
+# quoted in English from the source on file. Lifeline's own English, a rule's reason or a rail's message, follows
+# PENDING, which says it is in English and its translation is pending. In English both keys add nothing.
 QUOTED = "quoted_in_english"
+PENDING = "english_pending"
 # The placeholders a language other than English may leave out of a key, because that language carries a hand
 # translation of the English value in their place. The placeholder test in tests/test_i18n.py reads this, and
 # docs/i18n_review.md names each one. Source: docs/decisions.md, 9 October 2026.
@@ -530,6 +532,7 @@ TEXTS = {
         "notice_money_skipped": "The student did not take emergency money.",
         "notice_standing": "{count} standing payments were stopped.",
         "quoted_in_english": "{text}",
+        "english_pending": "{text}",
     },
     "pt": {
         "confirm": "Confirme: enviar {amount} para {payee} ({purpose}) via {rail}, taxa de {fee} e custo de câmbio de {spread}. Nada é enviado antes da sua confirmação.",
@@ -625,6 +628,7 @@ TEXTS = {
         "notice_money_skipped": "O estudante não aceitou dinheiro de emergência.",
         "notice_standing": "{count} ordens permanentes foram interrompidas.",
         "quoted_in_english": "O trecho a seguir está em inglês, citado da fonte registrada: {text}",
+        "english_pending": "O texto a seguir está em inglês, e a tradução está pendente: {text}",
     },
     "zh": {
         "confirm": "请确认：通过 {rail} 向 {payee} 发送 {amount}（用途：{purpose}），手续费 {fee}，汇率成本 {spread}。确认之前不会转出任何资金。",
@@ -720,6 +724,7 @@ TEXTS = {
         "notice_money_skipped": "学生没有领取紧急资金。",
         "notice_standing": "{count} 项定期付款已被停止。",
         "quoted_in_english": "以下内容为英文原文，引自已记录的来源：{text}",
+        "english_pending": "以下内容为英文，翻译尚待完成：{text}",
     },
 }
 
@@ -1065,8 +1070,15 @@ def _text(lang: str, name: str, **values: Any) -> str:
 
 
 def _quoted(lang: str, text: str) -> str:
-    """English text inside a reply, behind the sentence that says it is quoted in English. Nothing when empty."""
+    """A knowledge entry's statement inside a reply, behind the sentence that says it is quoted in English from
+    the source on file. Nothing when empty."""
     return _text(lang, QUOTED, text=text) if text else ""
+
+
+def _pending(lang: str, text: str) -> str:
+    """Lifeline's own English, such as a rule's reason or a rail's message, behind the sentence that says it is
+    in English and its translation is pending. Nothing when empty."""
+    return _text(lang, PENDING, text=text) if text else ""
 
 
 def _action_json(action: Action) -> dict[str, Any]:
@@ -1664,7 +1676,7 @@ class AgentLoop:
             )
         if decision.tier is Tier.T3:
             name = "credentials" if action.type is ActionType.EXPORT_CREDENTIALS else "settings"
-            text = _text(lang, name, reasons=_quoted(lang, " ".join(decision.reasons)))
+            text = _text(lang, name, reasons=_pending(lang, " ".join(decision.reasons)))
             return self._reply(trail, lang, text, decision=decision)
         if decision.tier is Tier.T2:
             return self._propose(user_id, lang, trail, action, decision, call.arguments)
@@ -1682,7 +1694,7 @@ class AgentLoop:
         if "withdrawal_recorded" in result:
             self._warn_cash_cap(trail, lang, action)
         elif action.type is ActionType.RECORD_CASH_WITHDRAWAL:
-            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=_quoted(lang, result.get("error", ""))))
+            trail.notices.append(_text(lang, "withdrawal_not_recorded", reason=_pending(lang, result.get("error", ""))))
         if "plan_updated" in result:
             fields = "; ".join(f"{name}: {_plan_value(value)}" for name, value in result["plan_updated"].items())
             trail.notices.append(_text(lang, "plan_updated", fields=fields))
@@ -1882,7 +1894,10 @@ class AgentLoop:
         kind = precheck.get("action_kind")
         if kind == "arrive_in_china":
             facts, ids = arrival_facts()
-            trail.notices.append(_text(lang, "arrival", facts=_quoted(lang, " ".join(facts)), ids=", ".join(ids)))
+            # The first facts are the entries' statements, one for each id; the rest are Lifeline's own sentences.
+            statements, own = facts[: len(ids)], facts[len(ids) :]
+            facts_text = " ".join(filter(None, [_quoted(lang, " ".join(statements)), _pending(lang, " ".join(own))]))
+            trail.notices.append(_text(lang, "arrival", facts=facts_text, ids=", ".join(ids)))
         if kind == CASH_CAP_ARGUMENTS["action_kind"] and "cards" in result:
             self._warn_cash_cap(trail, lang, action)
         if kind == "remit_from_china" and precheck.get("ready") is False:
@@ -1909,7 +1924,7 @@ class AgentLoop:
                     rule=_quoted(lang, rule),
                     quota=_quoted(lang, entries[CN_QUOTA_ENTRY]["statement"]),
                     route=entries[CN_INSTITUTION_ENTRY]["statement"],
-                    caveat=NO_SINGAPORE_PAGE,
+                    caveat=_pending(lang, NO_SINGAPORE_PAGE),
                     ids=", ".join([CN_CDD_ENTRY, CN_QUOTA_ENTRY, CN_INSTITUTION_ENTRY]),
                 )
             )
@@ -2509,7 +2524,7 @@ class AgentLoop:
         standing = self._standing(user_id, action.standing_mandate_id or "")
         receipt = self._pay(user_id, trail, action, mandate.id, standing.confirmation_token)
         if isinstance(receipt, RailError):
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_quoted(lang, str(receipt))), decision=decision)
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_pending(lang, str(receipt))), decision=decision)
         if receipt is None:
             return self._reply(trail, lang, _text(lang, "no_route"), decision=decision)
         return self._reply(trail, lang, self._sent_text(lang, receipt), decision=decision, receipt=receipt)
@@ -2641,7 +2656,7 @@ class AgentLoop:
             return _text(lang, "frozen", instrument=instrument), result
         if result.status is FreezeStatus.NOT_SUPPORTED:
             return _text(lang, "freeze_not_supported", instrument=instrument, deep_link=result.deep_link), result
-        return _text(lang, "freeze_failed", instrument=instrument, reason=_quoted(lang, result.reason or "")), result
+        return _text(lang, "freeze_failed", instrument=instrument, reason=_pending(lang, result.reason or "")), result
 
     def _own_transfer(self, user_id: str, receipt_id: str) -> tuple[str | None, str | None]:
         """The idempotency key and the rail of the student's own transfer behind a receipt, from the
@@ -2688,7 +2703,7 @@ class AgentLoop:
         if result.status is CancelStatus.DONE:
             return _text(lang, "cancelled", receipt_id=receipt_id), result
         name = "cancel_not_supported" if result.status is CancelStatus.NOT_SUPPORTED else "cancel_failed"
-        return _text(lang, name, receipt_id=receipt_id, reason=_quoted(lang, result.reason or "")), result
+        return _text(lang, name, receipt_id=receipt_id, reason=_pending(lang, result.reason or "")), result
 
     def _offer_next_route(
         self, lang: str, trail: _Trail, token: str, pending: PendingConfirmation, error: RailError
@@ -2704,7 +2719,7 @@ class AgentLoop:
             self._closed[token] = (pending.user_id, "no_route", action.idempotency_key)
             # The rail's own reason names the entry it rests on, such as a sourced cap, so the student hears
             # why. Today a cap is enforced here, at execution, after the confirmation: open item 116.
-            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_quoted(lang, str(error))))
+            return self._reply(trail, lang, _text(lang, "no_route_refused", reason=_pending(lang, str(error))))
         pending.routes, pending.selected_route, pending.created_at = routes, selected, _now()
         confirmation = ConfirmationRequest(
             action=action,
@@ -2743,7 +2758,7 @@ class AgentLoop:
         return min(considered, key=lambda route: route.fee + route.spread_cost, default=None)
 
     def _refusal(self, lang: str, decision: Decision) -> str:
-        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=_quoted(lang, " ".join(decision.reasons)))
+        return _text(lang, "refused", rules=", ".join(decision.rule_ids), reasons=_pending(lang, " ".join(decision.reasons)))
 
     def _write(self, trail: _Trail, kind: str, payload: dict[str, Any]) -> None:
         body: dict[str, Any] = {"user_id": trail.user_id, "turn": trail.turn, **payload}
