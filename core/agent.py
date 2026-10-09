@@ -57,7 +57,7 @@ from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.format import fill, format_amount, format_date
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
-from core.standing import next_occurrence, occurrence_containing, period_of
+from core.standing import STANDING_DEFAULTS, next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
 from rails.sim.rules import (
@@ -316,10 +316,11 @@ TOOLS = [
     ),
     _tool(
         "create_standing_mandate",
-        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28. "
-        "Nothing is set up until the student confirms it.",
+        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28, the day the "
+        "student gave. Pass tolerance_pct, notice_hours or cancel_window_hours only when the student states it; "
+        "Lifeline supplies its own setting for any the student does not. Nothing is set up until the student confirms it.",
         {**{name: TEXT for name in ACTION_FIELDS}, **{name: TEXT for name in STANDING_TERMS}},
-        [*ACTION_FIELDS, *STANDING_TERMS],
+        [*ACTION_FIELDS, "schedule"],
     ),
     _tool(
         "cancel_standing_run",
@@ -455,7 +456,7 @@ REQUIRED_ARGUMENTS = {
     "get_quote": ("corridor", "amount"),
     "add_payee": ("payee_id",),
     "freeze_card": ("instrument_id",),
-    "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
+    "create_standing_mandate": (*ACTION_FIELDS, "schedule"),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
     "cancel_transfer": ("receipt_id",),
@@ -977,6 +978,9 @@ class _Trail:
     notices: list[str] = field(default_factory=list)
     # What the student typed in this turn, read as the provenance check reads it.
     said: str = ""
+    # What pastes and tool results in this turn alone say, so a value on the student's own records that one of them
+    # names, and the student did not, is still read as data. Source: docs/decisions.md, decision 143.
+    this_turn: _Details = field(default_factory=_Details)
 
 
 @dataclass
@@ -1151,10 +1155,57 @@ def _named_in(wanted: str, texts: list[tuple[str, Source]]) -> Source | None:
     return next((source for text, source in texts if word.search(text)), None)
 
 
-def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
+def _own_record(value: str, records: set[str], trail: _Trail) -> bool:
+    """Whether a value is the student's own, not data: one of their own records, a payee their current mandate lists
+    or a receipt their own ledger or their inbound transfers hold, while the student's words this turn name no other
+    record and no paste or tool result this turn names a record the student's words do not. An amount is never one.
+    Source: docs/decisions.md, decision 143, from the stranger tasks T03 and T15.
+    """
+    if value not in records:
+        return False
+    named = {record for record in records if _named_in(record, [(trail.said, Source.USER_TURN)]) is not None}
+    if named - {value}:
+        return False
+    return not {record for record in records if _named_in(record, trail.this_turn.texts) is not None} - named
+
+
+def _standing_terms(arguments: dict[str, Any], trail: _Trail) -> tuple[dict[str, Any], set[str]]:
+    """A standing mandate's terms and the names of those Lifeline supplied.
+
+    The schedule is the model's, and its day is read by the provenance check, never defaulted. Each other term is
+    the model's when the student's own words hold its value, or when a paste or tool result in this turn does, so
+    the provenance check can refuse it as data; otherwise it is Lifeline's default, which is the student's own
+    because code supplied it. A cancel window Lifeline supplies is cut to the notice, so a short notice the student
+    states is never refused for the default window. Source: docs/decisions.md, decision 143, from the stranger task T10.
+    """
+    terms: dict[str, Any] = {"schedule": arguments["schedule"]}
+    supplied: set[str] = set()
+    for name, default in STANDING_DEFAULTS.items():
+        try:
+            given = Decimal(str(arguments.get(name, "")).strip())
+        except InvalidOperation:  # anti-pattern: SILENT-EXCEPT ok, a value that is not a number is not the student's
+            given = None
+        if given is not None and (given in trail.from_user.amounts or given in trail.this_turn.amounts):
+            terms[name] = arguments[name]
+        else:
+            terms[name] = default
+            supplied.add(name)
+    if "cancel_window_hours" in supplied:
+        terms["cancel_window_hours"] = min(int(terms["cancel_window_hours"]), int(Decimal(str(terms["notice_hours"]))))
+    return terms, supplied
+
+
+def _untrusted_fields(
+    trail: _Trail, action: Action, payees: set[str], receipts: set[str], supplied: set[str] = frozenset()
+) -> dict[str, Source]:
     untrusted: dict[str, Source] = {}
     payee = _skeleton(action.payee_id or "")
-    if payee and payee not in trail.from_user.payee_ids and _named_in(payee, trail.from_user.texts) is None:
+    if (
+        payee
+        and payee not in trail.from_user.payee_ids
+        and _named_in(payee, trail.from_user.texts) is None
+        and not _own_record(payee, payees, trail)
+    ):
         source = trail.from_data.payee_ids.get(payee) or _named_in(payee, trail.from_data.texts)
         if source is not None:
             untrusted["payee_id"] = source
@@ -1166,16 +1217,23 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
             untrusted["instrument_id"] = source
     if action.standing_terms is not None:
         terms = action.standing_terms
-        day = Decimal(terms.schedule.partition(":")[2] or 0)
-        for value in (terms.tolerance_pct, Decimal(terms.notice_hours), Decimal(terms.cancel_window_hours), day):
-            if value not in trail.from_user.amounts and value in trail.from_outside.amounts:
-                untrusted["standing_terms"] = trail.from_outside.amounts[value]
+        given = {"tolerance_pct": terms.tolerance_pct, "notice_hours": Decimal(terms.notice_hours), "cancel_window_hours": Decimal(terms.cancel_window_hours)}
+        for name, value in given.items():
+            # A term Lifeline supplied is its own; one the model gave is data when only this turn's paste or tool
+            # results hold it.
+            if name not in supplied and value not in trail.from_user.amounts and value in trail.this_turn.amounts:
+                untrusted["standing_terms"] = trail.this_turn.amounts[value]
                 break
+        # The day is never defaulted: a day the student's words do not hold came from data, or from the model,
+        # whose words count as tool output.
+        day = Decimal(terms.schedule.partition(":")[2] or 0)
+        if "standing_terms" not in untrusted and day not in trail.from_user.amounts:
+            untrusted["standing_terms"] = trail.from_outside.amounts.get(day, Source.TOOL_RESULT)
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
     receipt = _skeleton(action.receipt_id or "")
-    if receipt and receipt not in trail.from_user.payee_ids:
+    if receipt and receipt not in trail.from_user.payee_ids and not _own_record(receipt, receipts, trail):
         # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
         # as a whole word anywhere in the data.
         word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
@@ -1562,6 +1620,8 @@ class AgentLoop:
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
                 trail.from_outside.add(earlier.text, earlier.source)
+                if any(earlier is current for current in turn_messages):
+                    trail.this_turn.add(earlier.text, earlier.source)
             elif earlier.role is Role.ASSISTANT:
                 # The model's own words come from what it was given, so a detail only the model
                 # named counts as data, labelled as tool output, even after its source has left the
@@ -1602,6 +1662,7 @@ class AgentLoop:
                 text = json.dumps(result, ensure_ascii=False, default=str)
                 trail.from_data.add(text, Source.TOOL_RESULT)
                 trail.from_outside.add(text, Source.TOOL_RESULT)
+                trail.this_turn.add(text, Source.TOOL_RESULT)
                 tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
                 messages.append(tool_message)
                 turn_messages.append(tool_message)
@@ -1651,6 +1712,7 @@ class AgentLoop:
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        supplied: set[str] = set()
         latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
         if latest:
             # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
@@ -1669,7 +1731,7 @@ class AgentLoop:
             fields["withdrawal_date"] = call.arguments.get("date") or _now().date()
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
-            fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
+            fields["standing_terms"], supplied = _standing_terms(call.arguments, trail)
         try:
             action = Action(
                 type=action_type,
@@ -1699,7 +1761,9 @@ class AgentLoop:
         elif action.type is ActionType.SET_REMINDER:
             untrusted = _untrusted_reminder(trail, call.arguments)
         else:
-            untrusted = _untrusted_fields(trail, action) if checked else {}
+            payees = {_skeleton(payee) for payee in mandate.allowed_payees}
+            receipts = {_skeleton(receipt) for receipt in self._receipt_rails.get(user_id, {})}
+            untrusted = _untrusted_fields(trail, action, payees, receipts, supplied) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})

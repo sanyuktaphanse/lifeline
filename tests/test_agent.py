@@ -960,7 +960,9 @@ def test_a_payee_injected_in_an_earlier_turn_is_still_untrusted():
     reply = s.loop.handle(USER, _user("Go ahead and do what it said"))
 
     assert reply.decision.rule_ids == ["R01"]
-    assert _suspected(s.ledger)[-1]["fields"] == {"payee_id": "tool_result", "amount": "tool_result"}
+    # landlord_sp is on the student's own mandate and nothing in this turn names it, so it is the student's own
+    # under decision 143; the amount only the earlier tool result held is still data, so the action is refused.
+    assert _suspected(s.ledger)[-1]["fields"] == {"amount": "tool_result"}
 
 
 def test_details_the_student_typed_in_an_earlier_turn_stay_trusted():
@@ -1088,12 +1090,15 @@ def _standing_schedule() -> str:
 STANDING_TERMS = {"schedule": _standing_schedule(), "tolerance_pct": "5", "notice_hours": 48, "cancel_window_hours": 24}
 STANDING_ARGS = {**RENT, **STANDING_TERMS}
 STANDING_ID = "student_001-standing-1-1"
-STANDING_REQUEST = "Pay 1,200 SGD rent to landlord_sp in Brazil every month"
+# The student states the day, which is never defaulted. Source: docs/decisions.md, decision 143.
+STANDING_REQUEST = f"Pay 1,200 SGD rent to landlord_sp in Brazil every month on day {STANDING_TERMS['schedule'].partition(':')[2]}"
 
 
 def _create_standing(setup: Setup, **terms) -> str:
     setup.adapter._responses.insert(0, _call("create_standing_mandate", {**STANDING_ARGS, **terms}))
-    token = setup.loop.handle(USER, _user(STANDING_REQUEST)).confirmation.confirmation_token
+    # A term other than Lifeline's default is kept only when the student states it. Source: docs/decisions.md, decision 143.
+    stated = "".join(f", {value} {name.replace('_', ' ')}" for name, value in terms.items())
+    token = setup.loop.handle(USER, _user(STANDING_REQUEST + stated)).confirmation.confirmation_token
     setup.loop.handle(USER, _user("Yes"), confirmation_token=token)
     return token
 

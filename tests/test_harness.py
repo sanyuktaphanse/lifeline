@@ -232,7 +232,7 @@ def test_a_run_due_turn_checks_the_events_it_returns(tmp_path):
             {
                 "lang": "en",
                 "turns": [
-                    {"user": "Pay 1,200 SGD rent to landlord_sp monthly", "model": [{"calls": [{"name": "create_standing_mandate", "arguments": create}]}]},
+                    {"user": "Pay 1,200 SGD rent to landlord_sp monthly on the 1st", "model": [{"calls": [{"name": "create_standing_mandate", "arguments": create}]}]},
                     {"user": "Yes", "confirm": "latest"},
                     {"run_due": "notice", "expect": {"events": [{"kind": "run"}]}},
                 ],

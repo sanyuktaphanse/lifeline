@@ -438,7 +438,8 @@ STANDING_ID = "student_001-standing-1-1"
 
 
 def _with_standing(client: TestClient) -> None:
-    token = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp monthly"}).json()[
+    # The student states the day and any term other than Lifeline's default. Source: docs/decisions.md, decision 143.
+    token = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp monthly on the 1st, 900 notice hours"}).json()[
         "confirmation"
     ]["confirmation_token"]
     client.post("/confirm", json={"user_id": USER, "confirmation_token": token})
