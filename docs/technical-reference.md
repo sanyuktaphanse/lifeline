@@ -1132,6 +1132,21 @@ Money sent to the student is seeded on every start from the fixture's `inbound_r
 
 The API registers `upi_paynow_sim` and `cn_bank_remit_sim` unless `SIM_RAILS` is `off`, `false`, `0` or `no`, so they are on by default; `create_app` also takes `sim_rails` directly, which the tests do. `sim_pix` is always the Pix rail. The API runs every rail on the `normal` script; a scenario chooses others through `fixtures.rail_scripts`.
 
+### The Wise sandbox
+
+`rails/wise_sandbox.py` is the one rail that calls a provider's real API. It is used only when `WISE_SANDBOX_TOKEN` is set in `.env`, with `WISE_SANDBOX_PROFILE_ID` and `WISE_SANDBOX_RECIPIENTS`; without the token the API keeps the fixture Wise rail above. `create_app` also takes `wise_sandbox`, a `WiseSandboxClient`, which the tests pass with a fake Wise server behind `httpx.MockTransport`. The sandbox moves no money, so its routes and receipts are simulated, and the rail keeps the name `wise`.
+
+| Step | Wise endpoint, under `https://api.wise-sandbox.com/2026Q4` |
+| --- | --- |
+| Quote | `POST /profiles/{profileId}/quotes` |
+| Create the transfer | `POST /transfers`, with a `customerTransactionId` derived from the idempotency key and the request |
+| Fund it from the Wise balance | `POST /profiles/{profileId}/transfers/{transferId}/payments` |
+| Trace | `GET /transfers/{transferId}` |
+| Cancel | `PUT /transfers/{transferId}/cancel` |
+| Move a transfer along, sandbox only | `GET /simulation/transfers/{transferId}/{status}` |
+
+Receipt ids are `wise-` and Wise's transfer id. `STATUSES` maps each status in Wise's transfer statuses guide onto a `ReceiptStatus`: waiting and initiated are created, processing is funded, funds converted is in transit, outgoing payment sent is completed, cancelled, refunded and charged back are returned, and bounced back and unknown are held for review with a warning. The mapping is Lifeline's reading of Wise's meanings. `WiseSandboxRouter` wraps `FakeRouter` and replaces only its `wise` routes with the sandbox quote's fee, estimated delivery, quote id and rate; a quote that fails is returned down with no fee. `make evidence-wise` writes `evidence/wise-sandbox.md`, the sandbox operation log. Decisions of 10 October 2026 in `docs/decisions.md` give the reasons; `tests/test_wise_sandbox.py`, `tests/test_api_wise_sandbox.py` and `tests/test_wise_sandbox_evidence.py` hold them.
+
 ### Freeze
 
 `freeze` returns a `FreezeResult` whose status is `done`, `not_supported`, or `failed`. The instrument id is written as the issuer, a colon, and the card, such as `wise:card_01`. Wise returns `done`. Revolut returns `not_supported` with a deep link and a reason, so the agent can send the student to freeze the card in the app, as task T15 describes. The deep link is a placeholder on the reserved `example.invalid` domain, which never resolves. An unknown issuer, or an id without a colon, returns `failed` with a reason instead of raising, because a freeze that cannot happen is something the agent must explain.
@@ -2029,3 +2044,6 @@ From `97a6211` onward every change goes on its own branch and reaches `main` thr
 165. Lifeline refuses a plan that uses several people's quotas for one student's costs as its own policy. No source on file, the People's Bank's Order 2025 No. 11 included, says that splitting a transfer across people is structuring, so the refusal names itself as Lifeline's own and quotes only the verification threshold the order does state.
 166. `cn_wallet_foreign_006` reports an instruction the People's Bank announced on 1 March 2024 for overseas travellers. Nothing on file shows the limits took effect or that they apply to a student who lives in China; the People's Bank's own notice or the platforms' pages would settle it.
 167. `cn_boc_anxin_009` rests on a page from 2010. The China precheck says so, but no page on file shows the An Xin account is still offered.
+168. On SG>BR the loop picks the fixture `bank_wire`, which says it is not simulated, over the Wise sandbox route, because `_considered` in `core/agent.py` prefers routes that are not simulated. The fixture `wise` and `bank_wire` routes say they are not simulated although no money moves on them either. Lane A decides whether the fixtures say simulated, or whether the loop treats a sandbox route differently.
+169. The Wise sandbox route's spread is zero because no mid market rate is on file; a sourced rate would let the router compute it.
+170. The Wise sandbox client freezes no card. Wise's card API and a sourced deep link to freeze a card in the Wise app would replace the not supported answer.
