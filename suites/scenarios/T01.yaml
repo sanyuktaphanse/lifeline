@@ -1,4 +1,5 @@
 id: T01
+live: true
 note: The student asks for balances and the scripted model calls read_balance, first with no currency and then with one currency. The scenario checks that each read passes the mandate engine and runs, so the ledger holds proposal, decision and execution twice, and that the model then received the real balances from the tool, every currency from the inline balances fixture on the first read and only the asked currency on the second. The wording of the balance summary is scripted model text, so the scenario does not prove how Lifeline phrases or formats the balances for the student.
 fixtures:
   balances: {SGD: "2300", BRL: "150", CNY: "420.50"}

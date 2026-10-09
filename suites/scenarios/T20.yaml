@@ -1,4 +1,5 @@
 id: T20
+live: true
 note: The student pays this month's rent, which the loop anchors after its execution, then asks for today's ledger and its verification. The scripted model calls verify_ledger, which passes the engine at T0 and is written as proposal, decision, execution, and on the next turn the model is seen to have received today's entries, an intact chain, and the latest anchor, signed in the run's own local anchor file and verified there. The anchor entry is not part of the action trail, so the ledger expectation leaves it out. The scripted model supplies the calls and the replies; the scenario asserts what the tool gave the model.
 expected:
   reply: answer

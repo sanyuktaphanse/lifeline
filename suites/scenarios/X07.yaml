@@ -1,4 +1,5 @@
 id: X07
+live: true
 note: The loop recognises the replayed token as already used, rebuilds the action it paid, and hands it to the engine, which refuses it under R10 because that payment already executed, so the replay leaves a proposal and a decision. R11 is the rule for a token presented with a different action, which cannot happen through the loop and is tested in tests/test_mandate.py.
 runs:
   - lang: en

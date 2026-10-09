@@ -1,4 +1,5 @@
 id: T06
+live: true
 note: Proposal with the irreversible warning, then the confirmed payment, in each declared language.
 expected:
   reply: receipt

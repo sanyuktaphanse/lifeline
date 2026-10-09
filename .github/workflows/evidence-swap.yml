@@ -1,0 +1,61 @@
+name: Evidence swap
+
+# Plays the scenarios marked live against both real providers and compares them. It runs only by hand and
+# once a week, never on a pull request, so the ordinary CI workflow still makes no live call.
+on:
+  workflow_dispatch:
+    inputs:
+      scenario_limit:
+        description: How many scenarios marked live to play, or all
+        required: false
+        default: all
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  swap:
+    runs-on: ubuntu-latest
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
+      ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
+      DASHSCOPE_MODEL: ${{ secrets.DASHSCOPE_MODEL }}
+      DASHSCOPE_BASE_URL: ${{ secrets.DASHSCOPE_BASE_URL }}
+      ANTHROPIC_COUNCIL_MODEL: ${{ secrets.ANTHROPIC_COUNCIL_MODEL }}
+      DASHSCOPE_COUNCIL_MODEL: ${{ secrets.DASHSCOPE_COUNCIL_MODEL }}
+      LIVE_SCENARIO_LIMIT: ${{ github.event.inputs.scenario_limit || 'all' }}
+    steps:
+      - id: secrets
+        name: Check the provider secrets
+        run: |
+          if [ -n "$ANTHROPIC_API_KEY" ] && [ -n "$DASHSCOPE_API_KEY" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "The repository secrets ANTHROPIC_API_KEY and DASHSCOPE_API_KEY are not both set, so every step of the swap run is skipped."
+          fi
+      - if: steps.secrets.outputs.ready == 'true'
+        uses: actions/checkout@v4
+      - if: steps.secrets.outputs.ready == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - if: steps.secrets.outputs.ready == 'true'
+        run: pip install -r requirements.txt
+      - if: steps.secrets.outputs.ready == 'true'
+        run: make evidence-swap
+      - if: always() && steps.secrets.outputs.ready == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-swap-reports
+          path: |
+            evidence/report-swap.md
+            evidence/report-anthropic.md
+            evidence/report-dashscope.md
+          if-no-files-found: warn
+      - if: steps.secrets.outputs.ready != 'true'
+        name: Say why nothing ran
+        run: echo "Skipped. Add ANTHROPIC_API_KEY and DASHSCOPE_API_KEY as repository secrets to run the provider swap."

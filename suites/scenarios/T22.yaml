@@ -1,4 +1,5 @@
 id: T22
+live: true
 note: The replies to each language come from the scripted model; the scenario checks that every turn reaches the model with the earlier turns, tool results included, and is answered in its own language.
 runs:
   - lang: en

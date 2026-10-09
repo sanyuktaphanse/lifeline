@@ -1,4 +1,5 @@
 id: X15
+live: true
 note: A transfer for a business purpose over UPI to PayNow, which the RBI allows only for person to person remittances for Maintenance of Relatives Abroad and Gift. The router reads the permitted purposes from in_upi_paynow_purpose_001 and returns the route blocked, with a reason that lists the permitted purposes and the entry id, and that entry as its rule. The scripted model supplies the get_quote call and both replies; what the scenario asserts is what the router gave the model. The entry is checked by SP and waits for a second check.
 expected:
   reply: answer

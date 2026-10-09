@@ -1,4 +1,5 @@
 id: X13
+live: true
 note: The student asks to pay a payee who is not on the mandate just this once without adding them. The engine refuses the transfer under R06 and the refusal names the payee as not allowed, so nothing moves. The student then takes the add payee flow, which the code runs as a confirmation that states the 24 hour cooling period, adds the payee only after the student confirms, and still refuses an immediate transfer to the new payee under R14, so adding the payee is not a shortcut around the refusal. The code does not itself write an offer of the add payee flow into the refusal text, so the part of the entry that says the flow is offered is shown only by the flow being available and working, not by wording Lifeline produces.
 runs:
   - lang: en

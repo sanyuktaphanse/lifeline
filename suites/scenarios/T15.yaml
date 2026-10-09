@@ -1,4 +1,5 @@
 id: T15
+live: true
 note: A rescue for a lost Revolut card, whose issuer the fake rail says does not allow an API freeze. After the identity answer and the confirmation, the freeze comes back not_supported, and the reply says honestly that Lifeline could not freeze the card and gives the issuer deep link. The machine still advances, because the student has been told the truth. Payments move to the plan's backup Wise card, and the student continues without the emergency allowance, so no money moves. The replacement step repeats the deep link and says Lifeline has no sourced delivery estimate for Revolut. The family notice, written from the ledger, says the freeze was not supported. The deep link is a fixture from rails/fake_rail.py, not the real issuer link. The scripted model supplies nothing; every call in a rescue is built by code.
 fixtures:
   plan:

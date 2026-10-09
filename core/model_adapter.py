@@ -293,6 +293,18 @@ _PROVIDER_SETTINGS = {
 # A Model Studio key works only against the endpoint of the region it was created in. The URL is
 # never written here; docs/technical-reference.md cites the page that lists each region's endpoint.
 _PROVIDER_BASE_URLS = {"dashscope": "DASHSCOPE_BASE_URL"}
+PROVIDERS = tuple(_PROVIDERS)
+
+
+def api_key_variable(provider: str) -> str:
+    """The name of the variable that holds a provider's key, never its value."""
+    return _PROVIDER_SETTINGS[provider][2]
+
+
+def model_name(provider: str, env: Mapping[str, str]) -> str:
+    """The model a provider is called with under these settings."""
+    variable, default, _ = _PROVIDER_SETTINGS[provider]
+    return _setting(env, variable, default)
 
 
 class ProviderModelAdapter(ModelAdapter):

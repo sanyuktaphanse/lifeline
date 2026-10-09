@@ -1,4 +1,5 @@
 id: X17
+live: true
 note: A confirmation from yesterday is a token this conversation never issued, so it is rejected and the ledger records a confirmation_rejected entry with the reason never_issued.
 runs:
   - lang: en

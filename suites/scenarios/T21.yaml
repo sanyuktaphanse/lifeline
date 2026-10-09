@@ -16,6 +16,7 @@ note: >
   entry, and the confirmation prompt come from the code; the voices are scripted fixtures and the
   answer in the second turn is scripted model text, which is what an entry about reading back an
   explanation can assert without a live model.
+  Not marked live, because the disagreement scores 0.4 and 0.6 and the runner up come from the scripted votes of the five voices, which a live council does not reproduce.
 fixtures:
   council:
     - '{"position": "wise", "confidence": 0.9, "reason": "Wise costs the least in fees and exchange cost of the routes that can carry this rent.", "evidence": ["wise"]}'

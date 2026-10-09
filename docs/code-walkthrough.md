@@ -8115,15 +8115,19 @@ A reminder is due at its due time exactly. A reminder with no due time is always
 The harness turns the task and attack suites into evidence. For every entry it looks for a scenario, a scripted conversation in `suites/scenarios/<id>.yaml`. It plays each scenario through the real `AgentLoop` with the fake model adapter, router, and rails, judges the outcome, and writes `evidence/report.md`. Nothing in the report is typed by hand.
 
 ```python
+import argparse
 import json
 import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -8141,12 +8145,24 @@ from contracts.schemas import (
     StandingEvent,
     ToolCall,
 )
-from core.agent import ANCHOR_KIND, AgentLoop
+from contracts.interfaces import ModelAdapter
+from core.agent import ANCHOR_KIND, REDACTION_MARKER, AgentLoop
 from core.anchor_local import LocalSignedAnchor
 from core.council import VOICES, FiveVoiceCouncil
 from core.fake_adapter import FakeModelAdapter
 from core.ledger import HashChainLedger
 from core.mandate import DeterministicMandateEngine
+from core.model_adapter import (
+    DEFAULT_FALLBACK_PROVIDER,
+    DEFAULT_PROVIDER,
+    PROVIDERS,
+    ModelAdapterError,
+    ProviderModelAdapter,
+    api_key_variable,
+    council_env,
+    environment,
+    model_name,
+)
 from core.standing import RUN_WINDOW_AFTER_DUE, next_occurrence
 from rails.fake_rail import FakeRail, scripted_traces
 from rails.inbound import inbound_from_fixture, seed_inbound
@@ -8159,11 +8175,20 @@ ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "suites"
 SCENARIOS_DIR = SUITES_DIR / "scenarios"
 REPORT_PATH = ROOT / "evidence" / "report.md"
+# Scenarios only the live mode reads, such as a language the loop cannot write in. The ordinary run never opens it.
+LIVE_DIR = SUITES_DIR / "live"
+LIVE_SUITE = "live"
+SWAP_REPORT_PATH = ROOT / "evidence" / "report-swap.md"
+# Empty or all runs every scenario marked live. Source: docs/decisions.md, decision 135.
+LIVE_LIMIT_VARIABLE = "LIVE_SCENARIO_LIMIT"
+LIVE_LIMIT_ALL = ("", "all")
 # Each run anchors into a directory of its own under this one, removed when the run ends, so no
 # scenario writes into data/. Git ignores it, and it stays inside the repository, as CLAUDE.md rule 9 asks.
 RUNS_TMP = ROOT / ".harness_tmp"
 SUITES = (("tasks", "tasks.yaml"), ("attacks", "attacks.yaml"))
 PASSED, FAILED, NOT_AUTOMATED = "passed", "failed", "not automated"
+# A live run whose every expectation was scripted model text is skipped: nothing in it was judged.
+SKIPPED = "skipped"
 TIERS = ("T0", "T1", "T2", "T3")
 # A run's text checks add to the scenario's; every other expectation in a run replaces the scenario's.
 TEXT_CHECKS = ("must_contain", "must_not_contain", "must_not_match")
@@ -8210,17 +8235,32 @@ SIM_RAILS = {"upi_paynow_sim": UpiPayNowSimRail, "sim_pix": PixSimRail, "cn_bank
 FIXTURE_VALIDITY = timedelta(days=70)
 ```
 
-The harness imports the same pieces a test of the agent loop uses: the fake model adapter, the hash chained ledger, the deterministic engine, the fake router, and the fake rail. It never imports a real model or a real rail, so running it costs nothing and needs no keys. `SUITES_DIR`, `SCENARIOS_DIR`, and `REPORT_PATH` are built from `ROOT`, the folder above `core/`, so the harness works from any current directory. `PASSED`, `FAILED`, and `NOT_AUTOMATED` are the only three results an entry can have. `TEXT_CHECKS` names the two expectations that add up across levels, as explained below, and `RUN_CHECKS` names the three that are judged against the run rather than against its final reply. `DETECT` is the language a turn gives when it wants the loop to detect one, and `PROPOSE_TRANSFER` is the tool a `fail_once` entry names when it does not name one itself. The fixtures are the same student, mandate, and balances as the agent tests, and the comment says they are fixtures and names this file as their source, because rule 4 of the project forbids a limit without a source. `FIXTURE_RAILS` is the set of rails a scenario may ask for with the simulated flag of each, which is why a scenario that names only `sim_pix` gets a simulated receipt. `FIXTURE_VALIDITY` is seventy days either side of now, so a standing run that falls due up to two months ahead is still inside the fixture mandate.
+The harness imports the same pieces a test of the agent loop uses: the fake model adapter, the hash chained ledger, the deterministic engine, the fake router, and the fake rail. The ordinary run never builds a real model or a real rail, so it costs nothing and needs no keys. It imports `ProviderModelAdapter` and the settings helpers only for the live mode at the end of this section, which nothing starts without an explicit argument. `LIVE_DIR` is `suites/live/`, the scenarios only the live mode reads, `SWAP_REPORT_PATH` is where the swap report goes, and `LIVE_LIMIT_VARIABLE` names the cap on a live run. `SUITES_DIR`, `SCENARIOS_DIR`, and `REPORT_PATH` are built from `ROOT`, the folder above `core/`, so the harness works from any current directory. `PASSED`, `FAILED`, and `NOT_AUTOMATED` are the only three results an entry of the ordinary run can have, and a live run adds `SKIPPED`. `TEXT_CHECKS` names the two expectations that add up across levels, as explained below, and `RUN_CHECKS` names the three that are judged against the run rather than against its final reply. `DETECT` is the language a turn gives when it wants the loop to detect one, and `PROPOSE_TRANSFER` is the tool a `fail_once` entry names when it does not name one itself. The fixtures are the same student, mandate, and balances as the agent tests, and the comment says they are fixtures and names this file as their source, because rule 4 of the project forbids a limit without a source. `FIXTURE_RAILS` is the set of rails a scenario may ask for with the simulated flag of each, which is why a scenario that names only `sim_pix` gets a simulated receipt. `FIXTURE_VALIDITY` is seventy days either side of now, so a standing run that falls due up to two months ahead is still inside the fixture mandate.
 
 ```python
+class ScenarioError(ValueError):
+    """A scenario the harness cannot play as written. Its words come from the scenario, never from a provider."""
+
+
 @dataclass
 class RunResult:
     langs: list[str]
     failures: list[str] = field(default_factory=list)
+    # How many checks were judged, and in live mode the scripted text checks that were not.
+    checked: int = 0
+    skipped: list[str] = field(default_factory=list)
+    # The text of every reply, kept so a live failure shows what the model did. Each passed the reply guard.
+    replies: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
         return not self.failures
+
+    @property
+    def status(self) -> str:
+        if self.failures:
+            return FAILED
+        return PASSED if self.checked else SKIPPED
 
 
 @dataclass
@@ -8235,7 +8275,7 @@ class EntryResult:
     note: str | None = None
 ```
 
-A `RunResult` is one scripted conversation: the languages its turns used, in order and without repeats, and the list of reasons it failed. `passed` is a property, a method read like a field, and is true exactly when the list is empty, so a run can never pass with a recorded failure. An `EntryResult` is one suite entry with its id, title, tier, declared languages, status, runs, and the scenario's note. An entry with no scenario has no runs.
+A `RunResult` is one scripted conversation: the languages its turns used, in order and without repeats, and the list of reasons it failed. `passed` is a property, a method read like a field, and is true exactly when the list is empty, so a run can never pass with a recorded failure. `checked` counts the checks judged, `skipped` lists the checks a live run skipped as scripted model text, and `replies` keeps the text of every reply, which the live report prints for a failed run. `status` is failed with any failure, skipped when nothing was judged, and passed otherwise, so a run whose every check was skipped is never counted as passed. An `EntryResult` is one suite entry with its id, title, tier, declared languages, status, runs, and the scenario's note. An entry with no scenario has no runs.
 
 ```python
 def load_suite(path: Path) -> list[dict[str, Any]]:
@@ -8295,7 +8335,7 @@ def _who(fixtures: dict[str, Any]) -> _Who:
     if "fixture" in block:
         name = str(block["fixture"])
         if not FIXTURE_NAME.fullmatch(name):
-            raise ValueError(f"fixtures.user names fixture {name!r}, which is not a plain fixture name")
+            raise ScenarioError(f"fixtures.user names fixture {name!r}, which is not a plain fixture name")
         block = {**load_suite(ROOT / "fixtures" / f"{name}.yaml"), **{k: v for k, v in block.items() if k != "fixture"}}
     now = datetime.now(timezone.utc)
     mandate = Mandate.model_validate(
@@ -8334,7 +8374,7 @@ def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
     names = fixtures.get("rails", list(FIXTURE_RAILS))
     unknown = [name for name in names if name not in FIXTURE_RAILS]
     if unknown:
-        raise ValueError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
+        raise ScenarioError(f"rails names {unknown}, which is not among {sorted(FIXTURE_RAILS)}")
     traces = scripted_traces(fixtures.get("traces"))
     failing = _fail_once_keys(fixtures.get("fail_once", []), user_id)
     scripts = fixtures.get("rail_scripts", {})
@@ -8342,13 +8382,13 @@ def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
     statuses = {name: ReceiptStatus(status) for name, status in (fixtures.get("receipt_status") or {}).items()}
     stray = sorted({*traces, *failing, *scripts, *statuses} - set(names))
     if stray:
-        raise ValueError(f"traces, fail_once, rail_scripts or receipt_status name rails {stray}, which this scenario does not build")
+        raise ScenarioError(f"traces, fail_once, rail_scripts or receipt_status name rails {stray}, which this scenario does not build")
     scripted_fakes = sorted({*traces, *failing, *statuses} & set(SIM_RAILS))
     if scripted_fakes:
-        raise ValueError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
+        raise ScenarioError(f"traces and fail_once script fake rails; {scripted_fakes} are simulated rails, which run rail_scripts")
     not_simulated = sorted(set(scripts) - set(SIM_RAILS))
     if not_simulated:
-        raise ValueError(f"rail_scripts names {not_simulated}, which are not simulated rails")
+        raise ScenarioError(f"rail_scripts names {not_simulated}, which are not simulated rails")
     demo = load_suite(DEMO_FIXTURE)
     # What a simulated rail is built with beyond its script, from the scenario or else the demo fixture.
     built_with = {
@@ -8367,7 +8407,7 @@ def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
 `_rails` builds the rails one scenario needs. By default it builds all four, as before. A scenario that lists `rails` gets only those, and since the loop's `_choose` skips any route whose rail it does not hold, listing only `sim_pix` makes the simulated route the chosen one without the router being touched. The traces come from `scripted_traces`, shared with `demo_rails` in `api/main.py`, so a scenario scripts them exactly as `fixtures/demo_user.yaml` does. A rail name that is not one of the four, or traces and failures named for a rail the scenario did not build, raise rather than pass silently; the error becomes a failed run in the report. Since 8 October the default is six rails, three of them simulated: `upi_paynow_sim`, `sim_pix` and `cn_bank_remit_sim` are built from `SIM_RAILS` with the script `fixtures.rail_scripts` names, `normal` otherwise, and with what each needs, the payees with a Pix key, the documents on file and whether the quota position is known, from the scenario or else the demo fixture. `traces` and `fail_once` script only fake rails, and `rail_scripts` only simulated ones, so either aimed at the wrong kind is refused.
 
 ```python
-def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
+def _council(fixtures: dict[str, Any], live: "LiveProvider | None" = None) -> FiveVoiceCouncil | None:
     """The council a scenario asks for, with one scripted reply per voice for each deliberation.
 
     Without `fixtures.council` the loop is built with no council at all, which is how every
@@ -8379,14 +8419,16 @@ def _council(fixtures: dict[str, Any]) -> FiveVoiceCouncil | None:
     # One reply for each voice, in the order of VOICES, for each deliberation the run convenes, consumed in
     # order: a run whose rent and allowance both escalate scripts ten.
     if not scripted or len(scripted) % len(VOICES):
-        raise ValueError(
+        raise ScenarioError(
             f"council scripts {len(scripted)} voices, and it needs one for each of "
             f"{', '.join(VOICES)} in every deliberation"
         )
+    if live is not None:
+        return FiveVoiceCouncil(live.adapter(council=True))
     return FiveVoiceCouncil(FakeModelAdapter(scripted))
 ```
 
-`_council` builds the council a scenario asks for. `fixtures.council` is a list of five strings, each the JSON one voice answers with, in the order cost, speed, safety, rules, and timing, and they go into a `FakeModelAdapter` of their own, so the council's five calls come out of that list while the loop's calls come out of the scenario's `model` blocks. A list of any other length raises, and the error becomes a failed run rather than a council that quietly runs out of answers halfway through. Without the fixture the function answers `None` and the loop is built with no council, which is why the forty one scenarios written before the council still produce exactly the replies and trails they did.
+`_council` builds the council a scenario asks for. `fixtures.council` is a list of five strings, each the JSON one voice answers with, in the order cost, speed, safety, rules, and timing, and they go into a `FakeModelAdapter` of their own, so the council's five calls come out of that list while the loop's calls come out of the scenario's `model` blocks. A list of any other length raises, and the error becomes a failed run rather than a council that quietly runs out of answers halfway through. Without the fixture the function answers `None` and the loop is built with no council, which is why the forty one scenarios written before the council still produce exactly the replies and trails they did. In a live run the scripted voices are not used: the council gets an adapter of its own from the live provider, built over the council model variables.
 
 Because two runs of one entry can need different voices, a run's own `fixtures` replace the scenario's key by key, in the same spirit as the rule that a run's expectations replace the scenario's. Task T21 uses it: the first run splits three to two and the second two to two with one voice wanting to wait, so one file shows both the score at the threshold and the score above it.
 
@@ -8418,7 +8460,11 @@ def reply_kind(reply: AgentReply) -> str:
 `_response` turns one scripted model answer into a `Message`: `text` becomes the words, and each entry under `calls` becomes a `ToolCall` with an id made from its position when the scenario gives none. `reply_kind` names what an `AgentReply` is, checking the strongest outcome first: a receipt, then a freeze, then a confirmation, then a refusal, and otherwise an answer.
 
 ```python
-def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
+def _judge(where: str, reply: AgentReply, expect: dict[str, Any], checks: _Checks | None = None) -> list[str]:
+    checks = checks if checks is not None else _Checks()
+    checks.checked += sum(
+        name in expect for name in ("reply", "rule_ids", "warning_key", "lang", "rescue_state", "do_now")
+    ) + len(expect.get("must_not_contain", [])) + len(expect.get("must_not_match", []))
     failures = []
     if "reply" in expect and reply_kind(reply) != expect["reply"]:
         failures.append(f"{where}: reply was {reply_kind(reply)}, expected {expect['reply']}")
@@ -8441,7 +8487,7 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
         if "do_now" in expect and do_now != expect["do_now"]:
             failures.append(f"{where}: do_now was {do_now}, expected {expect['do_now']}")
     for text in expect.get("must_contain", []):
-        if text not in reply.text:
+        if checks.keep(where, "must_contain", text) and text not in reply.text:
             failures.append(f"{where}: reply text does not contain {text!r}")
     for text in expect.get("must_not_contain", []):
         if text in reply.text:
@@ -8454,11 +8500,17 @@ def _judge(where: str, reply: AgentReply, expect: dict[str, Any]) -> list[str]:
     return failures
 ```
 
-`TURN_KIND` and `ANCHOR_KIND` are the entry kinds the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and an `anchor` entry only records the head, and neither is part of the action trail. The `anchors` expectation counts the anchor entries of the run instead, so a scenario can assert that an anchor happened, or that none did. `run_scenario_run` gives every run a `LocalSignedAnchor` in a temporary directory of its own under `.harness_tmp/`, which is removed when the run ends, so no scenario writes into `data/`. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09. `rescue_state` and `do_now` are read from a rescue reply's `rescue` field; any other reply has none, so the expectation fails rather than passing on a missing field.
+`TURN_KIND` and `ANCHOR_KIND` are the entry kinds the `ledger` expectation leaves out, because a `turn` entry only counts the messages a call added and an `anchor` entry only records the head, and neither is part of the action trail. The `anchors` expectation counts the anchor entries of the run instead, so a scenario can assert that an anchor happened, or that none did. `run_scenario_run` gives every run a `LocalSignedAnchor` in a temporary directory of its own under `.harness_tmp/`, which is removed when the run ends, so no scenario writes into `data/`. `_judge` compares one reply with an expectation and returns one sentence for every difference, naming the turn, what happened, and what was expected. It checks only the keys the expectation has, so a turn can check its warning key and nothing else. `rule_ids` must match exactly, in order, which is why T07 expects both R08 and R09. `rescue_state` and `do_now` are read from a rescue reply's `rescue` field; any other reply has none, so the expectation fails rather than passing on a missing field. `_judge` counts every check it makes on the run's `_Checks`, and a `must_contain` string goes through `keep`, which in a live run skips a string the script wrote, as the live mode below explains. In the ordinary run `keep` always keeps.
 
 ```python
-def _model_saw(where: str, calls: list[tuple[list[Message], list[dict[str, Any]]]], expect: dict[str, Any]) -> list[str]:
-    wanted = expect.get("model_saw", [])
+def _model_saw(
+    where: str,
+    calls: list[tuple[list[Message], list[dict[str, Any]]]],
+    expect: dict[str, Any],
+    checks: _Checks | None = None,
+) -> list[str]:
+    checks = checks if checks is not None else _Checks()
+    wanted = [text for text in expect.get("model_saw", []) if checks.keep(where, "model_saw", text)]
     if not wanted:
         return []
     if not calls:
@@ -8478,7 +8530,7 @@ def _run_due_time(mandate: Mandate, when: str) -> datetime:
         return notice_at + timedelta(minutes=1)
     if when == "after_cancel_window":
         return notice_at + timedelta(hours=standing.cancel_window_hours, minutes=2)
-    raise ValueError(f"run_due must be notice or after_cancel_window, not {when!r}")
+    raise ScenarioError(f"run_due must be notice or after_cancel_window, not {when!r}")
 
 
 def _judge_events(where: str, events: list[StandingEvent], expected: list[dict[str, Any]]) -> list[str]:
@@ -8504,7 +8556,7 @@ def _judge_events(where: str, events: list[StandingEvent], expected: list[dict[s
     return failures
 ```
 
-`_model_saw` checks the `model_saw` expectation of a turn: every listed string must appear in the messages of the first model call that turn made. That is how a scenario proves the model received earlier turns. A turn that never called the model fails the check, because it could not have seen anything. `_run_due_time` turns a `run_due` value into a time, standing in for the app's scheduler. It takes the latest standing mandate and the next occurrence whose notice is still ahead, then returns a minute after the notice time for `notice`, or just after the cancel window for `after_cancel_window`. `_judge_events` compares the standing events a `run_due` turn returned with the expected list, in order, each on the fields it names, read from a flat view of the event. The flat view also holds `receipt_standing_mandate_id`, so a scenario can check both references on a run's receipt.
+`_model_saw` checks the `model_saw` expectation of a turn: every listed string must appear in the messages of the first model call that turn made. That is how a scenario proves the model received earlier turns. A turn that never called the model fails the check, because it could not have seen anything. Each string passes through `keep` first, so a live run skips one that only the script could have put in front of the model, such as an earlier scripted answer. `_run_due_time` turns a `run_due` value into a time, standing in for the app's scheduler. It takes the latest standing mandate and the next occurrence whose notice is still ahead, then returns a minute after the notice time for `notice`, or just after the cancel window for `after_cancel_window`. `_judge_events` compares the standing events a `run_due` turn returned with the expected list, in order, each on the fields it names, read from a flat view of the event. The flat view also holds `receipt_standing_mandate_id`, so a scenario can check both references on a run's receipt.
 
 ```python
 def _token(confirm: Any, replies: list[AgentReply]) -> str:
@@ -8513,7 +8565,7 @@ def _token(confirm: Any, replies: list[AgentReply]) -> str:
     else:
         source = replies[int(confirm) - 1]
     if source is None or source.confirmation is None:
-        raise ValueError(f"confirm {confirm!r} names a reply without a confirmation")
+        raise ScenarioError(f"confirm {confirm!r} names a reply without a confirmation")
     return source.confirmation.confirmation_token
 ```
 
@@ -8542,30 +8594,72 @@ def _message(turn: dict[str, Any], run: dict[str, Any]) -> Message:
 `_message` builds the student's message for a turn. A turn whose language is `detect` is built without a language at all, so `model_fields_set` on the message lacks it and `handle` calls `detect_lang` on the text, which is the path the API takes when a request names no language. Passing `None` would not do, because `Message.lang` has the default `en` and naming the field, even as nothing, counts as setting it. `_turn_lang` reports such a turn under the run's own language, so `detect` never reaches the report's table of runs by language.
 
 ```python
-def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any]) -> RunResult:
+def run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], live: "LiveProvider | None" = None) -> RunResult:
     RUNS_TMP.mkdir(exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=RUNS_TMP) as anchors_dir:
-        return _run_scenario_run(scenario, run, Path(anchors_dir) / "anchors.jsonl")
+    with tempfile.TemporaryDirectory(dir=RUNS_TMP) as run_dir:
+        return _run_scenario_run(scenario, run, Path(run_dir), live)
 
 
-def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_path: Path) -> RunResult:
+def _http_turn(request: dict[str, Any], adapter: ModelAdapter, run_dir: Path) -> int:
+    """Send one request to the API, built with this run's adapter and files of its own, and return its status.
+
+    The API is imported here so the ordinary run, which sends no request, never builds it.
+    """
+    from fastapi.testclient import TestClient
+
+    from api.main import create_app
+
+    app = create_app(
+        adapter=adapter,
+        ledger_path=run_dir / "api_ledger.jsonl",
+        conversations_path=run_dir / "api_conversations.jsonl",
+        tick_seconds=None,
+        anchor=LocalSignedAnchor(run_dir / "api_anchors.jsonl"),
+    )
+    with TestClient(app) as client:
+        response = client.request(request.get("method", "POST"), request["path"], json=request.get("json"))
+    return response.status_code
+
+
+def _error_line(error: Exception, live: "LiveProvider | None") -> str:
+    """How an error that ended a run is written. A live run writes the class, and for a provider failure the
+    provider and the status, never the error's own words, which can hold a prompt or a provider's reply. A
+    `ScenarioError` keeps its words, because the harness wrote them from the scenario."""
+    if live is None:
+        return f"error: {type(error).__name__}: {error}"
+    if isinstance(error, ScenarioError):
+        return f"error: {type(error).__name__}: {error}"
+    if isinstance(error, ModelAdapterError):
+        return f"error: {type(error).__name__} from {error.provider or 'an unnamed provider'}, status {error.status_code or 'none'}"
+    return f"error: {type(error).__name__}"
+
+
+def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], run_dir: Path, live: "LiveProvider | None" = None) -> RunResult:
+    anchors_path = run_dir / "anchors.jsonl"
     result = RunResult(langs=list(dict.fromkeys(_turn_lang(turn, run) for turn in run["turns"])))
     shared, own = scenario.get("expected", {}), run.get("expected", {})
     expected = {**shared, **own}
     for key in TEXT_CHECKS:
         expected[key] = [*shared.get(key, []), *own.get(key, [])]
+    # A run's own fixtures replace the scenario's key by key, so two runs of one entry can
+    # differ in what they are given, such as a council that splits its vote differently.
+    fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
+    checks = _Checks(_scripted_text(run, fixtures) if live is not None else None)
+    replies: list[AgentReply] = []
     try:
-        responses = [
-            _response(response, number)
-            for number, response in enumerate(
-                (response for turn in run["turns"] for response in turn.get("model", [])), start=1
-            )
-        ]
         ledger = HashChainLedger()
-        adapter = FakeModelAdapter(responses)
-        # A run's own fixtures replace the scenario's key by key, so two runs of one entry can
-        # differ in what they are given, such as a council that splits its vote differently.
-        fixtures = {**scenario.get("fixtures", {}), **run.get("fixtures", {})}
+        if live is not None:
+            # The scripted replies are not used: the live provider answers instead.
+            adapter: Any = live.adapter(council=False)
+        else:
+            adapter = FakeModelAdapter(
+                [
+                    _response(response, number)
+                    for number, response in enumerate(
+                        (response for turn in run["turns"] for response in turn.get("model", [])), start=1
+                    )
+                ]
+            )
         who = _who(fixtures)
         user = who.user_id
         mandates = {user: who.mandate}
@@ -8580,18 +8674,28 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             mandates=mandates,
             balances={user: who.balances},
             pending={},
-            council=_council(fixtures),
+            council=_council(fixtures, live),
             plans={user: who.plan},
             inbound_receipts={user: inbound},
             anchor=LocalSignedAnchor(anchors_path),
             # A scenario's own Chinese cards replace the demo fixture's, which are a fixture too.
             chinese_cards={user: who.chinese_cards},
         )
-        replies: list[AgentReply] = []
         for number, turn in enumerate(run["turns"], start=1):
+            if "http" in turn:
+                status = _http_turn(turn["http"], adapter, run_dir)
+                result.replies.append(f"HTTP status {status}")
+                wanted = turn.get("expect", {}).get("status")
+                if wanted is not None:
+                    checks.checked += 1
+                    if status != wanted:
+                        result.failures.append(f"turn {number}: HTTP status was {status}, expected {wanted}")
+                continue
             if "run_due" in turn:
                 events = loop.run_due_standing_mandates(_run_due_time(mandates[user], turn["run_due"]))
-                result.failures += _judge_events(f"turn {number}", events, turn.get("expect", {}).get("events", []))
+                wanted_events = turn.get("expect", {}).get("events", [])
+                checks.checked += len(wanted_events)
+                result.failures += _judge_events(f"turn {number}", events, wanted_events)
                 continue
             if "tamper" in turn:
                 # entries() returns copies, so the stored list is reached the way tests/test_ledger.py does.
@@ -8601,13 +8705,14 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             if "rescue" in turn:
                 token = turn.get("token") or (_token(turn["confirm"], replies) if "confirm" in turn else None)
                 if turn["rescue"] not in RESCUE_TURNS:
-                    raise ValueError(f"rescue must be start or step, not {turn['rescue']!r}")
+                    raise ScenarioError(f"rescue must be start or step, not {turn['rescue']!r}")
                 if turn["rescue"] == "start":
                     reply = loop.rescue_start(user, turn["trigger"], message)
                 else:
                     reply = loop.rescue_step(user, message, confirmation_token=token)
                 replies.append(reply)
-                result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
+                result.replies.append(reply.text)
+                result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}), checks)
                 continue
             pasted = (
                 Message(role=Role.USER, text=turn["pasted"], source=Source.PASTED_TEXT)
@@ -8618,19 +8723,36 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
             before = len(adapter.calls)
             reply = loop.handle(user, message, confirmation_token=token, pasted=pasted)
             replies.append(reply)
-            result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}))
-            result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}))
+            result.replies.append(reply.text)
+            result.failures += _judge(f"turn {number}", reply, turn.get("expect", {}), checks)
+            result.failures += _model_saw(f"turn {number}", adapter.calls[before:], turn.get("expect", {}), checks)
     except Exception as error:  # anti-pattern: SILENT-EXCEPT ok, the error becomes a failed run in the report
-        result.failures.append(f"error: {type(error).__name__}: {error}")
+        result.failures.append(_error_line(error, live))
+        result.checked, result.skipped = checks.checked, checks.skipped
         return result
+    try:
+        return _judge_run(result, expected, replies, ledger, checks)
+    finally:
+        result.checked, result.skipped = checks.checked, checks.skipped
+
+
+def _judge_run(
+    result: RunResult, expected: dict[str, Any], replies: list[AgentReply], ledger: HashChainLedger, checks: _Checks
+) -> RunResult:
+    """The checks made once every turn has run: the final reply, every reply, and the ledger."""
     final = {key: value for key, value in expected.items() if key not in RUN_CHECKS}
-    result.failures += _judge("final reply", replies[-1], final)
+    if replies:
+        result.failures += _judge("final reply", replies[-1], final, checks)
+    elif any(final.values()):
+        result.failures.append("final reply: the run sent no message, so there is no reply to judge")
     for number, reply in enumerate(replies, start=1):
         result.failures += _judge(
             f"turn {number}",
             reply,
             {name: expected.get(name, []) for name in ("must_not_contain", "must_not_match")},
+            checks,
         )
+    checks.checked += sum(name in expected for name in ("ledger", "anchors", "notes", "verify"))
     kinds = [entry.kind for entry in ledger.entries() if entry.kind not in (TURN_KIND, ANCHOR_KIND)]
     if "ledger" in expected and kinds != expected["ledger"]:
         result.failures.append(f"ledger kinds were {kinds}, expected {expected['ledger']}")
@@ -8646,7 +8768,7 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
         if not notices:
             result.failures.append("no family notice was written")
         for text in expected["family_notice"] if notices else []:
-            if text not in notices[-1]:
+            if checks.keep("family notice", "family_notice", text) and text not in notices[-1]:
                 result.failures.append(f"family notice does not contain {text!r}")
     ledger_text = json.dumps([entry.payload for entry in ledger.entries()], ensure_ascii=False, default=str)
     for text in expected.get("must_not_contain", []):
@@ -8661,7 +8783,7 @@ def _run_scenario_run(scenario: dict[str, Any], run: dict[str, Any], anchors_pat
     return result
 ```
 
-`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. A turn with `pasted` builds a second message, also from the student but with the source `pasted_text`, and hands it to `handle` beside the first, which is the path the API's `pasted_text` field takes; that is what makes an attack arriving as a paste honest in the harness, rather than one message with its whole source changed. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure. It is never swallowed, because the run is then reported as failed with the error's type and text. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger. A turn with `rescue: start` calls `rescue_start` with its `trigger`, and one with `rescue: step` calls `rescue_step` with the turn's token, and any other value fails the run. After the turns, `notes` compares the kind of every note in order, and `family_notice` checks that the last family notice the run wrote holds every sentence listed, or fails the run when none was written.
+`run_scenario_run` plays one run. Its expectations are the scenario's shared ones with the run's own laid over them, except that the two text checks are joined, so a run adds strings to check rather than silently dropping the shared ones. Every scripted model answer of every turn is lined up in order for one `FakeModelAdapter`, and a fresh ledger, engine, router, and set of rails are built, so no run can see another's state. Each turn becomes a user `Message` with its language and source, a turn with `token` passes that literal string, and a turn with `confirm` passes the chosen issued token. A turn with `pasted` builds a second message, also from the student but with the source `pasted_text`, and hands it to `handle` beside the first, which is the path the API's `pasted_text` field takes; that is what makes an attack arriving as a paste honest in the harness, rather than one message with its whole source changed. The number of model calls before each turn is noted, so `_model_saw` can look at that turn's calls alone. Any error inside the run, such as the adapter running out of answers, is caught and recorded as a failure by `_error_line`. It is never swallowed, because the run is then reported as failed with the error's type and text. In a live run the line holds only the error's class, and for a provider failure the provider and the status, because a provider's own words can hold a prompt. A `ScenarioError`, which the harness raises for a scenario it cannot play as written, keeps its words, because they come from the scenario. A turn with `http` sends one request to the API, built by `_http_turn` with the run's adapter and files of its own in the run's temporary directory, and checks the status the turn's `expect` names; the Hindi file uses it to show the 422. The checks made after the turns live in `_judge_run`, and a run that sent no message, such as one made only of an `http` turn, has no final reply to judge, which fails only when the run expects something of one. After the turns, the final reply is judged against the run's expectations, every reply is checked for forbidden text, and the ledger's entry kinds, leaving out `turn`, must match the expected list exactly. The forbidden text must also be absent from the whole ledger. A turn with `rescue: start` calls `rescue_start` with its `trigger`, and one with `rescue: step` calls `rescue_step` with the turn's token, and any other value fails the run. After the turns, `notes` compares the kind of every note in order, and `family_notice` checks that the last family notice the run wrote holds every sentence listed, or fails the run when none was written.
 
 A turn with `run_due` calls `run_due_standing_mandates` at that time and checks the events instead of a reply. A turn with `tamper` changes the payload of one stored entry, named by its `seq`, after the turns before it have run. `entries` returns copies, so the tamper reaches `_entries`, the stored list, the way the ledger's own tests do; the comment says so, because reaching a private name is otherwise a smell. Every later entry was hashed over the old payload, so the chain breaks there. Last comes `verify`. A run with no `verify` expectation must leave the chain intact, as before. A run that expects one passes only when `verify` returns exactly that sequence number, and the check that the chain is intact is replaced by it rather than added to, which is the only way a scenario can show the break being caught and still pass.
 
@@ -8690,14 +8812,14 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
 `evaluate` walks both suites in order and gives every entry a result. An entry starts as not automated, and it becomes passed or failed only when `suites/scenarios/<id>.yaml` exists and has been run. A scenario whose `id` does not match its file name, or that has no runs, fails. That is why a missing or empty scenario can never count as passed.
 
 ```python
-def _run_file(path: Path, entry_id: str) -> tuple[list[RunResult], str | None]:
+def _run_file(path: Path, entry_id: str, live: "LiveProvider | None" = None) -> tuple[list[RunResult], str | None]:
     try:
         scenario = load_suite(path)
     except yaml.YAMLError as error:  # anti-pattern: SILENT-EXCEPT ok, the parse error fails the entry in the report
         return [RunResult([], [f"scenario file cannot be read: {error}"])], None
     if scenario.get("id") != entry_id:
         return [RunResult([], [f"scenario id {scenario.get('id')!r} does not match {entry_id}"])], scenario.get("note")
-    runs = [run_scenario_run(scenario, run) for run in scenario.get("runs", [])]
+    runs = [run_scenario_run(scenario, run, live) for run in scenario.get("runs", [])]
     return runs or [RunResult([], ["scenario has no runs"])], scenario.get("note")
 ```
 
@@ -8775,7 +8897,14 @@ def _commit() -> str:
     return f"{head}, with uncommitted changes" if dirty else head
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m core.harness", description="Play the scenarios and write the evidence report.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--live", metavar="PROVIDER", help="play the scenarios marked live against a real provider: anthropic, dashscope, primary or fallback")
+    mode.add_argument("--swap", action="store_true", help="play them live against the primary and the fallback provider and compare")
+    arguments = parser.parse_args(argv)
+    if arguments.live is not None or arguments.swap:
+        return main_live(arguments.live, arguments.swap)
     results = evaluate()
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc)), encoding="utf-8")
@@ -8791,7 +8920,362 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
-`_commit` asks git for the current commit, and adds that the working tree had uncommitted changes when `git status --porcelain` lists any, so a report made from edited files says so. If git fails, the report says the commit is unknown and why, instead of inventing one. `main` evaluates, writes `evidence/report.md`, prints a one line summary, and returns 1 when any scenario failed. `sys.exit(main())` turns that into the exit code, so `make evidence` and CI fail when a scenario fails. The block under `if __name__ == "__main__":` runs only when the file is started as a program, as `python -m core.harness` does, and not when a test imports it.
+`_commit` asks git for the current commit, and adds that the working tree had uncommitted changes when `git status --porcelain` lists any, so a report made from edited files says so. If git fails, the report says the commit is unknown and why, instead of inventing one. `main` reads its arguments with `argparse`. With none it evaluates, writes `evidence/report.md`, prints a one line summary, and returns 1 when any scenario failed. With `--live` or `--swap` it hands over to `main_live`, and the two cannot be given together. `sys.exit(main())` turns that into the exit code, so `make evidence` and CI fail when a scenario fails. The block under `if __name__ == "__main__":` runs only when the file is started as a program, as `python -m core.harness` does, and not when a test imports it.
+
+### The live mode
+
+The live mode plays the scenarios marked `live: true` against a real provider instead of the script. A run's checks go through `_Checks`. In the live mode `scripted` holds everything the scenario's script would have the model and the council say in that run, gathered by `_scripted_text`, and `keep` skips a string that appears there, records why, and does not count it, so a text only the script could have written is never judged and never passed. Everything else the code produces, the reply kind, the rule ids, the warning key, the language, the ledger kinds, the notes, the anchors, the forbidden text and every template sentence the loop writes, is judged as in the ordinary run.
+
+```python
+@dataclass
+class _Checks:
+    """The checks of one run as they are judged.
+
+    In live mode `scripted` holds every word the scenario's script gives the model and the council, and a
+    text a run must find that appears there is scripted model text: only the script could have produced it,
+    so it is skipped and counted as skipped, never as passed. In the scripted mode `scripted` is None.
+    """
+
+    scripted: str | None = None
+    checked: int = 0
+    skipped: list[str] = field(default_factory=list)
+
+    def keep(self, where: str, name: str, text: str) -> bool:
+        if self.scripted is not None and text in self.scripted:
+            self.skipped.append(f"{where}: {name} {text!r} is scripted model text")
+            return False
+        self.checked += 1
+        return True
+
+
+def _scripted_text(run: dict[str, Any], fixtures: dict[str, Any]) -> str:
+    """Everything a scenario's script would have the model or the council say in this run."""
+    texts = [response.get("text", "") for turn in run["turns"] for response in turn.get("model", [])]
+    texts += [voice if isinstance(voice, str) else json.dumps(voice, ensure_ascii=False) for voice in fixtures.get("council") or []]
+    return "\n".join(texts)
+```
+
+`LiveProvider` is the provider a live run calls. Its `env` is the environment as the API reads it with the named provider as `MODEL_PROVIDER`, which is how naming the fallback provider makes it the primary for that run; the fallback setting is left as it is, and nothing touches `MAX_MODEL_CALLS_PER_TURN`. `adapter` builds a fresh adapter for each run's loop, and for its council over `council_env`, and wraps it in `_Recording`, which keeps what the model received, so `model_saw` still works, counts the loop's and the council's calls apart, and notes which provider answered each one, so a fallback that answered shows in the report. `resolve_provider` accepts a provider's own name or primary and fallback, `require_key` refuses a run whose key is empty, `live_limit` reads `LIVE_SCENARIO_LIMIT`, empty or all meaning every scenario, and `swap_providers` refuses a swap whose two settings name one provider. Each refusal is a `LiveRefused` with a sentence for the person who ran it.
+
+```python
+class LiveRefused(Exception):
+    """A live run that did not start, with the reason in plain words for the person who ran it."""
+
+
+@dataclass
+class LiveProvider:
+    """The provider a live run calls, and what that run counted.
+
+    `settings` is the environment as the API reads it. The run builds every adapter from it with the named
+    provider as `MODEL_PROVIDER`, so naming the fallback provider makes it the primary for the run, and the
+    fallback setting stays as it is. `build` is `ProviderModelAdapter` except in tests, which pass a fake.
+    """
+
+    name: str
+    settings: Mapping[str, str]
+    build: Callable[[Mapping[str, str]], ModelAdapter] = ProviderModelAdapter
+    loop_calls: int = 0
+    council_calls: int = 0
+    # Which provider answered each call, read from the message, so a fallback that answered shows in the report.
+    answered_by: Counter = field(default_factory=Counter)
+
+    @property
+    def env(self) -> dict[str, str]:
+        return {**self.settings, "MODEL_PROVIDER": self.name}
+
+    def adapter(self, council: bool) -> "_Recording":
+        """A fresh adapter for one run's loop, or for its council over the council model variables."""
+        return _Recording(self.build(council_env(self.env) if council else self.env), self, council)
+
+
+class _Recording(ModelAdapter):
+    """Passes each call to the provider's adapter, keeping what the model received and counting the call."""
+
+    def __init__(self, inner: ModelAdapter, live: LiveProvider, council: bool) -> None:
+        self._inner, self._live, self._council = inner, live, council
+        self.calls: list[tuple[list[Message], list[dict[str, Any]]]] = []
+
+    def complete(self, messages: Sequence[Message], tools: Sequence[dict[str, Any]]) -> Message:
+        self.calls.append((list(messages), list(tools)))
+        if self._council:
+            self._live.council_calls += 1
+        else:
+            self._live.loop_calls += 1
+        message = self._inner.complete(messages, tools)
+        self._live.answered_by[message.provider or "unnamed"] += 1
+        return message
+
+
+def resolve_provider(name: str, env: Mapping[str, str]) -> str:
+    """A provider by its own name, or primary and fallback read from MODEL_PROVIDER and FALLBACK_MODEL_PROVIDER."""
+    if name == "primary":
+        name = env.get("MODEL_PROVIDER") or DEFAULT_PROVIDER
+    elif name == "fallback":
+        name = env.get("FALLBACK_MODEL_PROVIDER") or DEFAULT_FALLBACK_PROVIDER
+    if name not in PROVIDERS:
+        raise LiveRefused(f"{name!r} is not a model provider Lifeline can call; the providers are {', '.join(PROVIDERS)}.")
+    return name
+
+
+def require_key(provider: str, env: Mapping[str, str]) -> None:
+    variable = api_key_variable(provider)
+    if not env.get(variable, "").strip():
+        raise LiveRefused(
+            f"{variable} is not set, so the live run against {provider} did not start. "
+            "Set it in .env, or in the repository secrets for the evidence swap workflow."
+        )
+
+
+def live_limit(env: Mapping[str, str]) -> int | None:
+    """How many scenarios marked live a run plays, or None for all of them."""
+    value = env.get(LIVE_LIMIT_VARIABLE, "").strip().casefold()
+    if value in LIVE_LIMIT_ALL:
+        return None
+    if not value.isdigit() or int(value) < 1:
+        raise LiveRefused(f"{LIVE_LIMIT_VARIABLE} must be empty, all, or a whole number above zero, not {value!r}.")
+    return int(value)
+
+
+def swap_providers(env: Mapping[str, str]) -> tuple[str, str]:
+    primary, fallback = resolve_provider("primary", env), resolve_provider("fallback", env)
+    if primary == fallback:
+        raise LiveRefused(f"MODEL_PROVIDER and FALLBACK_MODEL_PROVIDER both name {primary}, and a swap needs two providers.")
+    return primary, fallback
+```
+
+`_live_entries` picks the scenarios marked live in suite order, then the files in `suites/live/`, which the ordinary `evaluate` never opens. `evaluate_live` plays at most `limit` of them through `_run_file` with the live provider. An entry fails when any run failed, passes when any run passed, and is skipped otherwise.
+
+```python
+def _live_entries(suites_dir: Path, scenarios_dir: Path, live_dir: Path) -> list[tuple[EntryResult, Path]]:
+    """Every scenario marked live, in suite order, then every file in the live only directory."""
+    chosen = []
+    for suite, filename in SUITES:
+        for entry in load_suite(suites_dir / filename):
+            path = scenarios_dir / f"{entry['id']}.yaml"
+            if path.exists() and load_suite(path).get("live") is True:
+                chosen.append((EntryResult(suite, entry["id"], entry["title"], entry.get("tier"), list(entry.get("langs", [])), NOT_AUTOMATED), path))
+    for path in sorted(live_dir.glob("*.yaml")) if live_dir.is_dir() else []:
+        scenario = load_suite(path)
+        if scenario.get("live") is True:
+            langs = list(dict.fromkeys(run["lang"] for run in scenario.get("runs", [])))
+            chosen.append((EntryResult(LIVE_SUITE, scenario["id"], scenario.get("title", scenario["id"]), None, langs, NOT_AUTOMATED), path))
+    return chosen
+
+
+def evaluate_live(
+    live: LiveProvider,
+    suites_dir: Path = SUITES_DIR,
+    scenarios_dir: Path | None = None,
+    live_dir: Path | None = None,
+    limit: int | None = None,
+) -> list[EntryResult]:
+    """Play every scenario marked `live: true` against the live provider, up to `limit` scenarios."""
+    scenarios_dir = suites_dir / "scenarios" if scenarios_dir is None else scenarios_dir
+    live_dir = suites_dir / "live" if live_dir is None else live_dir
+    results = []
+    for result, path in _live_entries(suites_dir, scenarios_dir, live_dir)[:limit]:
+        result.runs, result.note = _run_file(path, result.id, live)
+        statuses = {run.status for run in result.runs}
+        result.status = FAILED if FAILED in statuses else PASSED if PASSED in statuses else SKIPPED
+        results.append(result)
+    return results
+```
+
+`_rate` is passed runs over every run, so a skipped run lowers the rate and is never among the passed, and `_percent` writes a rate to one decimal place, rounding half up, from a `Fraction`, so the arithmetic is exact until it is written. `render_live_report` writes one provider's report: the model, the cap, the counts and the pass rate, the model calls and who answered them, the wall clock time, runs by language, a row per run with its result and its skipped checks, every failure with every reply of its run quoted line by line, the skipped checks, and the notes. The replies already passed the reply guard in the loop, and the whole report then passes `_redacted`, which replaces the value of either provider key wherever it appears, so a key cannot reach the file even from text the loop did not write.
+
+```python
+def _percent(rate: Fraction) -> str:
+    return f"{(Decimal(rate.numerator) * 100 / Decimal(rate.denominator)).quantize(Decimal('0.1'), ROUND_HALF_UP)}"
+
+
+def _rate(runs: Sequence[RunResult]) -> Fraction:
+    """Passed runs over every run. A skipped run is in the count and never among the passed."""
+    return Fraction(sum(run.status == PASSED for run in runs), len(runs)) if runs else Fraction(0)
+
+
+def _redacted(text: str, secrets: Sequence[str]) -> str:
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, REDACTION_MARKER)
+    return text
+
+
+def _secrets(env: Mapping[str, str]) -> list[str]:
+    return [env[api_key_variable(name)].strip() for name in PROVIDERS if env.get(api_key_variable(name), "").strip()]
+
+
+def _quoted(text: str) -> list[str]:
+    return [f"    > {line}" if line else "    >" for line in (text.splitlines() or [""])]
+
+
+def render_live_report(
+    results: list[EntryResult], live: LiveProvider, commit: str, generated_at: datetime, seconds: float, limit: int | None
+) -> str:
+    """The live report for one provider. Every line passes through the key redaction before it is returned."""
+    runs = [run for result in results for run in result.runs]
+    counts = Counter(run.status for run in runs)
+    answered = ", ".join(f"{name} {count}" for name, count in sorted(live.answered_by.items())) or "none"
+    lines = [
+        f"# Lifeline live evidence report, {live.name}",
+        "",
+        f"Generated by `core/harness.py --live` at {generated_at.isoformat(timespec='seconds')} from commit `{commit}`.",
+        f"The model is {model_name(live.name, live.env)} on {live.name}, the primary for this run. The scripted replies were not used. "
+        "Only what the code produces was checked; a text only the script could have written was skipped and is never counted as passed.",
+        "",
+        f"LIVE_SCENARIO_LIMIT: {limit if limit is not None else 'all'}.",
+        f"Scenarios: {len(results)}. Runs: {len(runs)}, {counts[PASSED]} passed, {counts[FAILED]} failed, {counts[SKIPPED]} skipped.",
+        f"Pass rate: {counts[PASSED]} of {len(runs)} runs, {_percent(_rate(runs))}%.",
+        f"Model calls: {live.loop_calls + live.council_calls}, of which the council made {live.council_calls}. Answered by: {answered}.",
+        f"Wall clock: {Decimal(str(seconds)).quantize(Decimal('0.1'), ROUND_HALF_UP)} seconds.",
+        "",
+        "## By language, runs",
+        "",
+        _row("Language", "Runs", "Passed", "Failed", "Skipped"),
+        _row(*["---"] * 5),
+    ]
+    for lang in sorted({lang for run in runs for lang in run.langs}):
+        chosen = Counter(run.status for run in runs if lang in run.langs)
+        lines.append(_row(lang, sum(chosen.values()), chosen[PASSED], chosen[FAILED], chosen[SKIPPED]))
+    lines += ["", "## Runs", "", _row("Id", "Suite", "Title", "Languages", "Result", "Checks skipped"), _row(*["---"] * 6)]
+    for result in results:
+        for run in result.runs:
+            lines.append(_row(result.id, result.suite, result.title, ", ".join(run.langs), run.status, len(run.skipped)))
+    failed = [(result, number, run) for result in results for number, run in enumerate(result.runs, start=1) if run.status == FAILED]
+    if failed:
+        lines += ["", "## Failures", "", "Each failure keeps every reply of its run as the student saw it, after the reply guard.", ""]
+        for result, number, run in failed:
+            lines.append(f"1. {result.id}, run {number}, in {', '.join(run.langs) or 'no language'}:")
+            lines += [f"    1. {failure}" for failure in run.failures]
+            for turn, reply in enumerate(run.replies, start=1):
+                lines.append(f"    Reply {turn}:")
+                lines += _quoted(reply)
+    skipped = [(result, number, run) for result in results for number, run in enumerate(result.runs, start=1) if run.skipped]
+    if skipped:
+        lines += ["", "## Skipped checks", ""]
+        for result, number, run in skipped:
+            lines += [f"1. {result.id}, run {number}: {text}" for text in run.skipped]
+    notes = [result for result in results if result.note]
+    if notes:
+        lines += ["", "## Notes", "", _row("Id", "Note"), _row("---", "---")]
+        lines += [_row(result.id, " ".join(result.note.split())) for result in notes]
+    return _redacted("\n".join(lines) + "\n", _secrets(live.env))
+```
+
+`swap_summary` matches the two providers' runs by entry id and run number, computes each pass rate, and lists every run whose result differs, including one only a single provider ran. `difference` is the primary's rate minus the fallback's, and `render_swap_report` writes it in percentage points with its sign.
+
+```python
+@dataclass
+class SwapSummary:
+    primary_runs: int
+    primary_counts: Counter
+    fallback_runs: int
+    fallback_counts: Counter
+    primary_rate: Fraction
+    fallback_rate: Fraction
+    # Each run whose result differs: the entry id, the run's number, its languages, then each provider's result.
+    disagreements: list[tuple[str, int, list[str], str, str]]
+
+    @property
+    def difference(self) -> Fraction:
+        return self.primary_rate - self.fallback_rate
+
+
+def swap_summary(primary: list[EntryResult], fallback: list[EntryResult]) -> SwapSummary:
+    """Both providers' pass rates and every run where their results differ, matched by entry and run number."""
+
+    def by_run(results: list[EntryResult]) -> dict[tuple[str, int], RunResult]:
+        return {(result.id, number): run for result in results for number, run in enumerate(result.runs, start=1)}
+
+    ours, theirs = by_run(primary), by_run(fallback)
+    disagreements = [
+        (entry_id, number, run.langs, run.status, theirs[(entry_id, number)].status if (entry_id, number) in theirs else "not run")
+        for (entry_id, number), run in ours.items()
+        if (entry_id, number) not in theirs or theirs[(entry_id, number)].status != run.status
+    ]
+    disagreements += [
+        (entry_id, number, run.langs, "not run", run.status) for (entry_id, number), run in theirs.items() if (entry_id, number) not in ours
+    ]
+    return SwapSummary(
+        len(ours),
+        Counter(run.status for run in ours.values()),
+        len(theirs),
+        Counter(run.status for run in theirs.values()),
+        _rate(list(ours.values())),
+        _rate(list(theirs.values())),
+        disagreements,
+    )
+
+
+def render_swap_report(summary: SwapSummary, primary: str, fallback: str, commit: str, generated_at: datetime) -> str:
+    lines = [
+        "# Lifeline provider swap report",
+        "",
+        f"Generated by `core/harness.py --swap` at {generated_at.isoformat(timespec='seconds')} from commit `{commit}`.",
+        f"Each provider played the same scenarios marked live as the primary of its own run. The full runs are in "
+        f"`evidence/report-{primary}.md` and `evidence/report-{fallback}.md`.",
+        "",
+        _row("Provider", "Role", "Runs", "Passed", "Failed", "Skipped", "Pass rate"),
+        _row(*["---"] * 7),
+    ]
+    for name, role, runs, counts, rate in (
+        (primary, "primary", summary.primary_runs, summary.primary_counts, summary.primary_rate),
+        (fallback, "fallback", summary.fallback_runs, summary.fallback_counts, summary.fallback_rate),
+    ):
+        lines.append(_row(name, role, runs, counts[PASSED], counts[FAILED], counts[SKIPPED], f"{_percent(rate)}%"))
+    lines += ["", f"Difference, {primary} minus {fallback}: {_percent(summary.difference)} percentage points.", "", "## Disagreements", ""]
+    if summary.disagreements:
+        lines += [_row("Id", "Run", "Languages", primary, fallback), _row(*["---"] * 5)]
+        lines += [_row(entry_id, number, ", ".join(langs), ours, theirs) for entry_id, number, langs, ours, theirs in summary.disagreements]
+    else:
+        lines.append("The two providers agreed on every run.")
+    return "\n".join(lines) + "\n"
+```
+
+`_play_live` runs one provider, times it with `time.monotonic`, and writes `evidence/report-<provider>.md`. `main_live` loads the environment, reads the cap, resolves the providers and checks every key before anything is played, so a missing key refuses with exit code 2 and no call. Once a run has started it exits with 0, because a live failure is evidence about a model, not a broken build; the reports carry the result.
+
+```python
+def _live_report_path(provider: str) -> Path:
+    return ROOT / "evidence" / f"report-{provider}.md"
+
+
+def _play_live(provider: str, env: Mapping[str, str], limit: int | None) -> list[EntryResult]:
+    live = LiveProvider(provider, env)
+    started = time.monotonic()
+    results = evaluate_live(live, limit=limit)
+    seconds = time.monotonic() - started
+    path = _live_report_path(provider)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_live_report(results, live, _commit(), datetime.now(timezone.utc), seconds, limit), encoding="utf-8")
+    runs = [run for result in results for run in result.runs]
+    counts = Counter(run.status for run in runs)
+    print(
+        f"{path.relative_to(ROOT)}: {counts[PASSED]} passed, {counts[FAILED]} failed, {counts[SKIPPED]} skipped "
+        f"of {len(runs)} runs, {live.loop_calls + live.council_calls} model calls"
+    )
+    return results
+
+
+def main_live(provider: str | None, swap: bool) -> int:
+    """A live run, which only an explicit argument starts. A live failure is evidence, not a broken build, so the
+    exit is 0 once the run has started and 2 when it refuses."""
+    env = environment(None)
+    try:
+        limit = live_limit(env)
+        providers = swap_providers(env) if swap else (resolve_provider(provider or "", env),)
+        for name in providers:
+            require_key(name, env)
+    except LiveRefused as refused:
+        print(refused, file=sys.stderr)
+        return 2
+    results = [_play_live(name, env, limit) for name in providers]
+    if swap:
+        summary = swap_summary(*results)
+        SWAP_REPORT_PATH.write_text(render_swap_report(summary, *providers, _commit(), datetime.now(timezone.utc)), encoding="utf-8")
+        print(
+            f"{SWAP_REPORT_PATH.relative_to(ROOT)}: {providers[0]} {_percent(summary.primary_rate)}%, "
+            f"{providers[1]} {_percent(summary.fallback_rate)}%, {len(summary.disagreements)} disagreements"
+        )
+    return 0
+```
 
 ## The API, `api/main.py`
 
