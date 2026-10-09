@@ -4008,6 +4008,7 @@ def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
                 SYSTEM_PROMPT.format(lang=lang),
                 " ".join(PROMPT_RULES),
                 mandate_block(self._mandates[user_id], self._balances.get(user_id, {})),
+                receipts_block(self._traceable(user_id)),
             ]
         )
 ```
@@ -4098,7 +4099,13 @@ TOOLS = [
         ["standing_mandate_id"],
     ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
-    _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
+    _tool(
+        "trace_transfer",
+        "Report where a transfer is, by receipt id. The system prompt lists the receipts the student may trace, "
+        "their own and those sent to them; a receipt not in that list cannot be traced.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
     _tool(
         "precheck",
         "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "

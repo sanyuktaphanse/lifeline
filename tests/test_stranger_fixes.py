@@ -326,3 +326,45 @@ def test_no_sentence_is_added_when_nothing_was_blocked():
     reply = s.loop.handle(USER, _user("Pay 1,200 SGD rent to landlord_sp"))
 
     assert "asked Lifeline to" not in reply.text
+
+
+# Item Three. The model knows what it can trace.
+
+
+def _prompt(s: Loop, call: int = -1) -> str:
+    return s.adapter.calls[call][0][0].text
+
+
+def test_the_prompt_lists_an_inbound_receipt_with_its_rail_and_status():
+    s = _loop([_say("Let me look.")], inbound=INBOUND)
+
+    s.loop.handle(USER, _user("Has my parent's money arrived?"))
+
+    assert "Receipts the student may trace" in _prompt(s)
+    assert "wise-in-0001 on wise, status in_transit, sent to the student" in _prompt(s)
+
+
+def test_the_list_is_refreshed_every_turn_with_the_students_own_receipts():
+    s = _loop([_call("propose_transfer", RENT), _say("Here it is.")])
+    _paid_rent(s)
+
+    s.loop.handle(USER, _user("Where is my rent?"))
+
+    assert "wise-0001 on wise, status completed" in _prompt(s)
+    assert "wise-0001" not in _prompt(s, 0)
+
+
+def test_with_no_receipts_the_prompt_says_there_are_none():
+    s = _loop([_say("Nothing to trace.")])
+
+    s.loop.handle(USER, _user("Trace my transfer"))
+
+    assert "Receipts the student may trace: none." in _prompt(s)
+
+
+def test_the_trace_tool_says_a_receipt_not_listed_cannot_be_traced():
+    from core.agent import TOOLS
+
+    trace = next(tool for tool in TOOLS if tool["name"] == "trace_transfer")
+
+    assert "not in that list cannot be traced" in trace["description"]

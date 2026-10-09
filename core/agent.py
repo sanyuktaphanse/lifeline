@@ -250,6 +250,20 @@ def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
         ]
     )
 
+def receipts_block(receipts: list[tuple[str, str, str, bool]]) -> str:
+    """The receipts the student may trace, written for the system prompt from the student's own ledger and the
+    inbound receipt map: each id with its rail, its status as the rail reports it, and whether it was sent to the
+    student. trace_transfer finds no other. Source: docs/decisions.md, decision 145, from the stranger task T07.
+    """
+    if not receipts:
+        return "Receipts the student may trace: none."
+    lines = [
+        f"{receipt_id} on {rail}, status {status}" + (", sent to the student" if inbound else "")
+        for receipt_id, rail, status, inbound in receipts
+    ]
+    return "Receipts the student may trace, the only ones trace_transfer can find: " + "; ".join(lines) + "."
+
+
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
 ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
 STANDING_TERMS = ("schedule", "tolerance_pct", "notice_hours", "cancel_window_hours")
@@ -335,7 +349,13 @@ TOOLS = [
         ["standing_mandate_id"],
     ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
-    _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
+    _tool(
+        "trace_transfer",
+        "Report where a transfer is, by receipt id. The system prompt lists the receipts the student may trace, "
+        "their own and those sent to them; a receipt not in that list cannot be traced.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
     _tool(
         "precheck",
         "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "
@@ -2991,8 +3011,31 @@ class AgentLoop:
                 SYSTEM_PROMPT.format(lang=lang),
                 " ".join(PROMPT_RULES),
                 mandate_block(self._mandates[user_id], self._balances.get(user_id, {})),
+                receipts_block(self._traceable(user_id)),
             ]
         )
+
+    def _traceable(self, user_id: str) -> list[tuple[str, str, str, bool]]:
+        """Every receipt the student may trace, read again on every turn: their own, in the order their ledger issued
+        them, then those sent to them, each with its rail, its status as the rail reports it now, and whether it
+        was sent to the student. Reading a status changes nothing on the rail."""
+        own = [
+            entry.payload.get("receipt", {}).get("receipt_id")
+            for entry in self._ledger.entries()
+            if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+        ]
+        rails = self._receipt_rails.get(user_id, {})
+        listed = []
+        for receipt_id in dict.fromkeys([*own, *rails]):
+            rail = rails.get(receipt_id)
+            if not receipt_id or rail is None:
+                continue
+            try:
+                status = self._rails[rail].status(receipt_id).status.value
+            except (RailError, KeyError):  # anti-pattern: SILENT-EXCEPT ok, the model is told the status is unknown
+                status = "unknown"
+            listed.append((receipt_id, rail, status, receipt_id not in own))
+        return listed
 
     def _issued_tokens(self) -> set[str]:
         """Every confirmation token the loop has issued: waiting, used, or closed."""
