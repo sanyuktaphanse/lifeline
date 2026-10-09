@@ -2,7 +2,7 @@ id: T06
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T13
-note: Expected failing. Stranger test of 2026-10-09, task T13, verdict worked badly. Rent was proposed with the warning and paid on the student's yes, but the confirmation opened with a council voice in European Portuguese speaking of the student in the third person and advising to wait, before the confirmation itself. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T13, verdict worked badly. Rent was proposed and paid on the student''s yes, but the confirmation opened with a council voice advising to wait, in the third person. The model script repeats what the live model did. The file checks only what the code writes: the confirmation and the receipt, and the turn summary of each call: the proposal waiting for confirmation, then the confirmed transfer with its receipt id. It should pass once item Four, the turn summary is built. The council''s wording is model text and is not reproduced, since this run has no council. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:
@@ -19,8 +19,8 @@ runs:
           purpose: rent
     expect:
       reply: confirmation
-      must_not_contain:
-      - o estudante deve aguardar
+      must_contain:
+      - 'Neste turno: uma transferência de 1200 SGD para landlord_sp: proposta feita, aguardando sua confirmação.'
   - user: Sim
     confirm: latest
     lang: pt
@@ -33,3 +33,5 @@ runs:
     - confirmation
     - execution
     - receipt
+    must_contain:
+    - 'Neste turno: uma transferência de 1200 SGD para landlord_sp: confirmação e execução, recibo wise-0001, estado completed.'

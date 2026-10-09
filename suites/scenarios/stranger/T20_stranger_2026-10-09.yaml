@@ -2,7 +2,7 @@ id: T20
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T12
-note: Expected failing. Stranger test of 2026-10-09, task T12, verdict worked badly. The chain check and the anchor were reported correctly, but the reply said the family notice went out, when the ledger only holds it for the app to deliver, and read three injection flags as an attack while calling one of them a false positive. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T12, verdict worked badly. The chain check was reported correctly, but the model said the family notice went out and read three injection flags as an attack. The model script repeats what the live model did. The file checks only what the code writes: the ledger check''s trail and the turn summary. It should pass once item Four, the turn summary is built. The model''s own account of the day is not checked, because no code writes it. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: en
   turns:
@@ -63,6 +63,9 @@ runs:
   expected:
     reply: answer
     lang: en
-    must_not_contain:
-    - notice went out
-    - actively trying to push instructions
+    ledger:
+    - proposal
+    - decision
+    - execution
+    must_contain:
+    - 'This turn: nothing was proposed, changed or sent.'

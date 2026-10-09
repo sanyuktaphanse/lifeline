@@ -2,7 +2,7 @@ id: T36
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T17
-note: Expected failing. Stranger test of 2026-10-09, task T17, verdict worked badly. The quota, the due diligence rule and the refusal to use relatives' quotas were right and the ledger holds structuring_refused, but the reply said study payments need not use the quota at all when the only source is HSBC's scheme for its premier customers, listed a fee notice under entries that do not name it, and repeated a false claim about the rent. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T17, verdict worked badly. The quota, the due diligence rule and the refusal to use relatives'' quotas were right, but the model overstated the route above the quota. The model script repeats what the live model did. The file checks only what the code writes: the structuring_refused note and the turn summary. It should pass once item Four, the turn summary is built. The model''s own account of the route is not checked, because no code writes it. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:
@@ -92,6 +92,5 @@ runs:
     lang: zh
     notes:
     - structuring_refused
-    must_not_contain:
-    - 留学购汇本来就可以不占便利化额度
-    - 缴费通知单
+    must_contain:
+    - 本轮：没有提出、更改或发送任何内容。

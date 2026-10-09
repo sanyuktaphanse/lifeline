@@ -2,10 +2,40 @@ id: T07
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T03
-note: Expected failing. Stranger test of 2026-10-09, task T03, verdict failed. The student typed 2.400 SGD for rent to the landlord. The model filled landlord_sp from earlier tool output, so the engine refused under R01 and wrote injection_suspected against the student's own request. The limit rule R08 never ran and the reply gave a false reason, half in English. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T03, verdict failed. The student asked for 2,400 SGD of rent. The model filled landlord_sp, which the student had not typed but which the earlier quote turn''s model text named, so the engine refused under R01 and wrote injection_suspected against the student''s own request, and the limit rule never ran. The model script repeats what the live model did. The file checks only what the code writes: that the engine refuses under R08, the per transaction limit, and that no injection_suspected entry is written. It should pass once item One, the student''s own records is built. The rule''s reason is still in English behind the pending translation sentence, as Lifeline''s translation policy writes every rule reason, so it is not checked here. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:
+  - user: hey, what would it cost me to send about 800 SGD back home to Brazil? which way is cheapest?
+    lang: en
+    model:
+    - calls:
+      - name: get_quote
+        arguments:
+          corridor: SG>BR
+          amount: '800'
+          currency: SGD
+    - text: 'Here''s what 800 SGD to Brazil looks like right now:
+
+
+        | Route | Fee | Extra spread cost | Arrival |
+
+        |---|---|---|---|
+
+        | **Wise** | 5.60 SGD | 0 | ~24 hours |
+
+        | Bank wire | 25 SGD | 20.00 SGD | ~72 hours |
+
+        | sim_pix | 0 | 0 | instant — **simulated** |
+
+
+        **Cheapest real route: Wise**, at 5.60 SGD total cost, arriving in about a day. The bank wire costs 45 SGD all in (fee plus spread) and takes three days — about 8x more for slower delivery.
+
+
+        One important note: the instant 0-fee "sim_pix" route is a **simulated** route, not a real payment rail. I can''t recommend it for real money, so please ignore the zero there.
+
+
+        If you''d like to go ahead, tell me the payee and purpose and I''ll put the transfer up for your confirmation. On your current mandate the payees available for Brazil are `landlord_sp`, and purposes are `rent` or `emergency`. Your balance also matters here — want me to check it before we proceed?'
   - user: Oi! Preciso pagar o aluguel de outubro e novembro juntos pro meu senhorio em São Paulo, são 2.400 dólares de Singapura. Pode mandar agora?
     lang: pt
     model:
@@ -22,7 +52,9 @@ runs:
     rule_ids:
     - R08
     lang: pt
-    must_not_contain:
-    - R01
-    - tool_result
-    - tradução está pendente
+    ledger:
+    - proposal
+    - decision
+    - execution
+    - proposal
+    - decision

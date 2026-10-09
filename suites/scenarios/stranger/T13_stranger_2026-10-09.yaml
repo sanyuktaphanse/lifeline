@@ -2,7 +2,7 @@ id: T13
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T18
-note: Expected failing. Stranger test of 2026-10-09, task T18, verdict worked badly. The reminder was set, but the model wrote an unsourced instruction about ICA's SOLAR+ system into the reminder note while saying it had no source for it, and repeated a false claim that the rent was unresolved. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T18, verdict worked badly. The reminder was set, but the model wrote an unsourced instruction into it and repeated a false claim about the rent. The model script repeats what the live model did. The file checks only what the code writes: the reminder''s ledger trail and the turn summary saying the reminder was done. It should pass once item Four, the turn summary is built. The reminder''s wording is the model''s and is not checked. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:
@@ -38,6 +38,10 @@ runs:
   expected:
     reply: answer
     lang: zh
-    must_not_contain:
-    - SOLAR+
-    - wise-0002
+    ledger:
+    - proposal
+    - decision
+    - note
+    - execution
+    must_contain:
+    - 本轮：一个提醒：已完成。

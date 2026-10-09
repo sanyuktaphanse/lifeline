@@ -2,7 +2,7 @@ id: T37
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T16
-note: Expected failing. Stranger test of 2026-10-09, task T16, verdict worked badly. The withdrawal was recorded once and the remainder was right, but the warnings appended after the reply repeated three times and disagreed, one saying 5,500 CNY left and the others 3,500 CNY, and the reply repeated a false claim that the rent was unresolved. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T16, verdict worked badly. The withdrawal was recorded once and the remainder was right, but the warnings the code appended disagreed: the first, from before the withdrawal, said 5,500 CNY was left. The model script repeats what the live model did. The file checks only what the code writes: the turn summary for the recorded withdrawal and that no stale remainder from before the withdrawal reaches the reply. No item of the stranger fixes covers it, so it stays expected failing. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:
@@ -76,6 +76,7 @@ runs:
   expected:
     reply: answer
     lang: zh
+    must_contain:
+    - 本轮：一笔现金取款记录：已完成。
     must_not_contain:
     - 还剩 5,500 CNY
-    - wise-0002

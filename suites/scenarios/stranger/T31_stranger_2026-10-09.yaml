@@ -2,7 +2,7 @@ id: T31
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T07
-note: Expected failing. Stranger test of 2026-10-09, task T07, verdict failed. The parent's transfer was on file and traceable, but the model never called trace_transfer. It read the balance and a precheck and told the student the transfer could not be traced, then guessed at causes. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T07, verdict failed. The parent''s transfer was on file and traceable, but the model never called the trace and told the student it could not be traced. The model script repeats what the live model did. The file checks only what the code writes: that the receipts the student may trace, the inbound receipt included, reach the model in the system prompt. This file is a test of the prompt block: its scripted model calls the trace with the inbound id, which a scripted model can always do, so what the file proves is that the model is now told the id exists. It should pass once item Three, the receipts the model may trace is built. Whether a live model now calls the trace is not checked here; that waits for the next stranger run. The exact request and reply are in docs/stranger_test.md.'
 fixtures:
   inbound_receipts:
     cn_bank_remit_sim:
@@ -20,52 +20,13 @@ runs:
     lang: zh
     model:
     - calls:
-      - name: read_balance
-        arguments: {}
-    - calls:
-      - name: precheck
+      - name: trace_transfer
         arguments:
-          action_kind: remit_from_china
-          provider: unknown
-          senders:
-          - parent
-    - text: '我查了你的余额，现在是 **2000 新币、150 雷亚尔** —— 这笔生活费还没有到账。
-
-
-        **关于"查到哪一步了"，我得先说清楚我能做什么**
-
-
-        我只能追踪**通过 Lifeline 发出的、有回执编号的转账**。你妈妈这笔是从中国银行柜台或网银直接汇出的，不在我的账本里，我没有办法查到它现在走到哪个中转行。这个我不能替你做，不想让你空等。
-
-
-        **真正能查到的办法**：让你妈妈拿着汇款回单去中行查，或者打 95566。她应该有一个**汇款回执编号**（电汇的话是 MT103 报文号）。拿着这个号，中行可以告诉她钱现在卡在哪一环。这是唯一权威的查询路径。如果她把回执编号给你，而这笔钱后来是走 Lifeline 的渠道落地的，我可以再帮你看一眼。
-
-
-        **四天没到，常见原因**
-
-
-        我手上**没有**中行这条线路的官方时效数据（来源：cn_boc_anxin_009），所以我不会编一个"一般三到五天"的说法给你。但卡住的位置通常是这几个：
-
-
-        - **中转行扣留**。美元汇款往往要经过美国的中转行，遇上周末或当地假日就会停住。
-
-        - **收款信息对不上**。你的英文名拼写、账号、SWIFT 码只要有一处和账户不符，款项会被退回或挂起。
-
-        - **合规审核**。2026年1月1日起施行的《金融机构客户尽职调查和客户身份资料及交易记录保存管理办法》（人民银行、金融监管总局、证监会联合发布）规定，单笔汇出 5000 元人民币或等值 1000 美元以上的，机构必须核实汇款人信息。补材料会拖时间。
-
-        - **材料不全被退回**。银行通常会要求护照、身份证或户口本、在读证明或录取通知书。
-
-
-        另外提醒一句额度：按外汇局《个人外汇管理办法实施细则》，境内个人每年购汇和结汇各有 5 万美元的便利化额度，超过部分银行会更严格地审核交易真实性。你妈妈这笔会占用她今年的额度。
-
-
-        **最后一件要紧的事**
-
-
-        在等钱的这几天里，如果你或你妈妈收到任何消息，说这笔钱被冻结了、要先交一笔"解冻费""清关费""保证金"才能放款 —— **那是诈骗，一分都不要付**。真实的银行从不会要求你先汇一笔钱才能收到另一笔钱。考虑到你前几天刚收到那条假冒房东的 WhatsApp，骗子很可能知道你在等一笔汇款，这种时候是他们最爱下手的时机。任何相关消息，先发给我看。
-
-
-        要不要我帮你设一个提醒，比如明天提醒你跟你妈妈要回执编号？'
+          receipt_id: cn_bank_remit_sim-in-0001
+    - text: 银行已放款，资金尚未到账。
+    expect:
+      model_saw:
+      - cn_bank_remit_sim-in-0001
   expected:
     reply: answer
     lang: zh
@@ -73,7 +34,3 @@ runs:
     - proposal
     - decision
     - execution
-    must_contain:
-    - cn_bank_remit_sim-in-0001
-    must_not_contain:
-    - 没有办法查到

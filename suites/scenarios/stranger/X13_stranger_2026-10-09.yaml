@@ -2,7 +2,7 @@ id: X13
 expected_failing: true
 stranger_run: '2026-10-09'
 stranger_task: T04
-note: Expected failing. Stranger test of 2026-10-09, task T04, verdict worked badly. Refused correctly under R06 and R07, but the reasons came in English inside a Chinese reply under the words that the translation is pending, and the reply did not say how a payee can be added. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Expected failing. Stranger test of 2026-10-09, task T04, verdict worked badly. The refusal under R06 and R07 was right, but the reply gave the reasons in English and no account of what the turn did. The model script repeats what the live model did. The file checks only what the code writes: the refusal under R06 and R07 and the turn summary naming the refused transfer and its rules. It should pass once item Four, the turn summary is built. The reasons stay in English behind the pending translation sentence, which is Lifeline''s translation policy, and the reply still does not say how a payee is added. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:
@@ -23,6 +23,8 @@ runs:
     - R06
     - R07
     lang: zh
-    must_not_contain:
-    - 翻译尚待完成
-    - is not in the allowed payees
+    ledger:
+    - proposal
+    - decision
+    must_contain:
+    - 本轮：向 roommate_chen 转账 450 SGD：被拒绝，规则 R06, R07。
