@@ -1478,6 +1478,10 @@ class AgentLoop:
         self._monthly_noted: set[tuple[str, str]] = set()
         # The first entry the rebuild could not read, and why, which holds every execution like a broken chain.
         self._unreadable: tuple[int, str] | None = None
+        # The route each payment went out on, by its idempotency key, until its receipt is written, and what each
+        # receipt took from the balances, by student and receipt id, until it is given back.
+        self._paid_routes: dict[str, dict[str, Any]] = {}
+        self._debits: dict[tuple[str, str], list[tuple[str, Decimal]]] = {}
         self._rebuild_from_ledger()
         for user_id in self._store.users():
             self._conversations[user_id] = _bounded(self._store.messages(user_id))
@@ -2808,8 +2812,42 @@ class AgentLoop:
         entry = self._ledger.append(ACTOR, kind, body)
         self._wrote(entry)
         trail.seqs.append(entry.seq)
+        self._move_balances(trail.user_id, kind, body)
         if kind == "execution" and TIERS[ActionType(payload["action"]["type"])] is Tier.T2:
             self._anchor_due = True
+
+    def _move_balances(self, user_id: str, kind: str, payload: dict[str, Any]) -> None:
+        """Move the student's balances for one ledger entry, the same way as it is written and on a rebuild.
+
+        A payment's receipt takes its amount and its route's fee, unless the rail issued it failed or returned. A
+        cancel that came back done, or a trace that finds the receipt returned, gives both back, once per receipt.
+        Source: docs/decisions.md, decision 140.
+        """
+        if kind == "execution" and "route" in payload:
+            self._paid_routes[payload["action"]["idempotency_key"]] = payload["route"]
+            return
+        balances = self._balances.setdefault(user_id, {})
+        if kind == "receipt":
+            receipt = payload["receipt"]
+            route = self._paid_routes.pop(receipt["idempotency_key"], None)
+            if route is None or receipt["status"] in (ReceiptStatus.FAILED.value, ReceiptStatus.RETURNED.value):
+                return
+            debits = [(receipt["currency"], Decimal(str(receipt["amount"]))), (route["currency_from"], Decimal(str(route["fee"])))]
+            for currency, amount in debits:
+                balances[currency] = balances.get(currency, Decimal("0")) - amount
+            self._debits[(user_id, receipt["receipt_id"])] = debits
+            return
+        if kind != "execution":
+            return
+        result = payload.get("result") or {}
+        if (result.get("cancel") or {}).get("status") == CancelStatus.DONE.value:
+            receipt_id = payload["action"].get("receipt_id")
+        elif (result.get("trace") or {}).get("status") == ReceiptStatus.RETURNED.value:
+            receipt_id = result["trace"].get("receipt_id")
+        else:
+            return
+        for currency, amount in self._debits.pop((user_id, str(receipt_id)), []):
+            balances[currency] = balances.get(currency, Decimal("0")) + amount
 
     def _wrote(self, entry: LedgerEntry) -> None:
         self._head_seq = entry.seq
@@ -3662,6 +3700,7 @@ class AgentLoop:
         if not isinstance(user_id, str):
             return
         self._turns[user_id] = max(self._turns.get(user_id, 0), int(entry.payload.get("turn", 0)))
+        self._move_balances(user_id, entry.kind, entry.payload)
         if entry.kind == "proposal":
             proposals[entry.payload["action"]["idempotency_key"]] = entry.payload
         elif entry.kind == "decision":

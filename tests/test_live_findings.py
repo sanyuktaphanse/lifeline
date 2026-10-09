@@ -175,3 +175,94 @@ def test_the_block_follows_the_current_mandate_after_a_payee_is_added():
 
     assert "Allowed payee ids: landlord_sp.\n" in _system_prompt(setup, 0)
     assert "Allowed payee ids: ana_rio, landlord_sp.\n" in _system_prompt(setup, 1)
+
+
+# Three. Balances go down.
+
+
+def _balances_line(setup, call: int = -1) -> str:
+    return next(line for line in _system_prompt(setup, call).splitlines() if line.startswith("Balances: "))
+
+
+def _paid_rent(responses, **setup_fields):
+    """A setup that has proposed and confirmed the 1,200 SGD rent, with the given model answers after it."""
+    from tests.test_agent import RENT as AGENT_RENT, USER, _call, _setup, _user
+
+    setup = _setup([_call("propose_transfer", AGENT_RENT), *responses], **setup_fields)
+    token = setup.loop.handle(USER, _user("Send 1,200 SGD rent to landlord_sp in Brazil")).confirmation.confirmation_token
+    paid = setup.loop.handle(USER, _user("Yes"), confirmation_token=token)
+    return setup, paid
+
+
+def test_a_completed_payment_lowers_the_balance_by_the_amount_and_the_fee():
+    from tests.test_agent import USER, _call, _say as say, _user
+
+    setup, paid = _paid_rent([_call("read_balance", {}), say("You have 1094.40 SGD.")])
+    setup.loop.handle(USER, _user("What is my balance?"))
+
+    assert paid.receipt.rail == "wise"
+    assert _balances_line(setup, 1) == "Balances: 150 BRL, 1094.40 SGD."
+    tool_results = [message.text for message in setup.adapter.calls[-1][0] if message.role is Role.TOOL]
+    assert '"SGD": "1094.40"' in tool_results[-1]
+
+
+def test_a_receipt_issued_as_failed_moves_nothing():
+    from contracts.schemas import ReceiptStatus
+    from rails.fake_rail import FakeRail
+    from tests.test_agent import USER, _say as say, _user
+
+    rails = {"wise": FakeRail(name="wise", simulated=False, issue_status=ReceiptStatus.FAILED)}
+    setup, paid = _paid_rent([say("Noted.")], rails=rails)
+    setup.loop.handle(USER, _user("Thanks"))
+
+    assert paid.receipt.status is ReceiptStatus.FAILED
+    assert _balances_line(setup) == "Balances: 150 BRL, 2300 SGD."
+
+
+def test_a_cancelled_and_returned_payment_gives_the_amount_and_the_fee_back_once():
+    from contracts.schemas import ReceiptStatus
+    from rails.fake_rail import FakeRail
+    from tests.test_agent import USER, _call, _say as say, _user
+
+    rails = {"wise": FakeRail(name="wise", simulated=False, issue_status=ReceiptStatus.CREATED)}
+    setup, paid = _paid_rent(
+        [_call("cancel_transfer", {"receipt_id": "wise-0001"}), _call("trace_transfer", {"receipt_id": "wise-0001"}), say("It was returned."), say("Ok.")],
+        rails=rails,
+    )
+    cancel = setup.loop.handle(USER, _user("Cancel wise-0001"))
+    setup.loop.handle(USER, _user("Yes"), confirmation_token=cancel.confirmation.confirmation_token)
+    setup.loop.handle(USER, _user("Where is wise-0001?"))
+    setup.loop.handle(USER, _user("Thanks"))
+
+    assert paid.receipt.status is ReceiptStatus.CREATED
+    assert _balances_line(setup, 1) == "Balances: 150 BRL, 1094.40 SGD."
+    # 1094.40 plus 1200 and 5.60 back is 2300.00; Decimal keeps the places of the fee.
+    assert _balances_line(setup) == "Balances: 150 BRL, 2300.00 SGD."
+
+
+def test_a_trace_that_finds_the_payment_returned_gives_it_back_once():
+    from rails.fake_rail import FakeRail, scripted_traces
+    from tests.test_agent import USER, _call, _say as say, _user
+
+    traces = scripted_traces({"wise": [{"receipt_id": "wise-0001", "status": "returned", "typical_duration_source": "fixture", "next_steps": [], "warnings": []}]})
+    rails = {"wise": FakeRail(traces["wise"], name="wise", simulated=False)}
+    trace = _call("trace_transfer", {"receipt_id": "wise-0001"})
+    setup, _ = _paid_rent([trace, say("Returned."), trace, say("Still returned."), say("Ok.")], rails=rails)
+    setup.loop.handle(USER, _user("Where is wise-0001?"))
+    setup.loop.handle(USER, _user("And now?"))
+    setup.loop.handle(USER, _user("Thanks"))
+
+    # The prompt is built when a turn starts: before the first trace, after it, and after the second.
+    assert _balances_line(setup, 1) == "Balances: 150 BRL, 1094.40 SGD."
+    assert _balances_line(setup, 3) == "Balances: 150 BRL, 2300.00 SGD."
+    assert _balances_line(setup) == "Balances: 150 BRL, 2300.00 SGD."
+
+
+def test_the_balances_rebuild_from_the_ledger_on_restart():
+    from tests.test_agent import USER, _say as say, _setup, _user
+
+    first, _ = _paid_rent([])
+    restarted = _setup([say("Hello again.")], ledger=first.ledger)
+    restarted.loop.handle(USER, _user("Hello"))
+
+    assert _balances_line(restarted) == "Balances: 150 BRL, 1094.40 SGD."
