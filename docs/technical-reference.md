@@ -16,17 +16,19 @@ Lifeline is a cross border finance agent for students studying abroad. It has tw
 8. [The mandate engine](#the-mandate-engine)
 9. [Interfaces](#interfaces)
 10. [The hash chained ledger](#the-hash-chained-ledger)
-11. [The model adapter](#the-model-adapter)
-12. [The agent loop](#the-agent-loop)
-13. [The council](#the-council)
-14. [The fake router and fake rail](#the-fake-router-and-fake-rail)
-15. [Decisions of 14 September](#decisions-of-14-september)
-16. [The evaluation harness](#the-evaluation-harness)
-17. [The API](#the-api)
-18. [Testing and CI](#testing-and-ci)
-19. [Attacks attempted and held](#attacks-attempted-and-held)
-20. [Commit history](#commit-history)
-21. [Open items](#open-items)
+11. [The anchor](#the-anchor)
+12. [The model adapter](#the-model-adapter)
+13. [The agent loop](#the-agent-loop)
+14. [The council](#the-council)
+15. [The rescue](#the-rescue)
+16. [The fake router and fake rail](#the-fake-router-and-fake-rail)
+17. [Decisions of 14 September](#decisions-of-14-september)
+18. [The evaluation harness](#the-evaluation-harness)
+19. [The API](#the-api)
+20. [Testing and CI](#testing-and-ci)
+21. [Attacks attempted and held](#attacks-attempted-and-held)
+22. [Commit history](#commit-history)
+23. [Open items](#open-items)
 
 ## How the pieces fit
 
@@ -1780,10 +1782,21 @@ All times are local time.
 | `9f01d90` | 8 Oct | Cash cap tracked from the ledger: record_cash_withdrawal at T1, 70 and 90 percent warnings |
 | `0bdac37` | 8 Oct | Reminders endpoint: due and upcoming from the reminder notes |
 | `f2c1da4` | 8 Oct | Monthly note from the ledger, cash cap tracked from the ledger, reminders endpoint |
+| `f19caba` | 9 Oct 01:24 | Fix X17: a run for a period the student cancelled escalates under R13 instead of paying at T1 |
+| `70d3704` | 9 Oct 01:27 | Merge pull request #27 from sanyuktaphanse/lane-a/fix-X17-cancelled-run |
+| `d8d2e96` | 9 Oct 01:30 | Fix X17: every tool call in a turn is checked against the current mandate version |
+| `f39a807` | 9 Oct 01:32 | Merge pull request #28 from sanyuktaphanse/lane-a/fix-X17-stale-version |
+| `ebae9f9` | 9 Oct 02:30 | Fix X02, X03, X04, X05, X24: amounts in words or with an exponent, glued payee ids, freezes, standing terms, stops and reminders are traced to the data that wrote them |
+| `d311775` | 9 Oct 02:35 | Merge pull request #29 from sanyuktaphanse/lane-a/fix-X02-X03-X04-X05-X24 |
+| `a4573ea` | 9 Oct 02:51 | Fix X22, X11 and empty secrets: edited ledgers load, the loop holds every execution on a ledger it cannot trust, the notice names what was blocked, a frozen backup is not used, and production needs both secrets |
+| `cec6e79` | 9 Oct 02:53 | Fix X22, X11 and empty secrets: the production run_due test sets both secrets, as the API now requires |
+| `8017461` | 9 Oct 03:00 | Integrity hold exempts the freeze |
+| `9da0fcb` | 9 Oct 03:04 | Merge pull request #30 from sanyuktaphanse/lane-a/fix-X22-X11-secrets |
+| `a254854` | 9 Oct 03:08 | Security review: attacks attempted and held |
 
 The project scaffold and the mandate engine were built earlier the same day, in thirteen commits between 18:11 and 19:45, most of them adding a single rule. Two messages above appear twice. `66960a8` renamed the CI job to `python` after `c63cda6` was already pushed, and `c012c25` moved the ledger onto the contract `LedgerEntry` after `b112a06` was already pushed. Folding either change into the earlier commit would have needed a force push, which the rules forbid.
 
-From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them reached `main` through pull request 6, merged as `7b8b674`. The evaluation harness reached `main` through pull request 7, merged as `b425719`. The API reached `main` through pull request 8, merged as `de659e4`. Its hardening reached `main` through pull request 9, merged as `57fae94`. Conversation memory and the confirmation attempts reached `main` through pull request 10, merged as `7ad3825`. The conversation store reached `main` through pull request 11, merged as `3f4c96e`. Standing mandates reached `main` through pull request 12, merged as `84379e0`. Their follow up reached `main` through pull request 13, merged as `7e8e331`. The new scenarios reached `main` through pull request 14, merged as `d707d8c`. The harness features reached `main` through pull request 16, merged as `b71a1e2`. The council reached `main` through pull request 18, merged as `fd36b51`. The first real run reached `main` through pull request 19, merged as `319b414`, and the rescue through pull request 20, merged as `19731b5`. Pull requests 15 and 17 were not merged and left no commit on `main`. The merge commits carry the time GitHub recorded, which is why some of them read earlier than the commits they merge.
+From `97a6211` onward every change goes on its own branch and reaches `main` through a pull request. `97a6211` and its documentation, `0011324`, reached `main` through pull request 1, merged as `70887c0`. The agent loop reached `main` through pull request 2, merged as `553845e`. The first changes of 18 September reached `main` through pull request 3, merged as `e373a82`. The second set reached `main` through pull request 4, merged as `003ab4c`. The T2 tools reached `main` through pull request 5, merged as `fe728b4`. Mandate versions and the changes that came with them reached `main` through pull request 6, merged as `7b8b674`. The evaluation harness reached `main` through pull request 7, merged as `b425719`. The API reached `main` through pull request 8, merged as `de659e4`. Its hardening reached `main` through pull request 9, merged as `57fae94`. Conversation memory and the confirmation attempts reached `main` through pull request 10, merged as `7ad3825`. The conversation store reached `main` through pull request 11, merged as `3f4c96e`. Standing mandates reached `main` through pull request 12, merged as `84379e0`. Their follow up reached `main` through pull request 13, merged as `7e8e331`. The new scenarios reached `main` through pull request 14, merged as `d707d8c`. The harness features reached `main` through pull request 16, merged as `b71a1e2`. The council reached `main` through pull request 18, merged as `fd36b51`. The first real run reached `main` through pull request 19, merged as `319b414`, and the rescue through pull request 20, merged as `19731b5`. Pull requests 15 and 17 were not merged and left no commit on `main`. The Stage 10 security review reached `main` through four pull requests of fixes: the cancelled standing run through pull request 27, merged as `70d3704`, the mandate version read for every tool call through pull request 28, merged as `f39a807`, the provenance fixes through pull request 29, merged as `d311775`, and the ledger, notice and secrets fixes with the integrity hold through pull request 30, merged as `9da0fcb`. Its record, the section on attacks attempted and held, and this table's own update go through pull request 31, which was open when this table was written, so its merge is not listed. The merge commits carry the time GitHub recorded, which is why some of them read earlier than the commits they merge.
 
 ## Open items
 
