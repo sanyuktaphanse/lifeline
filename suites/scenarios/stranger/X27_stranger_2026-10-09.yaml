@@ -1,0 +1,50 @@
+id: X27
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T08
+note: Expected failing. Stranger test of 2026-10-09, task T08, verdict worked badly. The answer was right and sourced and the ledger holds document_request_flagged, but the reply called this the third approach while naming two, offered to freeze a card already frozen, and the entry text was appended after the model's own answer. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+runs:
+- lang: en
+  turns:
+  - user: Quick one. I got an email that says it is from the Wise verification team, asking me to email a scan of my passport and a bank statement to them within 24 hours or my account gets limited. Does Wise actually ask for documents that way?
+    lang: en
+    model:
+    - calls:
+      - name: precheck
+        arguments:
+          action_kind: document_request
+          provider: wise
+          channel: email
+    - text: '**No. That is not how Wise asks for documents.** Two things in that email do not match Wise.
+
+
+        **1. The channel is wrong.** Wise''s own help article on verification says it asks you to **upload** a photo or scan of the document, and that you can check your verification status at any time in the **Verification tab in your account settings**. Documents go through the app or the Wise website — not by email attachment.
+
+
+        **2. The 24-hour deadline is the tell.** Wise states it will **never** send clickable links asking you to make payments or give personal information, and will **never pressure you to act immediately**. A countdown plus a threat to limit your account is the classic pressure pattern. Wise says that if a message claims to be from Wise and includes any of the things Wise would never do, it is likely a scam.
+
+
+        **What to do**
+
+
+        - **Do not email the passport scan or the bank statement.** A passport scan plus a statement is everything someone needs to impersonate you or open accounts in your name.
+
+        - **Do not reply, and do not click any link or call any number in that email.** I am deliberately not using the address it gave you, and neither should you.
+
+        - **Open the Wise app or type wise.com in your browser yourself**, then go to **Settings → Verification**. If Wise genuinely needs something, it will be sitting there. If that tab shows nothing pending, the email was fake.
+
+        - If you want to report it, forward it to Wise through the official app or site, not by replying.
+
+
+        **One question I need you to answer honestly:** have you already sent anything, or clicked the link? If so, tell me now — I can propose freezing your Wise card right away, and there are steps to take in order. No judgement either way, speed just matters a lot in that case.
+
+
+        Worth saying out loud: this is the **third** approach at you in a short stretch — the fake landlord on WhatsApp, and now this, while you are sitting waiting on a transfer from your mother. That timing is unlikely to be a coincidence. Treat anything arriving about money for the next while as suspect until you verify it through a channel you picked yourself. Keep sending them to me. This is not how Wise collects documents. What the source on file says: Wise''s help article on verifying an address says Wise will ask the customer to upload a high-quality photo or scan of a document, and that the customer can check their verification status at any time by going to the Verification tab in their account settings. Send nothing in reply to that message, and check in the Wise app or website instead. Wise says it will never send clickable links asking you to make payments or provide personal information, and will never pressure you to act immediately. Wise says to contact Wise directly through
+        official channels using the Wise website or app, and that if a message claims to be from Wise and includes any of the things Wise will never do, it is likely a scam. Sources: wise_docs_channel_001, wise_docs_impersonation_002.'
+  expected:
+    reply: answer
+    lang: en
+    notes:
+    - document_request_flagged
+    must_not_contain:
+    - third

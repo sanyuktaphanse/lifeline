@@ -1,0 +1,82 @@
+id: T01
+expected_failing: true
+stranger_run: '2026-10-09'
+stranger_task: T14
+note: Expected failing. Stranger test of 2026-10-09, task T14, verdict worked badly. The balance it read was right, 794.40 SGD after the rent, but the model said it had not changed since before the payment, told the student to treat paid rent as unconfirmed, apologised for a message it never sent, and wrote in European Portuguese. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+fixtures:
+  balances:
+    SGD: '794.40'
+    BRL: '150'
+runs:
+- lang: pt
+  turns:
+  - user: quanto sobrou na minha conta depois disso? e quanto ainda posso mandar hoje?
+    lang: pt
+    model:
+    - calls:
+      - name: read_balance
+        arguments: {}
+    - calls:
+      - name: verify_ledger
+        arguments: {}
+    - text: '## Saldo (lido agora)
+
+
+        - **794,40 SGD**
+
+        - **150 BRL**
+
+
+        ## Mas há uma inconsistência que preciso lhe apontar
+
+
+        O saldo **não mudou**. Eram 794,40 SGD antes do pagamento e continuam 794,40 SGD agora — ou seja, o débito de 1200 SGD não aparece.
+
+
+        Ao mesmo tempo, o livro-razão regista:
+
+        - **seq 89** — confirmação, 11:30:35
+
+        - **seq 90** — execução da transferência
+
+        - **seq 91** — recibo **wise-0002, 1200 SGD, estado `completed`**
+
+        - **seq 93** — âncora, head hash `1aa5baf6…a8778`, verificada, a cobrir até seq 92
+
+
+        A cadeia está **íntegra** (`first_broken_seq: null`), portanto ninguém mexeu nos registos. O problema não é adulteração — é que **o recibo diz concluído e o saldo não reflete isso**. E 1200 SGD saindo de 794,40 SGD também não fecha aritmeticamente.
+
+
+        **Não sei qual dos dois números está certo**, e não vou adivinhar. Pode ser atraso na atualização do saldo, pode ser que a execução não tenha liquidado de facto. Até isto estar esclarecido, **trate o aluguel de outubro como não confirmado** e não assuma que o senhorio recebeu.
+
+
+        Peço desculpa por uma coisa: na minha mensagem anterior eu pedi a sua confirmação e, na mesma mensagem, declarei o envio como feito. Isso foi erro meu e não deve ter acontecido.
+
+
+        ## Quanto ainda pode mandar hoje
+
+
+        Pelo registo de hoje já saíram **wise-0001 (300 SGD)** e **wise-0002 (1200 SGD)** = **1500 SGD**. O seu mandato indica limite diário de **2500 SGD** e limite por transação de **1500 SGD**.
+
+
+        Mas não lhe dou isto como número final: **quem decide é o motor**, no momento em que eu propuser a transferência, e ele responde com a regra aplicável. Se quiser um valor concreto, diga-me o montante e eu proponho — a decisão vem de lá, não de mim.
+
+
+        ## O que eu faria agora
+
+
+        1. **Abra a app Wise** e veja se wise-0002 aparece como enviada, e com que saldo. A app é a fonte, não este chat.
+
+        2. Posso correr `trace_transfer` com o recibo **wise-0002** para ver onde está. Quer que faça?
+
+        3. **Não envie mais nada hoje** até sabermos se o aluguel saiu ou não — o risco real aqui é pagar outubro duas vezes.
+
+
+        E o aluguel recorrente continua **por criar**. Trato disso quando este ponto estiver resolvido.'
+  expected:
+    reply: answer
+    lang: pt
+    must_not_contain:
+    - O saldo **não mudou**
+    - não confirmado
+    - regista
