@@ -4,8 +4,10 @@ Lifeline is a cross border finance agent for students studying abroad, built for
 
 ## Install
 
+Lifeline needs Python 3.12. [docs/deployment.md](docs/deployment.md) covers a clean machine, every setting in `.env`, the Wise sandbox, the FISCO BCOS anchor and running in China.
+
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pytest

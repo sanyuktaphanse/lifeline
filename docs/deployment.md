@@ -1,0 +1,95 @@
+# Deployment guide
+
+How to run Lifeline's backend on a clean machine, what each setting in `.env` does, and how to run it without reaching hosts that may be blocked in China. Lane B owns this guide. Every command below was run on 10 October 2026 on a Mac with Apple silicon.
+
+## 1. What you need
+
+1. Python 3.12. CI runs 3.12 (`.github/workflows/ci.yml`). The code uses syntax that Python 3.9, the version macOS ships, cannot read, so `pip install` fails there. If your machine has no Python 3.12, `uv` installs one inside your user folder without an administrator password: `uv venv --python 3.12 .venv`.
+2. Git, and access to the repository.
+3. Optional: Docker, only for the FISCO BCOS anchor in section 6.
+
+The app the student uses, lane C, is not in this repository yet; this guide covers the backend the app talks to.
+
+## 2. Install and test
+
+From the repository root:
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pytest
+```
+
+The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 10 October 2026 it gave 1428 passed, 3 skipped and 4 expected failures on `main`.
+
+```bash
+make evidence
+```
+
+writes `evidence/report.md`, the task and attack suites played against a scripted model. It needs no key either.
+
+## 3. Configure
+
+Copy `.env.example` to `.env` and fill in what you need. `.env` is ignored by git and is the only place a secret lives.
+
+| Setting | What it does | Empty means |
+| --- | --- | --- |
+| `LIFELINE_ENV` | `production` makes the API refuse to start without the two secrets below | development |
+| `LIFELINE_CONFIRM_SECRET` | Signs confirmation tokens | A public development secret, refused in production |
+| `LIFELINE_ANCHOR_SECRET` | Signs the local ledger anchor | A public development secret, refused in production |
+| `MODEL_PROVIDER` | `anthropic` or `dashscope`, the model the agent uses | `anthropic` |
+| `FALLBACK_MODEL_PROVIDER` | The provider tried when the first one fails | `dashscope` |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Anthropic key and model | No Anthropic calls; model `claude-opus-5` |
+| `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_BASE_URL` | Alibaba Cloud DashScope key, model and endpoint | No DashScope calls; model `qwen-plus` |
+| `COUNCIL` | `on` convenes the five voice council for large or unusual transfers | Off |
+| `ANTHROPIC_COUNCIL_MODEL`, `DASHSCOPE_COUNCIL_MODEL` | A different model for the council | The ordinary model |
+| `SIM_RAILS` | `off` removes the simulated UPI to PayNow and China rails | On |
+| `ANCHOR` | `local` or `fisco` | `local` |
+| `FISCO_RPC_URL`, `FISCO_CONTRACT_ADDRESS`, `FISCO_KEY_PATH` | The FISCO BCOS node, contract and key | Not used unless `ANCHOR=fisco` |
+| `WISE_SANDBOX_TOKEN`, `WISE_SANDBOX_PROFILE_ID`, `WISE_SANDBOX_RECIPIENTS` | The Wise sandbox, section 5 | The fixture Wise rail |
+| `LIVE_SCENARIO_LIMIT` | Caps how many scenarios a live evidence run plays | Every scenario marked live |
+
+For a demo that anyone else can reach, set `LIFELINE_ENV=production` and two long random secrets, for example from `python3 -c "import secrets; print(secrets.token_hex(32))"`.
+
+## 4. Run the API
+
+```bash
+make dev
+```
+
+starts the API on `http://127.0.0.1:8000` with reload. It accepts browser requests only from `localhost` and `127.0.0.1` on any port. Check it with:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+The demo student is `student_001` from `fixtures/demo_user.yaml`, and a parent in India is loaded from `fixtures/demo_parent.yaml`. The ledger and the conversations are written to `data/`, which git ignores. `docs/api.md` describes every endpoint with real requests and responses.
+
+## 5. The Wise sandbox
+
+Without a token the `wise` rail is a fixture. With one, its quotes, transfers, traces and cancels go to Wise's sandbox at `https://api.wise-sandbox.com/2026Q4`, which moves no money, and everything it returns is marked simulated.
+
+1. Make a Wise sandbox account and an API token from Wise's developer documentation, docs.wise.com. A person does this; the token is personal.
+2. Put the token in `WISE_SANDBOX_TOKEN` and the sandbox profile's number in `WISE_SANDBOX_PROFILE_ID`.
+3. Make a recipient in the sandbox for each payee the demo pays, and list them in `WISE_SANDBOX_RECIPIENTS` as `payee_id:recipient_account_id` pairs separated by commas, such as `self_sg:12345678`.
+4. Top up the sandbox balance in the sending currency, because the rail funds transfers from it.
+5. Run `make evidence-wise`. It writes `evidence/wise-sandbox.md`, the sandbox operation log: a quote, a paid transfer moved through Wise's simulated statuses, and a cancelled transfer.
+
+## 6. The FISCO BCOS anchor
+
+Optional. `bash chain/setup.sh` starts a four node FISCO BCOS network in Docker, deploys the contract, and prints the four `ANCHOR` and `FISCO_` settings for `.env`. `chain/README.md` gives the details. When the chain cannot be reached, the agent writes an `anchor_failed` note and payments go on.
+
+## 7. Running in China
+
+The final is on site in Shenzhen, where some hosts may be unreachable.
+
+1. Model: set `MODEL_PROVIDER=dashscope`, which is served from Alibaba Cloud, and keep Anthropic as the fallback or leave it unset. `make evidence-swap` compares the two providers on the live scenarios.
+2. Anchor: use `ANCHOR=local`, or a FISCO BCOS network started on the laptop before travelling.
+3. Rails: the simulated rails need no network. Leave `WISE_SANDBOX_TOKEN` empty unless the sandbox host has been checked from the venue; the fixture Wise rail then runs offline.
+4. Dependencies: install from `requirements.txt` before travelling, so the laptop needs no package download on site.
+
+Whether each host is reachable from Shenzhen has not been tested; the master plan schedules that test on a clean machine before the final.
+
+## 8. Reset the demo
+
+Stop the API and delete the `data/` folder to start again from an empty ledger. This deletes the demo's ledger and conversations for good, so copy the folder first if you need them.
