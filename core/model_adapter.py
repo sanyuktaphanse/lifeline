@@ -3,6 +3,7 @@ import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -55,6 +56,12 @@ class MissingApiKey(ProviderUnavailable):
     pass
 
 
+# The .env beside the repository root this module belongs to, found from the module's own path, never a
+# parent folder's: a clone made inside another checkout must not read that checkout's keys. Source:
+# docs/technical-reference.md, open item 173.
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+
 def _setting(env: Mapping[str, str], name: str, default: str) -> str:
     return env.get(name) or default
 
@@ -66,7 +73,7 @@ def environment(env: Mapping[str, str] | None = None) -> Mapping[str, str]:
     the process environment altogether.
     """
     if env is None:
-        load_dotenv()
+        load_dotenv(ENV_FILE)
         return os.environ
     return env
 
