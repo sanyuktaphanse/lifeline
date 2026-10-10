@@ -1,8 +1,8 @@
 id: T07
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T03
-note: 'Expected failing. Stranger test of 2026-10-09, task T03, verdict failed. The student asked for 2,400 SGD of rent. The model filled landlord_sp, which the student had not typed but which the earlier quote turn''s model text named, so the engine refused under R01 and wrote injection_suspected against the student''s own request, and the limit rule never ran. The model script repeats what the live model did. The file checks only what the code writes: that the engine refuses under R08, the per transaction limit, and that no injection_suspected entry is written. It should pass once item One, the student''s own records is built. The rule''s reason is still in English behind the pending translation sentence, as Lifeline''s translation policy writes every rule reason, so it is not checked here. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T03, verdict failed. The student asked for 2,400 SGD of rent. The model filled landlord_sp, which the student had not typed but which the earlier quote turn''s model text named, so the engine refused under R01 and wrote injection_suspected against the student''s own request, and the limit rule never ran. The model script repeats what the live model did. The file checks only what the code writes: that the engine refuses under R08, the per transaction limit, and that no injection_suspected entry is written. It passes since item One of the stranger fixes, the student''s own records, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The rule''s reason is still in English behind the pending translation sentence, as Lifeline''s translation policy writes every rule reason, so it is not checked here. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:

@@ -8560,6 +8560,11 @@ from rails.fake_router import FakeRouter
 ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "suites"
 SCENARIOS_DIR = SUITES_DIR / "scenarios"
+# The stranger runs: scenarios from each stranger test, played as a group apart from the suite entries, so the
+# entries' counts keep their meaning. Source: docs/decisions.md, decision 147.
+STRANGER_DIR = SCENARIOS_DIR / "stranger"
+EXPECTED_FAILING = "expected failing"
+FLAG_TO_REMOVE = "passes but flagged"
 REPORT_PATH = ROOT / "evidence" / "report.md"
 # Scenarios only the live mode reads, such as a language the loop cannot write in. The ordinary run never opens it.
 LIVE_DIR = SUITES_DIR / "live"
@@ -9256,7 +9261,9 @@ def _count_table(title: str, key: str, groups: dict[str, list[EntryResult]]) -> 
 `_row` writes one Markdown table row. `_count_table` writes a table of entries by group, with counts made by `Counter`, a dictionary that counts how often each value appears and answers zero for a value it has never seen.
 
 ```python
-def render_report(results: list[EntryResult], commit: str, generated_at: datetime) -> str:
+def render_report(
+    results: list[EntryResult], commit: str, generated_at: datetime, stranger: list[StrangerResult] | None = None
+) -> str:
     lines = [
         "# Lifeline evidence report",
         "",
@@ -9293,7 +9300,34 @@ def render_report(results: list[EntryResult], commit: str, generated_at: datetim
     for result in results:
         if result.status == NOT_AUTOMATED:
             lines.append(_row(result.id, result.suite, result.tier or "", result.title, result.status))
+    if stranger is not None:
+        lines += _stranger_section(stranger)
     return "\n".join(lines) + "\n"
+
+
+def _stranger_section(stranger: list[StrangerResult]) -> list[str]:
+    """The stranger runs, apart from the suite entries above, so those counts keep their meaning."""
+    counts = Counter(result.status for result in stranger)
+    lines = [
+        "",
+        "## Stranger runs",
+        "",
+        "Every file in `suites/scenarios/stranger`, from the stranger tests in `docs/stranger_test.md`, played apart from "
+        "the suite entries above. A file marked expected failing records a failure not yet fixed; one that passes "
+        "while so marked fails the suite until the flag is removed.",
+        "",
+        _row("Files", "Passed", "Expected failing", "Failed", "Passes but flagged"),
+        _row(*["---"] * 5),
+        _row(len(stranger), counts[PASSED], counts[EXPECTED_FAILING], counts[FAILED], counts[FLAG_TO_REMOVE]),
+        "",
+        _row("File", "Entry", "Task", "Run", "Result", "Note"),
+        _row(*["---"] * 6),
+    ]
+    lines += [_row(r.file, r.id, r.task, r.run, r.status, r.note or "") for r in stranger]
+    failures = stranger_failures(stranger)
+    if failures:
+        lines += ["", "### Stranger failures", "", *(f"1. {line}" for line in failures)]
+    return lines
 ```
 
 `render_report` writes the report from the results alone. It opens with the time and the commit it was given, then counts entries by suite and tasks by tier. Runs are counted by language, and a run that switches languages counts under each one it used. The table of automated entries shows each result, the languages run beside the languages the suite declares, and the scenario's note, which is where a scenario says what part of an entry it does not cover. Any failures are listed with their reasons, and every entry without a scenario is listed as not automated. The function takes the commit and the time as arguments, so the tests can check the text exactly.
@@ -9321,14 +9355,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.live is not None or arguments.swap:
         return main_live(arguments.live, arguments.swap)
     results = evaluate()
+    stranger = evaluate_stranger()
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc)), encoding="utf-8")
+    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc), stranger), encoding="utf-8")
     counts = Counter(result.status for result in results)
+    strange = Counter(result.status for result in stranger)
     print(
         f"{REPORT_PATH.relative_to(ROOT)}: {counts[PASSED]} passed, {counts[FAILED]} failed, "
-        f"{counts[NOT_AUTOMATED]} not automated"
+        f"{counts[NOT_AUTOMATED]} not automated; stranger runs: {strange[PASSED]} passed, "
+        f"{strange[EXPECTED_FAILING]} expected failing, {strange[FAILED]} failed, {strange[FLAG_TO_REMOVE]} passes but flagged"
     )
-    return 1 if counts[FAILED] else 0
+    for line in stranger_failures(stranger):
+        print(line)
+    return 1 if counts[FAILED] or stranger_failures(stranger) else 0
 
 
 if __name__ == "__main__":

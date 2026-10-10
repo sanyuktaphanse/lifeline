@@ -1,8 +1,8 @@
 id: X13
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T04
-note: 'Expected failing. Stranger test of 2026-10-09, task T04, verdict worked badly. The refusal under R06 and R07 was right, but the reply gave the reasons in English and no account of what the turn did. The model script repeats what the live model did. The file checks only what the code writes: the refusal under R06 and R07 and the turn summary naming the refused transfer and its rules. It should pass once item Four, the turn summary is built. The reasons stay in English behind the pending translation sentence, which is Lifeline''s translation policy, and the reply still does not say how a payee is added. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T04, verdict worked badly. The refusal under R06 and R07 was right, but the reply gave the reasons in English and no account of what the turn did. The model script repeats what the live model did. The file checks only what the code writes: the refusal under R06 and R07 and the turn summary naming the refused transfer and its rules. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The reasons stay in English behind the pending translation sentence, which is Lifeline''s translation policy, and the reply still does not say how a payee is added. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:

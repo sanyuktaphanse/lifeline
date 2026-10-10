@@ -1,8 +1,8 @@
 id: T31
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T07
-note: 'Expected failing. Stranger test of 2026-10-09, task T07, verdict failed. The parent''s transfer was on file and traceable, but the model never called the trace and told the student it could not be traced. The model script repeats what the live model did. The file checks only what the code writes: that the receipts the student may trace, the inbound receipt included, reach the model in the system prompt. This file is a test of the prompt block: its scripted model calls the trace with the inbound id, which a scripted model can always do, so what the file proves is that the model is now told the id exists. It should pass once item Three, the receipts the model may trace is built. Whether a live model now calls the trace is not checked here; that waits for the next stranger run. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T07, verdict failed. The parent''s transfer was on file and traceable, but the model never called the trace and told the student it could not be traced. The model script repeats what the live model did. The file checks only what the code writes: that the receipts the student may trace, the inbound receipt included, reach the model in the system prompt. This file is a test of the prompt block: its scripted model calls the trace with the inbound id, which a scripted model can always do, so what the file proves is that the model is now told the id exists. It passes since item Three of the stranger fixes, the receipts the model may trace, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. Whether a live model now calls the trace is not checked here; that waits for the next stranger run. The exact request and reply are in docs/stranger_test.md.'
 fixtures:
   inbound_receipts:
     cn_bank_remit_sim:

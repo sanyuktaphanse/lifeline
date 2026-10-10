@@ -1,8 +1,8 @@
 id: T06
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T13
-note: 'Expected failing. Stranger test of 2026-10-09, task T13, verdict worked badly. Rent was proposed and paid on the student''s yes, but the confirmation opened with a council voice advising to wait, in the third person. The model script repeats what the live model did. The file checks only what the code writes: the confirmation and the receipt, and the turn summary of each call: the proposal waiting for confirmation, then the confirmed transfer with its receipt id. It should pass once item Four, the turn summary is built. The council''s wording is model text and is not reproduced, since this run has no council. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T13, verdict worked badly. Rent was proposed and paid on the student''s yes, but the confirmation opened with a council voice advising to wait, in the third person. The model script repeats what the live model did. The file checks only what the code writes: the confirmation and the receipt, and the turn summary of each call: the proposal waiting for confirmation, then the confirmed transfer with its receipt id. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The council''s wording is model text and is not reproduced, since this run has no council. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:

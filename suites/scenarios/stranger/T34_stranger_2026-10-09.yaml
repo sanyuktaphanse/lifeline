@@ -1,8 +1,8 @@
 id: T34
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T10
-note: 'Expected failing. Stranger test of 2026-10-09, task T10, verdict failed. The student typed the amount, the payee and the day. The model added a tolerance of 0 percent, 48 hours of notice and a 24 hour cancel window the student never gave, the engine traced the 0 to the earlier quote''s fees and refused under R01, and injection_suspected was written against the student''s own request. The model script repeats what the live model did. The file checks only what the code writes: that the standing mandate is offered for confirmation under R11 with warn.standing.new, with Lifeline''s default tolerance, notice and cancel window stated in the confirmation, and that no injection_suspected entry is written. It should pass once item One, the student''s own records is built. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T10, verdict failed. The student typed the amount, the payee and the day. The model added a tolerance of 0 percent, 48 hours of notice and a 24 hour cancel window the student never gave, the engine traced the 0 to the earlier quote''s fees and refused under R01, and injection_suspected was written against the student''s own request. The model script repeats what the live model did. The file checks only what the code writes: that the standing mandate is offered for confirmation under R11 with warn.standing.new, with Lifeline''s default tolerance, notice and cancel window stated in the confirmation, and that no injection_suspected entry is written. It passes since item One of the stranger fixes, the student''s own records, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:

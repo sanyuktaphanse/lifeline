@@ -1,8 +1,8 @@
 id: T36
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T17
-note: 'Expected failing. Stranger test of 2026-10-09, task T17, verdict worked badly. The quota, the due diligence rule and the refusal to use relatives'' quotas were right, but the model overstated the route above the quota. The model script repeats what the live model did. The file checks only what the code writes: the structuring_refused note and the turn summary. It should pass once item Four, the turn summary is built. The model''s own account of the route is not checked, because no code writes it. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T17, verdict worked badly. The quota, the due diligence rule and the refusal to use relatives'' quotas were right, but the model overstated the route above the quota. The model script repeats what the live model did. The file checks only what the code writes: the structuring_refused note and the turn summary. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The model''s own account of the route is not checked, because no code writes it. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:

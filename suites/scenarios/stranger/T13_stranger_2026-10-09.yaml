@@ -1,8 +1,8 @@
 id: T13
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T18
-note: 'Expected failing. Stranger test of 2026-10-09, task T18, verdict worked badly. The reminder was set, but the model wrote an unsourced instruction into it and repeated a false claim about the rent. The model script repeats what the live model did. The file checks only what the code writes: the reminder''s ledger trail and the turn summary saying the reminder was done. It should pass once item Four, the turn summary is built. The reminder''s wording is the model''s and is not checked. The exact request and reply are in docs/stranger_test.md.'
+note: 'Fixed. Stranger test of 2026-10-09, task T18, verdict worked badly. The reminder was set, but the model wrote an unsourced instruction into it and repeated a false claim about the rent. The model script repeats what the live model did. The file checks only what the code writes: the reminder''s ledger trail and the turn summary saying the reminder was done. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The reminder''s wording is the model''s and is not checked. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: zh
   turns:
