@@ -58,6 +58,10 @@ The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on s
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
 | none of these | An answer | `text` only |
 
+Two sentences in `text` are always written by code from the ledger entries of the call, never by the model, and the model never sees them in its memory. When the call blocked a request that came from pasted text or from data Lifeline read, `text` begins with one sentence saying what that request asked for, by kind such as a payment or a payee, never its account or amount, and that Lifeline did not do it. Every `text` from `/chat`, `/confirm` and the rescue ends with one sentence of what the call did, beginning `This turn:` in English, `Neste turno:` in Portuguese and `本轮：` in Chinese: each action proposed and waiting, refused with its rule ids, confirmed and executed with its receipt id and status, or done, or that nothing was proposed, changed or sent. The app can rely on that last sentence even when the model's words before it are wrong.
+
+The system prompt tells the model which receipts the student may trace, their own and those sent to them, so a parent's transfer such as `cn_bank_remit_sim-in-0001` can be traced in chat as through `POST /trace`. A standing mandate's tolerance, notice and cancel window are Lifeline's settings, 5 percent, 48 hours and 24 hours, unless the student states others in their own words; the confirmation states all three, and the day of the month must be in the student's words.
+
 The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, `warn.freeze.card`, and `warn.standing.new`, the last for setting up a recurring transfer. Translate them in the app. A payment the student makes under one of their standing mandates, within its pattern, comes back from `/chat` with a `receipt` straight away, decided under rule R12 without a confirmation. A transfer under a standing mandate the student stopped is refused under R12. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
 
 ## GET /health
@@ -102,7 +106,7 @@ Response `200`, a transfer waiting for confirmation:
 
 ```json
 {
-  "text": "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD and exchange cost 0 SGD. Nothing moves until you confirm.",
+  "text": "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD and exchange cost 0 SGD. Nothing moves until you confirm. This turn: a transfer of 1200 SGD to landlord_sp: proposed, waiting for your confirmation.",
   "lang": "en",
   "confirmation": {
     "action": {
@@ -247,7 +251,7 @@ Response `200`, refused because the payee and amount came only from the paste. T
 
 ```json
 {
-  "text": "I cannot do that. Rules: R01. This action came from pasted_text, which is data and never an instruction. Only the user's own turn can ask for an action.",
+  "text": "Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action. I cannot do that. Rules: R01. This action came from pasted_text, which is data and never an instruction. Only the user's own turn can ask for an action. This turn: a transfer: refused under R01.",
   "lang": "en",
   "confirmation": null,
   "decision": {
@@ -300,7 +304,7 @@ Response `200`, the payment made:
 
 ```json
 {
-  "text": "Done. 1200 SGD was sent over wise. Receipt wise-0001.",
+  "text": "Done. 1200 SGD was sent over wise. Receipt wise-0001. This turn: a transfer of 1200 SGD to landlord_sp: confirmed and executed, receipt wise-0001, status completed.",
   "lang": "en",
   "confirmation": null,
   "decision": {
@@ -345,7 +349,7 @@ Response `200` when the token was already used to pay. The action it paid is reb
 
 ```json
 {
-  "text": "I cannot do that. Rules: R10. Idempotency key student_001:t1:propose_transfer:1 was already executed.",
+  "text": "I cannot do that. Rules: R10. Idempotency key student_001:t1:propose_transfer:1 was already executed. This turn: a transfer of 1200 SGD to landlord_sp: refused under R10.",
   "lang": "en",
   "confirmation": null,
   "decision": {
@@ -377,7 +381,7 @@ Response `200` when the token was never issued, has expired, was refused when it
 
 ```json
 {
-  "text": "That confirmation was not found, so nothing was sent.",
+  "text": "That confirmation was not found, so nothing was sent. This turn: a confirmation: not accepted, so nothing was done.",
   "lang": "en",
   "confirmation": null,
   "decision": null,
@@ -415,7 +419,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
 
 ```json
 {
-  "text": "wise failed and nothing was charged under student_001:t1:propose_transfer:1. The next best route is bank_wire, fee 25 SGD. Confirm to send over it.",
+  "text": "wise failed and nothing was charged under student_001:t1:propose_transfer:1. The next best route is bank_wire, fee 25 SGD. Confirm to send over it. This turn: a transfer of 1200 SGD to landlord_sp: confirmed but not executed.",
   "lang": "en",
   "confirmation": {
     "action": {
@@ -1162,7 +1166,7 @@ Response `200`:
 
 ```json
 {
-  "text": "Lifeline started a rescue. First answer the question you set before you left: What are the last four characters of your student pass number?",
+  "text": "Lifeline started a rescue. First answer the question you set before you left: What are the last four characters of your student pass number? This turn: nothing was proposed, changed or sent.",
   "lang": "en",
   "confirmation": null,
   "decision": null,
@@ -1210,7 +1214,7 @@ Response `200`:
 
 ```json
 {
-  "text": "That answer does not match your plan, so Lifeline did nothing. Try again: What are the last four characters of your student pass number?",
+  "text": "That answer does not match your plan, so Lifeline did nothing. Try again: What are the last four characters of your student pass number? This turn: nothing was proposed, changed or sent.",
   "lang": "en",
   "confirmation": null,
   "decision": null,
@@ -1248,7 +1252,7 @@ Response `200`:
 
 ```json
 {
-  "text": "That answer matches your plan. Please confirm: freeze card wise:card_01. Nothing changes until you confirm.",
+  "text": "That answer matches your plan. Please confirm: freeze card wise:card_01. Nothing changes until you confirm. This turn: the identity check: done; a card freeze: proposed, waiting for your confirmation.",
   "lang": "en",
   "confirmation": {
     "action": {
@@ -1321,7 +1325,7 @@ Response `200`:
 
 ```json
 {
-  "text": "Done. Card wise:card_01 is frozen. Your plan says a phone wallet holds this card. Remove the card from the wallet on your phone, because Lifeline cannot do that for you. From now on use your backup card revolut:card_02. If you need money now, confirm this transfer; if not, continue without it. Please confirm: send 300 SGD to self_sg for emergency over wise, fee 0 SGD and exchange cost 0 SGD. Nothing moves until you confirm.",
+  "text": "Done. Card wise:card_01 is frozen. Your plan says a phone wallet holds this card. Remove the card from the wallet on your phone, because Lifeline cannot do that for you. From now on use your backup card revolut:card_02. If you need money now, confirm this transfer; if not, continue without it. Please confirm: send 300 SGD to self_sg for emergency over wise, fee 0 SGD and exchange cost 0 SGD. Nothing moves until you confirm. This turn: a card freeze: confirmed, result done; moving payments to the backup card: done; a transfer of 300 SGD to self_sg: proposed, waiting for your confirmation.",
   "lang": "en",
   "confirmation": {
     "action": {
@@ -1443,7 +1447,7 @@ Response `200`:
 
 ```json
 {
-  "text": "Done. 300 SGD was sent over wise. Receipt wise-0001. Lifeline has no sourced link to the issuer's app. Order a replacement card in the issuer's app. Wise estimates that a replacement Wise card takes 3 working days to arrive in Singapore. Working days are Monday to Friday and do not include weekends or public holidays. (https://wise.com/help/articles/2935787/how-do-i-replace-or-cancel-my-wise-card) You have no standing payments to stop. Lifeline wrote a notice for Ana, and the app delivers it. The rescue is complete.",
+  "text": "Done. 300 SGD was sent over wise. Receipt wise-0001. Lifeline has no sourced link to the issuer's app. Order a replacement card in the issuer's app. Wise estimates that a replacement Wise card takes 3 working days to arrive in Singapore. Working days are Monday to Friday and do not include weekends or public holidays. (https://wise.com/help/articles/2935787/how-do-i-replace-or-cancel-my-wise-card) You have no standing payments to stop. Lifeline wrote a notice for Ana, and the app delivers it. The rescue is complete. This turn: a transfer of 300 SGD to self_sg: confirmed and executed, receipt wise-0001, status completed; the family notice: done.",
   "lang": "en",
   "confirmation": null,
   "decision": {
@@ -1515,7 +1519,7 @@ Response `200`, with the token and the times replaced by placeholders:
 
 ```json
 {
-  "text": "Please confirm: send 40000 INR to student_001 for gift over upi_paynow_sim, fee 0 INR and exchange cost 0 INR. Nothing moves until you confirm.",
+  "text": "Please confirm: send 40000 INR to student_001 for gift over upi_paynow_sim, fee 0 INR and exchange cost 0 INR. Nothing moves until you confirm. This turn: a transfer of 40000 INR to student_001: proposed, waiting for your confirmation.",
   "lang": "en",
   "confirmation": {
     "action": {

@@ -4016,6 +4016,47 @@ def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
         )
 ```
 
+`receipts_block` is the fourth part, from stranger task T07 and decision 145: the receipts the student may trace, each with its rail, its status and whether it was sent to the student, or that there are none, so the model knows a parent's transfer exists before it tells the student it cannot be traced. `_traceable` reads them again on every turn: the student's own receipts from their ledger, in the order they were issued, then every receipt in `_receipt_rails`, which also holds the inbound receipts, with `dict.fromkeys` keeping each id once and in order. The status comes from the rail's own `status`, which reads and changes nothing; a rail that cannot answer gives `unknown`, and the model is told so rather than left without the receipt.
+
+```python
+def receipts_block(receipts: list[tuple[str, str, str, bool]]) -> str:
+    """The receipts the student may trace, written for the system prompt from the student's own ledger and the
+    inbound receipt map: each id with its rail, its status as the rail reports it, and whether it was sent to the
+    student. trace_transfer finds no other. Source: docs/decisions.md, decision 145, from the stranger task T07.
+    """
+    if not receipts:
+        return "Receipts the student may trace: none."
+    lines = [
+        f"{receipt_id} on {rail}, status {status}" + (", sent to the student" if inbound else "")
+        for receipt_id, rail, status, inbound in receipts
+    ]
+    return "Receipts the student may trace, the only ones trace_transfer can find: " + "; ".join(lines) + "."
+```
+
+```python
+    def _traceable(self, user_id: str) -> list[tuple[str, str, str, bool]]:
+        """Every receipt the student may trace, read again on every turn: their own, in the order their ledger issued
+        them, then those sent to them, each with its rail, its status as the rail reports it now, and whether it
+        was sent to the student. Reading a status changes nothing on the rail."""
+        own = [
+            entry.payload.get("receipt", {}).get("receipt_id")
+            for entry in self._ledger.entries()
+            if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+        ]
+        rails = self._receipt_rails.get(user_id, {})
+        listed = []
+        for receipt_id in dict.fromkeys([*own, *rails]):
+            rail = rails.get(receipt_id)
+            if not receipt_id or rail is None:
+                continue
+            try:
+                status = self._rails[rail].status(receipt_id).status.value
+            except (RailError, KeyError):  # anti-pattern: SILENT-EXCEPT ok, the model is told the status is unknown
+                status = "unknown"
+            listed.append((receipt_id, rail, status, receipt_id not in own))
+        return listed
+```
+
 ```python
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
 ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
@@ -5015,6 +5056,8 @@ def _untrusted_fields(
     return untrusted
 ```
 
+`_own_record` is decision 143, from stranger tasks T03 and T15. A value is the student's own when it is one of their records, a payee their current mandate lists or a receipt their ledger or their inbound transfers hold, and two conditions hold: the student's words this turn name no other record of the same kind, and no paste or tool result this turn names a record the student's words do not. `trail.this_turn` holds only the current turn's pastes and tool results, so a payee the model named three turns ago no longer counts against the student, while one a paste names right now still does. `_untrusted_fields` asks it before treating a payee or a receipt as data. Set difference, `named - {value}`, gives the records named other than this one. `_standing_terms` is the same decision for a standing mandate, from stranger task T10: each term the model gives is kept when the student's words hold its value, kept for the check to refuse when only this turn's paste or tool result holds it, and otherwise replaced by `STANDING_DEFAULTS`, the names of the replaced ones returned beside the terms so the check never reads a default as data. `Decimal(str(value))` raises `InvalidOperation` for text that is not a number, which is read as no value. The day of the schedule is never replaced; `_untrusted_fields` refuses a day the student's words do not hold.
+
 `detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. A third, `from_outside`, holds pastes, translations and tool results without the model's own words; the terms of a new standing mandate are traced against it, because the loop's own confirmation sentence, which the memory keeps as the model's words, repeats the terms of a standing mandate the student already confirmed. Its name starts with an underscore because nothing outside this module uses it. `_Waiting` holds what the rebuild learns from the ledger about a confirmation that may still be waiting, before it becomes a `PendingConfirmation`. `_remembered` copies a message keeping only `REMEMBERED_FIELDS`, so the provider's reasoning blocks and the model's name are not kept. `_for_model` wraps a pasted message in `PASTED_FRAME` whenever it is sent, so pasted text is stored as it was pasted and always reaches the model marked as data. `_bounded` keeps the last twenty messages and then drops any at the front until the first is from the student, so the history never opens with a tool result whose call was trimmed away. `_closing_results` answers every tool call of an answer whose turn ended at one of them, the first with a note that the reply follows and the rest as not run, because a provider rejects a tool call with no result. When the reply is a confirmation the council advised on, the first result also carries that advice, which is how a student who asks in the next turn why that route was chosen is answered from the conversation instead of from a guess. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine. Since the Stage 10 review a payee id is also looked for as a whole word, with `_named_in`, on both sides, so `maria.santos` inside `maria.santos@nubank` in a paste is found there, and the same id glued to more text in the student's own words is still theirs. A card a freeze names is untrusted when only data names it, and the terms of a new standing mandate, its tolerance, its notice and cancel hours and its day of the month, are untrusted when a value appears in data from outside and not in the student's words. `_standing_from` builds a `StandingMandate` from a confirmed `create_standing_mandate` action, its confirmation time, and its token; it raises when the action has no terms, which the engine's R04 already prevents. `_Rescue` and `_Outcome` are the rescue's records, described with the rescue below, `RESTING` names the states where it waits for the student, `_from_student` says whether a message is the student's own turn, and `_normal` is how the identity answer is compared: outer spaces stripped and case folded, and nothing more.
 
 ```python
@@ -5349,7 +5392,20 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return self._told(user_id, reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 ```
 
-`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. `_remember` appends the messages to the conversation store as one record, then writes a `turn` entry to the ledger that holds only how many messages there were, so the ledger never holds the student's words. It then adds the messages to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
+`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. Last, `_told` adds the sentence `_turn_summary` writes, decision 146. It walks the call's entries once and groups them by idempotency key, the key read from wherever each kind holds it, then asks `_summary_item` what each action did: refused with its rule ids, executed with a receipt, confirmed with or without a result, done at T1, or proposed and waiting; a read at T0 and an allowed step that did nothing give `None` and are left out, which the walrus operator, `:=`, filters in the same comprehension that builds the list. A confirmation call holds no proposal, so `_proposed_action` finds the action in the proposal an earlier call wrote. `_summary_what` names a transfer by its amount and payee and any other action by `SUMMARY_WHAT`, and names a request from data by its kind only. The sentence passes `_redacted`, the reply guard's patterns, and joins the reply after the text the memory stored.
+
+```python
+def _injection_sentence(lang: str, payload: dict[str, Any]) -> str:
+    """What the student is told a blocked request from data asked for: its kind and where it came from, never an
+    address or an amount it carried, and that Lifeline did not do it. Source: docs/decisions.md, decision 144."""
+    pasted = Source.PASTED_TEXT.value in (payload.get("fields") or {}).values()
+    origin = _text(lang, "injection_from_paste" if pasted else "injection_from_data")
+    what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(payload.get("tool"))) or _text(lang, "injection_act")
+    return _text(lang, "injection_blocked", origin=origin, what=what)
+```
+
+`_injection_sentence` reads the fields of an `injection_suspected` entry: when any came from a paste the sentence says text the student pasted, otherwise information Lifeline read. The kind comes from `INJECTION_WHAT` in the student's language, which names a payment and a standing payment as well as the T1 tools, and `injection_act` covers a tool it does not know.
+ `_remember` appends the messages to the conversation store as one record, then writes a `turn` entry to the ledger that holds only how many messages there were, so the ledger never holds the student's words. It then adds the messages to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
 
 ```python
     def _run_tool(
@@ -9230,6 +9286,64 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
 ```
 
 `evaluate` walks both suites in order and gives every entry a result. An entry starts as not automated, and it becomes passed or failed only when `suites/scenarios/<id>.yaml` exists and has been run. A scenario whose `id` does not match its file name, or that has no runs, fails. That is why a missing or empty scenario can never count as passed.
+
+```python
+class StrangerResult:
+    """One file of a stranger run, judged against its expected_failing flag."""
+
+    file: str
+    id: str
+    task: str
+    run: str
+    expected_failing: bool
+    status: str
+    runs: list[RunResult] = field(default_factory=list)
+    note: str | None = None
+```
+
+```python
+def evaluate_stranger(suites_dir: Path = SUITES_DIR, stranger_dir: Path | None = None) -> list[StrangerResult]:
+    """Play every file in the stranger folder and judge it against its flag.
+
+    A file passes or fails as a scenario does. One marked expected_failing that fails is expected failing; one so
+    marked that passes is a failure of the suite, because its fix must be recorded by removing the flag in the
+    same pull request; one not so marked that fails is a failure. Its id must name an entry in a suite.
+    Source: docs/decisions.md, decision 147.
+    """
+    stranger_dir = suites_dir / "scenarios" / "stranger" if stranger_dir is None else stranger_dir
+    ids = {entry["id"] for _, filename in SUITES for entry in load_suite(suites_dir / filename)}
+    results = []
+    for path in sorted(stranger_dir.glob("*.yaml")) if stranger_dir.is_dir() else []:
+        scenario = load_suite(path)
+        flagged = scenario.get("expected_failing") is True
+        entry_id = str(scenario.get("id", ""))
+        if entry_id in ids:
+            runs, note = _run_file(path, entry_id)
+        else:
+            runs, note = [RunResult([], [f"{entry_id or 'the file'} names no entry in a suite"])], scenario.get("note")
+        passed = all(run.passed for run in runs)
+        status = {(True, False): PASSED, (True, True): FLAG_TO_REMOVE, (False, True): EXPECTED_FAILING}.get((passed, flagged), FAILED)
+        results.append(
+            StrangerResult(path.name, entry_id, str(scenario.get("stranger_task", "")), str(scenario.get("stranger_run", "")), flagged, status, runs, note)
+        )
+    return results
+```
+
+```python
+def stranger_failures(results: list[StrangerResult]) -> list[str]:
+    """Why the stranger runs fail the suite, one line per file: a flagged file that passes, or a file that fails
+    without the flag."""
+    lines = []
+    for result in results:
+        if result.status == FLAG_TO_REMOVE:
+            lines.append(f"{result.file} passes but is marked expected_failing: remove the flag in the pull request that fixed it.")
+        elif result.status == FAILED:
+            reasons = "; ".join(failure for run in result.runs for failure in run.failures)
+            lines.append(f"{result.file} fails: {reasons}")
+    return lines
+```
+
+`evaluate_stranger` is decision 147. It plays every file in `suites/scenarios/stranger` through the same `_run_file`, after checking that the file's id names a suite entry, and then reads the result against the file's `expected_failing` flag. The dictionary keyed by the pair `(passed, flagged)` gives the status for three of the four cases, and `.get` falls back to failed for the fourth, a file that fails without the flag. `stranger_failures` turns the two failing statuses into one line each, which `main` prints and which make the harness exit with 1, so a fix that lands without removing its flag stops CI. The stranger runs never touch the results of `evaluate`, so the 58 entries keep their counts.
 
 ```python
 def _run_file(path: Path, entry_id: str, live: "LiveProvider | None" = None) -> tuple[list[RunResult], str | None]:
