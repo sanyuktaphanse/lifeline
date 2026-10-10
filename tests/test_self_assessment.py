@@ -151,3 +151,11 @@ def test_every_cited_test_exists():
         if not re.search(rf"^def {name}\(", _text(ROOT / path), re.M)
     ]
     assert missing == []
+
+
+def test_the_readme_and_the_technical_reference_opening_name_the_collected_count():
+    collected = collected_sentence().removeprefix("`pytest` collects ")
+    readme = _text(ROOT / "README.md")
+    opening = _text(REFERENCE).split("\n\n")[1]
+    assert f"`pytest` collects {collected}" in readme
+    assert f"The suite collects {collected}" in opening

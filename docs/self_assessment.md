@@ -1,6 +1,6 @@
 # Lifeline security and compliance self assessment
 
-This is item 5 of the submission: the permission tier implementation and the known risk list. It describes the branch that adds it, which is `main` at commit `3483ac5`, 10 October 2026, plus this document and its test. It follows the twelve areas of section 17 of the master plan, the PDF in `docs/hackathon/`, in order; that PDF's own contents list numbers the section 10. Each area says what we claim, the evidence a judge can open, and what we do not claim. Lane B's draft in pull request 41, still open, was the starting point, and its sentences are kept where they still hold.
+This is item 5 of the submission: the permission tier implementation and the known risk list. It describes `main` at commit `fcae759`, 10 October 2026, with the accuracy fixes of the same day, which changed the test count, the Python version the commands name, and how the code loads `.env`. It follows the twelve areas of section 17 of the master plan, the PDF in `docs/hackathon/`, in order; that PDF's own contents list numbers the section 10. Each area says what we claim, the evidence a judge can open, and what we do not claim. Lane B's draft in pull request 41, still open, was the starting point, and its sentences are kept where they still hold.
 
 `tests/test_self_assessment.py` rebuilds these numbers from their sources and fails when the document no longer says them: the attack counts, the `make evidence` line, the 149 attempts that held and their split by attack, the 24 refuted entries naming 31 breaks, the 11 confirmed breaks, the stranger verdicts, the stranger replays after the fixes, and the number of tests pytest collects. It also fails when a test this document cites no longer exists. No other number is checked by a test.
 
@@ -148,7 +148,7 @@ This is item 5 of the submission: the permission tier implementation and the kno
 5. Production needs both secrets: `tests/test_attack_seven.py::test_an_empty_secret_in_production_stops_the_api_at_start`.
 6. Attacks X10 and X20 play it.
 
-**What we do not claim.** A value the model itself types into a tool's arguments can come back in `decision.reasons`, `council.reason`, the reminders and the monthly summary, breaks F-B1 to F-B3, and is written to the ledger unguarded, open item 101. The guard misses a card number written in words or split across replies, open item 101, a secret in fullwidth letters or with an invisible character, open item 109, and a card number given as a payee id inside the confirmation object, open item 110; each of 109, 110 and the ledger case of 101 is a strict expected failure in `tests/test_attack_one.py`. The master plan proposed a repository scan for secrets on every pull request; CI does not run one. A clone made inside the repository folder reads the repository's `.env`, open item 173.
+**What we do not claim.** A value the model itself types into a tool's arguments can come back in `decision.reasons`, `council.reason`, the reminders and the monthly summary, breaks F-B1 to F-B3, and is written to the ledger unguarded, open item 101. The guard misses a card number written in words or split across replies, open item 101, a secret in fullwidth letters or with an invisible character, open item 109, and a card number given as a payee id inside the confirmation object, open item 110; each of 109, 110 and the ledger case of 101 is a strict expected failure in `tests/test_attack_one.py`. The master plan proposed a repository scan for secrets on every pull request; CI does not run one. Until 10 October 2026 a clone made inside the repository folder read the repository's `.env`; the adapter now reads only the `.env` beside its own root, `tests/test_model_adapter.py::test_a_clone_inside_another_folder_never_reads_the_parent_folders_env`, which closed open item 173.
 
 ## 9. Data and privacy
 
@@ -267,14 +267,14 @@ What was fixed, decisions 143 to 147: the student's own records are no longer re
 
 ```bash
 git clone https://github.com/sanyuktaphanse/lifeline.git
-cd lifeline && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+cd lifeline && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 pytest
 make evidence
 python -c "from core.harness import evaluate; r=[e for e in evaluate() if e.suite=='attacks']; print(len(r), 'attacks,', sum(e.status=='passed' for e in r), 'passed, not passed:', [e.id+' '+e.status for e in r if e.status!='passed'])"
 ```
 
-1. Clone the repository and install, in a virtual environment named `.venv`. The repository is private on 10 October 2026, so a judge needs the access the submission grants, or the submitted archive in place of the clone.
-2. Since the technical documentation added its own test, `pytest` collects 1502 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
+1. Clone the repository and install, in a virtual environment named `.venv`. Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. The repository is private on 10 October 2026, so a judge needs the access the submission grants, or the submitted archive in place of the clone.
+2. After the accuracy fixes of 10 October, `pytest` collects 1506 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
 3. `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`, whose By suite table shows the attacks: 28 entries, 27 passed, 1 not automated.
 4. The last command plays the attack scenarios alone and prints `28 attacks, 27 passed, not passed: ['X25 not automated']`.
 5. The attempts behind the security review are in the section Attacks attempted and held of `docs/technical-reference.md`, and the stranger test is `docs/stranger_test.md`.

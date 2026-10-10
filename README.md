@@ -2,12 +2,12 @@
 
 Lifeline is a cross border finance agent for students studying abroad, built for the 2026 Shenzhen FinTechathon. It has two jobs. It helps the student move money across borders, and it protects the student from scams, fraud, and costly mistakes. Every action that moves money passes a plain Python mandate engine first. Lifeline is instructed never to give investment advice; one sentence of the system prompt carries that rule, and no code checks the model's words, as open item 170 of the technical reference records.
 
-This README describes `main` at commit `c824610`, 10 October 2026. The repository is https://github.com/sanyuktaphanse/lifeline.
+This README describes `main` at commit `fcae759`, 10 October 2026, with the accuracy fixes of the same day. The repository is https://github.com/sanyuktaphanse/lifeline.
 
 ## Quick start
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pytest
@@ -15,15 +15,15 @@ make evidence
 make dev
 ```
 
-CI runs Python 3.12, and 3.13 works too. Name the virtual environment `.venv` in the repository folder, because the Makefile runs `.venv/bin/python` when it exists and plain `python` otherwise.
+Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. CI runs 3.12, and 3.13 works too. Name the virtual environment `.venv` in the repository folder, because the Makefile runs `.venv/bin/python` when it exists and plain `python` otherwise.
 
-`pytest` collects 1480 tests: 1473 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
+`pytest` collects 1506 tests: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
 
 `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`.
 
 `make dev` starts the API on `http://127.0.0.1:8000`. `GET /health` answers `{"status": "ok", ...}`, and FastAPI serves interactive documentation at `/docs`. [docs/api.md](docs/api.md) describes every endpoint.
 
-None of these needs a key or a `.env` file. Only `/chat` and the live evidence runs call a model; for those, copy `.env.example` to `.env` and fill in the provider keys. The code loads `.env` from the current folder or any folder above it, so a clone made inside this folder with no `.env` of its own reads this folder's keys; give such a clone its own empty `.env`, as open item 173 explains.
+None of these needs a key or a `.env` file. Only `/chat` and the live evidence runs call a model; for those, copy `.env.example` to `.env` and fill in the provider keys. The code loads only the `.env` beside the repository root, found from its own path, and never a parent folder's, so a clone made inside this folder reads its own `.env` or none, never this folder's keys.
 
 The API is for developer machines only. It binds to `127.0.0.1` and has no sign in. With `LIFELINE_ENV=production` it refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set. A deployment guide is a lane B deliverable and is not written yet.
 
@@ -42,20 +42,21 @@ The API is for developer machines only. It binds to `127.0.0.1` and has no sign 
 
 1. The frontend. Lane C builds it against the API.
 2. A real rail. The Wise sandbox rail is in review as pull request 39; no money moves anywhere today.
-3. The security self assessment and the technical documentation for submission, build program Stages 16 and 17. Until then the technical reference sections Tiers, The mandate engine, and Attacks attempted and held, and its open items, are the security design and the known risks.
-4. A deployment guide.
+3. A deployment guide.
 
 ## Documents
 
 For readers and judges:
 
-1. [docs/technical-reference.md](docs/technical-reference.md) explains what is built and why, and ends with the open items.
-2. [docs/code-walkthrough.md](docs/code-walkthrough.md) walks through every file of code.
-3. [docs/api.md](docs/api.md) describes the HTTP API.
-4. [docs/decisions.md](docs/decisions.md) records the product decisions, newest last.
-5. [docs/stranger_test.md](docs/stranger_test.md) records twenty live tasks run as a stranger would.
-6. [docs/knowledge_audit.md](docs/knowledge_audit.md) audits the knowledge base against its sources, and [rails/knowledge/README.md](rails/knowledge/README.md) sets its rules.
-7. [chain/README.md](chain/README.md) says how to run the local FISCO BCOS network.
+1. [docs/technical_documentation.md](docs/technical_documentation.md) is the technical documentation for submission: the architecture, the core algorithms, the security design and the measured results, with the evidence report as its last appendix; `tests/test_technical_documentation.py` rebuilds its numbers from their sources.
+2. [docs/self_assessment.md](docs/self_assessment.md) is the security and compliance self assessment: twelve areas, each with what is claimed, the tests that prove it and what is not claimed, then the known limitations; `tests/test_self_assessment.py` rebuilds its numbers from their sources.
+3. [docs/technical-reference.md](docs/technical-reference.md) explains what is built and why, and ends with the open items.
+4. [docs/code-walkthrough.md](docs/code-walkthrough.md) walks through every file of code.
+5. [docs/api.md](docs/api.md) describes the HTTP API.
+6. [docs/decisions.md](docs/decisions.md) records the product decisions, newest last.
+7. [docs/stranger_test.md](docs/stranger_test.md) records twenty live tasks run as a stranger would.
+8. [docs/knowledge_audit.md](docs/knowledge_audit.md) audits the knowledge base against its sources, and [rails/knowledge/README.md](rails/knowledge/README.md) sets its rules.
+9. [chain/README.md](chain/README.md) says how to run the local FISCO BCOS network.
 
 Team working files: [docs/build_program.md](docs/build_program.md), the lane A build program; [docs/i18n_review.md](docs/i18n_review.md), wording that waits for a native speaker; [docs/journal.md](docs/journal.md), which stops at 15 September; and [docs/hackathon/](docs/hackathon/), the competition's rules, schedule and forms.
 
@@ -77,7 +78,7 @@ Read [CLAUDE.md](CLAUDE.md) before contributing. It holds the scope, the layout,
 
 ## Evidence
 
-At `c824610` the report counts 66 suite entries. Of the 38 tasks, 31 pass and 7 are not automated; of the 28 attacks, 27 pass and 1 is not automated; none fails. Their runs count 79 in English, 24 in Portuguese and 26 in Chinese, a run that switches language counted under each. `evidence/` is ignored by git, so the report is not in the repository; run `make evidence`, or open the `evidence-report` artifact of the latest CI run on `main` under the repository's Actions tab.
+At `fcae759` the report counts 66 suite entries. Of the 38 tasks, 31 pass and 7 are not automated; of the 28 attacks, 27 pass and 1 is not automated; none fails. Their runs count 79 in English, 24 in Portuguese and 26 in Chinese, a run that switches language counted under each. `evidence/` is ignored by git, so the report is not in the repository; run `make evidence`, or open the `evidence-report` artifact of the latest CI run on `main` under the repository's Actions tab.
 
 The stranger runs replay, with a scripted model, the seventeen tasks of [docs/stranger_test.md](docs/stranger_test.md) that did not work in the live stranger test of 9 October, which judged 3 of 20 tasks worked, 12 worked badly and 5 failed. Each replay checks only what the code writes. After the fixes of pull request 43, 16 pass and 1 is still expected failing; a live model has not been judged again since.
 

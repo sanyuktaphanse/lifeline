@@ -1953,6 +1953,7 @@ import logging
 import os
 from collections.abc import Callable, Mapping, Sequence
 from http import HTTPStatus
+from pathlib import Path
 from typing import Any
 
 import anthropic
@@ -2008,11 +2009,17 @@ class MissingApiKey(ProviderUnavailable):
     pass
 
 
+# The .env beside the repository root this module belongs to, found from the module's own path, never a
+# parent folder's: a clone made inside another checkout must not read that checkout's keys. Source:
+# docs/technical-reference.md, open item 173.
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+
 def _setting(env: Mapping[str, str], name: str, default: str) -> str:
     return env.get(name) or default
 ```
 
-Three exception classes form a small hierarchy. `ModelAdapterError` keeps its message as an ordinary exception does, through `super().__init__(message)`, and also holds the provider and the status code as attributes, both `None` when there was no provider answer, such as a missing key. `pass` means the two subclasses add nothing beyond their names. Catching `ProviderUnavailable` catches both a provider outage and a missing key, which is exactly the set of failures that should switch providers. `_setting` uses `or`, so both a missing variable and an empty one give the default.
+Three exception classes form a small hierarchy. `ModelAdapterError` keeps its message as an ordinary exception does, through `super().__init__(message)`, and also holds the provider and the status code as attributes, both `None` when there was no provider answer, such as a missing key. `pass` means the two subclasses add nothing beyond their names. Catching `ProviderUnavailable` catches both a provider outage and a missing key, which is exactly the set of failures that should switch providers. `_setting` uses `or`, so both a missing variable and an empty one give the default. `ENV_FILE` is the `.env` beside the repository root, found from this file's own path: `Path(__file__).resolve()` is this file, its `parent` is `core/` and that folder's `parent` is the root. `environment` passes it to `load_dotenv`, so only that file is read and never one in a parent folder, which closed open item 173.
 
 ```python
 def _status_failure(
@@ -10420,7 +10427,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 1480 tests, as `pytest --collect-only` counts them at `c824610`: 1473 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
+There are 1506 tests, as `pytest --collect-only` counts them after the accuracy fixes of 10 October 2026: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -11383,7 +11390,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
 | `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 141 parametrized tests add 376 extra runs, which is how 1104 test functions become 1480 tests. The table above is not complete: it has no rows for 239 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
+In all, 141 parametrized tests add 376 extra runs, which is how 1130 test functions become 1506 tests. The table above is not complete: it has no rows for 239 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
 
 ## The Stage 8a tests
 
