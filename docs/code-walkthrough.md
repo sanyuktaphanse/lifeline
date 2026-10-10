@@ -1,8 +1,8 @@
 # Lifeline code walkthrough
 
-This document walks through every file of code in the Lifeline repository as of 8 October 2026, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, then the conversation's own erasable store, then standing mandates under rules R12 and R13, then their follow up: receipts linked to the mandate version, the scheduler endpoint and tick, retry on the next route, and stopping a standing mandate, and then scenarios for every suite entry the code can already satisfy, and then the harness features those scenarios were missing, a choice of rails, a rail that fails once, scripted traces, a turn whose language the loop detects, a paste beside the student's words, and a tampered ledger entry, and then the council, five voices and a chair written in code that advise which route should carry a large or unusual transfer, together with what two attacker briefs found in it, and then the rescue, a state machine from S0 to S9 that walks a student through a lost card, with its knowledge loader, its identity lock, and what two more attacker briefs found, and then the simulated rails, Pix, UPI to PayNow and a China bank remittance, whose every limit and purpose is read from a sourced knowledge entry, with their scripted statuses and the parent's transfer a student can trace, so it can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
+This document walks through every file of code in the Lifeline repository as of 10 October 2026, `main` at commit `c824610`, including the agent loop, the fake router, the fake rail, the contract changes that came with them, and the changes of 18 September: allowed decisions that cite their rule, amountless transfers refused under R04, payment details from tool output treated as untrusted, and the rail's own simulated flag, followed by the second set of the same day: every T2 action confirmed, untrusted payment details routed through the engine, suspected injections as their own ledger entry kind, and a receipt named after its rail, then the T2 tools: adding a payee with a cooling period under R14, and freezing a card with an honest path when the issuer does not allow it, then mandate versions, payees rebuilt from the ledger, provenance for new payees, and a structured freeze result, then the evaluation harness that runs the suites as scenarios, then the HTTP API for the app, and then its hardening with pasted text, a ledger kept in a file, and the retry token, and then conversation memory, a ledger entry for every confirmation attempt, the amount ceiling, and unique receipt ids, then the conversation's own erasable store, then standing mandates under rules R12 and R13, then their follow up: receipts linked to the mandate version, the scheduler endpoint and tick, retry on the next route, and stopping a standing mandate, and then scenarios for every suite entry the code can already satisfy, and then the harness features those scenarios were missing, a choice of rails, a rail that fails once, scripted traces, a turn whose language the loop detects, a paste beside the student's words, and a tampered ledger entry, and then the council, five voices and a chair written in code that advise which route should carry a large or unusual transfer, together with what two attacker briefs found in it, and then the rescue, a state machine from S0 to S9 that walks a student through a lost card, with its knowledge loader, its identity lock, and what two more attacker briefs found, and then the simulated rails, Pix, UPI to PayNow and a China bank remittance, whose every limit and purpose is read from a sourced knowledge entry, with their scripted statuses and the parent's transfer a student can trace, and then what came after Stage 9: the fixes of the Stage 10 security review and the integrity hold, the Stage 13 multilingual review and its one formatter, the Stage 11 live harness and provider swap, the live findings, the Stage 12 knowledge audit and its corrections, the Stage 14 stranger scenarios, and the stranger fixes, which made the student's own records not data, made the injection sentence always reach the student, told the model the receipts it can trace, and ended every reply with a summary the code writes. It can be used to learn the code in depth and to look things up later. `docs/technical-reference.md` explains why the system is designed the way it is. This document explains the code itself: what each line does, which Python feature it uses, and why it is written that way.
 
-Every Python excerpt below is copied exactly from the file it names, and `tests/test_walkthrough.py` checks that it still is. Read the files in the order they appear here, because each one builds on the ones before it.
+Every excerpt below is copied exactly from its file. `tests/test_walkthrough.py` checks each Python excerpt under a heading that names a Python file and each YAML excerpt under a heading that names a YAML file; the others, such as the Makefile and the scenario files quoted under a section heading, were checked by hand against `main` at `c824610` on 10 October 2026. Read the files in the order they appear here, because each one builds on the ones before it.
 
 ## Contents
 
@@ -14,39 +14,43 @@ Every Python excerpt below is copied exactly from the file it names, and `tests/
 6. The interfaces, `contracts/interfaces.py`
 7. The rail errors, `contracts/errors.py`
 8. The ledger, `core/ledger.py`
-9. The conversation store, `core/conversation_store.py`
-10. The fake model adapter, `core/fake_adapter.py`
-11. The FISCO BCOS anchor, `core/anchor_fisco.py`
-12. Building a FISCO BCOS transaction, `core/fisco_tx.py`, and signing it, `core/evm_tx.py`
-13. The evidence contract, `chain/LifelineEvidence.sol`
-14. The model adapter, `core/model_adapter.py`
-15. The fake router, `rails/fake_router.py`
-16. The fake rail, `rails/fake_rail.py`
-17. The knowledge loader, `rails/knowledge/loader.py`
-18. The rail rules, `rails/sim/rules.py`
-19. The simulated rail base, `rails/sim/base.py`
-20. Simulated UPI to PayNow, `rails/sim/upi_paynow.py`
-21. Simulated Pix, `rails/sim/pix.py`
-22. Simulated China bank remittance, `rails/sim/cn_bank_remit.py`
-23. Inbound transfers, `rails/inbound.py`
-24. The council, `core/council.py`
-25. The rescue machine, `core/rescue.py`
-26. The agent loop, `core/agent.py`, with the rescue
-27. The monthly note, `core/monthly.py`
-28. Amounts and dates, `core/format.py`
-29. The evaluation harness, `core/harness.py`
-30. The API, `api/main.py`
-31. The tests
-32. The Stage 8a tests
-33. The Stage 8b tests
-34. The suites and their scenarios
-35. The Stage 8a scenarios
-36. The Stage 8b scenarios
-37. The knowledge base, `rails/knowledge/`
-38. The provider entries, `rails/knowledge/providers.yaml`
-39. The demo parent, `fixtures/demo_parent.yaml`
-40. Configuration files
-41. Commands used to build and check the repo
+9. The local anchor, `core/anchor_local.py`
+10. The conversation store, `core/conversation_store.py`
+11. The fake model adapter, `core/fake_adapter.py`
+12. The FISCO BCOS anchor, `core/anchor_fisco.py`
+13. Building a FISCO BCOS transaction, `core/fisco_tx.py`
+14. The evidence contract, `chain/LifelineEvidence.sol`
+15. The model adapter, `core/model_adapter.py`
+16. The fake router, `rails/fake_router.py`
+17. The fake rail, `rails/fake_rail.py`
+18. The knowledge loader, `rails/knowledge/loader.py`
+19. The rail rules, `rails/sim/rules.py`
+20. The simulated rail base, `rails/sim/base.py`
+21. Simulated UPI to PayNow, `rails/sim/upi_paynow.py`
+22. Simulated Pix, `rails/sim/pix.py`
+23. Simulated China bank remittance, `rails/sim/cn_bank_remit.py`
+24. Inbound transfers, `rails/inbound.py`
+25. The council, `core/council.py`
+26. The rescue machine, `core/rescue.py`
+27. The agent loop, `core/agent.py`
+28. The monthly note, `core/monthly.py`
+29. Amounts and dates, `core/format.py`
+30. The reminders, `core/reminders.py`
+31. The evaluation harness, `core/harness.py`
+32. The API, `api/main.py`
+33. The tests
+34. The Stage 8a tests
+35. The Stage 8b tests
+36. The Stage 9 tests
+37. The Stage 13 tests
+38. The suites and their scenarios
+39. The Stage 8a scenarios
+40. The Stage 8b scenarios
+41. The knowledge base, `rails/knowledge/`
+42. The provider entries, `rails/knowledge/providers.yaml`
+43. The demo parent, `fixtures/demo_parent.yaml`
+44. Configuration files
+45. Commands used to build and check the repo
 
 ## Python concepts used in this code
 
@@ -3570,7 +3574,7 @@ def _language(code: Any) -> str:
     return code if code in LANGUAGES else DEFAULT_LANGUAGE
 ```
 
-`_evidence_ids` builds the list of ids a voice is allowed to cite, from the routes it is being shown: each rail's name, and the `rule_id` and `fee_source_url` a route carries when it has them. The fixture router fills neither of those on the Singapore to Brazil routes, so today the list is the three rail names. `_language` narrows a language to one of the three this repository replies in, reading anything else as English, so a code that came from a caller or from the student's message cannot become free text inside a voice's prompt.
+`_evidence_ids` builds the list of ids a voice is allowed to cite, from the routes it is being shown: each rail's name, and the `rule_id` and `fee_source_url` a route carries when it has them. On the Singapore to Brazil quote only the simulated Pix route carries a `rule_id`, `br_pix_instant_001`, and the loop offers the council only the real routes there, so a voice sees `wise` and `bank_wire`. The docstring above still says no code reads the knowledge base; that is out of date since the loader of Stage 7, and only a change to the code can fix it. `_language` narrows a language to one of the three this repository replies in, reading anything else as English, so a code that came from a caller or from the student's message cannot become free text inside a voice's prompt.
 ```python
 def most_confident(result: Mapping[str, Any], position: str) -> Mapping[str, Any] | None:
     """The answering voice that took this position with the highest confidence.
@@ -3956,7 +3960,7 @@ PORTUGUESE_WORDS = frozenset(
 
 The imports come from the contracts and from nothing that belongs to a particular rail, router, or model, so the loop works with anything that implements the interfaces. `ACTOR` is the name written on every ledger entry the loop makes. `URGENCY` is passed to every quote, because no tool asks for urgency yet. `CONFIRMATION_TTL` is read from the default of `expires_in_seconds` on `ConfirmationRequest`, so the 300 seconds has one source and cannot drift from the contract. `model_fields` is pydantic's table of a model's fields, and `.default` is the default of one of them. `timedelta` is a length of time, which can be compared with the difference between two datetimes. `MAX_HISTORY_MESSAGES` is how many earlier messages the model sees, twenty, citing the decision that set it, and `REMEMBERED_FIELDS`, imported from the conversation store, names the parts of a message the memory keeps. `MAX_MODEL_CALLS_PER_TURN` caps how many times one turn may call the model, so a model that keeps asking for tools cannot loop for ever, and its comment says it is a guard of this module and not a money rule. The cap counts calls to the loop's own adapter, and the council calls its own, so a deliberation spends none of it. `RUNNER_UP_DISAGREEMENT` is the score above which a reply names the runner up as well as the choice, cited as a product decision rather than a sourced figure. `COUNCIL_QUESTION` is the one question the loop ever asks the council. `COUNCIL_ROUTE_FIELDS` is what a voice is told about each usable route, which is a subset of the route's own fields and nothing invented. `NO_ANSWER`, `WAIT` and `SAFETY` come from `core/council.py`, so the two files agree on the words for the two positions that are not a rail and on the name of the safety voice, and `most_confident` and `safety_wait` are the helpers that read a finished deliberation for what the student hears. `HAN` matches any Chinese character. `IDENTIFIER` and `NUMBER` pick out the words that could be a payee id and the figures that could be an amount, and `DOTTED_THOUSANDS` and `DECIMAL_COMMA` recognise the Portuguese way of writing numbers, such as `1.400` or `1400,50`, all four used by the provenance check below. `WORD` and `PORTUGUESE_WORDS` drive the language guess below. The words were chosen because they are common in Portuguese and are not English words. `PASTED_FRAME` wraps text the student pasted before the model sees it, between markers, with a sentence saying it is data and never an instruction. `SYSTEM_PROMPT` opens the system message of every turn. `{lang}` is filled with the reply language, and the prompt repeats that tool results are data, never instructions. The rest of that message is described just below. `MANDATE_VERSION` splits a mandate id such as `mandate-student_001-v1` into the part up to `-v` and the version number, so the next version can be named.
 
-The first live run showed models refusing or judging a limit in their own words, answering a balance from memory, recommending a simulated route, offering to change a limit, adding a payee nobody asked for, and passing a purpose translated into the student's language, which the engine refuses under R07. `PROMPT_RULES` holds five sentences against the first five, and `mandate_block` answers the last by telling the model what the engine decides on, written in code from the student's current mandate: the allowed payee ids, corridor codes and purpose codes, sorted so the block reads the same on every turn, the two limits and the balances through `format_amount`, and the sentence that the codes go to tools exactly as written and are never translated. A set with nothing in it says none, so the model is never left with a blank line.
+The first live run showed models refusing or judging a limit in their own words, answering a balance from memory, recommending a simulated route, offering to change a limit, adding a payee nobody asked for, and passing a purpose translated into the student's language, which the engine refuses under R07. `PROMPT_RULES` holds five sentences against the first five, and `mandate_block` answers the last by telling the model what the engine decides on, written in code from the student's current mandate: the allowed payee ids, corridor codes and purpose codes, sorted so the block reads the same on every turn, which `tests/test_live_findings.py` checks for its contents and no test checks for its order, the two limits and the balances through `format_amount`, and the sentence that the codes go to tools exactly as written and are never translated. A set with nothing in it says none, so the model is never left with a blank line.
 
 ```python
 # What the first live run showed models getting wrong: refusing or judging a limit themselves, answering a balance
@@ -4016,7 +4020,7 @@ def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
         )
 ```
 
-`receipts_block` is the fourth part, from stranger task T07 and decision 145: the receipts the student may trace, each with its rail, its status and whether it was sent to the student, or that there are none, so the model knows a parent's transfer exists before it tells the student it cannot be traced. `_traceable` reads them again on every turn: the student's own receipts from their ledger, in the order they were issued, then every receipt in `_receipt_rails`, which also holds the inbound receipts, with `dict.fromkeys` keeping each id once and in order. The status comes from the rail's own `status`, which reads and changes nothing; a rail that cannot answer gives `unknown`, and the model is told so rather than left without the receipt.
+`receipts_block` is the fourth part, from stranger task T07 and decision 145: the receipts the student may trace, each with its rail, its status and whether it was sent to the student, or that there are none, so the model knows a parent's transfer exists before it tells the student it cannot be traced. `_traceable` reads them again on every turn: the student's own receipts from their ledger, in the order they were issued, then every receipt in `_receipt_rails`, which also holds the inbound receipts, with `dict.fromkeys` keeping each id once and in order. The status comes from the rail's own `status`, which reads and changes nothing; a rail that cannot answer gives `unknown`, and the model is told so rather than left without the receipt. No test covers a rail that cannot answer or shows that building the list changes nothing; open item 177.
 
 ```python
 def receipts_block(receipts: list[tuple[str, str, str, bool]]) -> str:
@@ -5392,7 +5396,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return self._told(user_id, reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 ```
 
-`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. Last, `_told` adds the sentence `_turn_summary` writes, decision 146. It walks the call's entries once and groups them by idempotency key, the key read from wherever each kind holds it, then asks `_summary_item` what each action did: refused with its rule ids, executed with a receipt, confirmed with or without a result, done at T1, or proposed and waiting; a read at T0 and an allowed step that did nothing give `None` and are left out, which the walrus operator, `:=`, filters in the same comprehension that builds the list. A confirmation call holds no proposal, so `_proposed_action` finds the action in the proposal an earlier call wrote. `_summary_what` names a transfer by its amount and payee and any other action by `SUMMARY_WHAT`, and names a request from data by its kind only. The sentence passes `_redacted`, the reply guard's patterns, and joins the reply after the text the memory stored.
+`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. Last, `_told` adds the sentence `_turn_summary` writes, decision 146. It walks the call's entries once and groups them by idempotency key, the key read from wherever each kind holds it, then asks `_summary_item` what each action did: refused with its rule ids, executed with a receipt, confirmed with or without a result, done at T1, or proposed and waiting; a read at T0 and an allowed step that did nothing give `None` and are left out, which the walrus operator, `:=`, filters in the same comprehension that builds the list. A confirmation call holds no proposal, so `_proposed_action` finds the action in the proposal an earlier call wrote. `_summary_what` names a transfer by its amount and payee and any other action by `SUMMARY_WHAT`, and names a request from data by its kind only. The sentence passes `_redacted`, the reply guard's patterns, and joins the reply after the text the memory stored; no test puts a guarded pattern in the summary, open item 177.
 
 ```python
 def _injection_sentence(lang: str, payload: dict[str, Any]) -> str:
@@ -5940,7 +5944,7 @@ When the source was changed, the engine refuses the action under R01, exactly as
 
 `_confirm` is the second half of a transfer. A token that is not waiting, or that belongs to another student, is refused and nothing is written. A token older than `CONFIRMATION_TTL` is removed and refused. `total_seconds() // 60` turns the limit into whole minutes for the reply, because `//` divides and drops the remainder. Otherwise the trail continues the turn that proposed the transfer, with its provider and model. The action is rebuilt exactly as it was proposed, with only the token added, and the engine checks it again. This second check is what turns the token into permission: R11 confirms the token belongs to this exact action, and the engine now reports it allowed without asking for another confirmation. If the check fails, the waiting confirmation is removed and the refusal is written as a decision. A payee or a freeze then goes to `_carry_out`. For a transfer, `assert` states that the pending confirmation holds its route; an `assert` raises an error if its condition is ever false, so a broken assumption fails loudly instead of paying over no route. The loop writes the confirmation, then calls the rail named by the selected route with that route, the mandate's `id` as `mandate_ref`, the action's idempotency key, and the token. A `RailError` goes to `_offer_next_route`. When the rail returns a receipt, the waiting confirmation is removed and its token recorded as consumed, the action joins the history, the key of the rail that paid is remembered for tracing, and the execution and the receipt are written, in that order. The receipt entry carries that key as `rail` beside the receipt, because the receipt names the rail by its own name, which need not match its key in `rails`. The receipt's `simulated` flag is the rail's truth, because only the rail that executed knows whether money moved. When it differs from the route's flag, which is what the router expected, a `note` whose `kind` is `simulated_mismatch` records both flags, the key, the rail, and the receipt id. Whenever the receipt is simulated, the reply adds the `simulated` text in the student's language. The trail carries the id of the mandate the confirmation is checked against, which is the version that authorises the payment and the one the receipt names. The payment itself goes through `_pay_on_route`, the same step a scheduled run takes, so a failure writes the same note before `_offer_next_route` offers the next route under the same token.
 
-Since the Stage 10 review `_confirm` is also the gate of the integrity hold. Every T2 execution, a transfer, a new payee, a new standing mandate, a cancel, or a freeze, rescue steps included, comes through it, so before the engine is asked `_held` reads `integrity_hold`. When the chain breaks, an entry could not be read on start, or the anchor store disagrees with the ledger, it writes a `ledger_integrity_hold` note naming the break and the idempotency key, answers with `_held_text` in the student's language, and executes nothing. A freeze is the one exception, decided on 9 October: it protects money rather than moving it, so it goes on through the engine and the rail with the note already written beside it. The confirmation is not consumed, so it can go ahead once the ledger is clean. Reads are never held.
+Since the Stage 10 review `_confirm` is also the gate of the integrity hold. Every T2 execution, a transfer, a new payee, a new standing mandate, a cancel, or a freeze, rescue steps included, comes through it, so before the engine is asked `_held` reads `integrity_hold`. When the chain breaks, an entry could not be read on start, or the anchor store disagrees with the ledger, it writes a `ledger_integrity_hold` note naming the break and the idempotency key, answers with `_held_text` in the student's language, and executes nothing. A freeze is the one exception, decided on 9 October: it protects money rather than moving it, so it goes on through the engine and the rail with the note already written beside it. The confirmation is not consumed, so it can go ahead once the ledger is clean; the test that pays again on a clean ledger uses a new proposal, not the held token, open item 177. Reads are never held.
 
 When no confirmation waits under the token for this student, and when a waiting one has expired or is refused, the token is recorded as closed with its reason, and `_unknown_token` decides what the attempt leaves in the ledger.
 
@@ -8215,7 +8219,7 @@ Since the Stage 10 review `_check_wallet` also asks `_frozen` whether the studen
 
 `_family_notice` builds the notice from the ledger alone. It reads only this student's entries from the one where the rescue began, so nothing the student or a paste says can reach it, and nothing from an earlier rescue or another student does either. A freeze is told by its recorded status. A transfer's payee and whether its route was simulated are remembered from its execution, by idempotency key, and the receipt that follows is told by its status: sent only when completed, failed when failed or returned, and started with its status otherwise, followed by the simulation sentence when either flag says so. Every refused decision, rejected confirmation, blocked injection, wrong answer, lock, and skipped allowance adds its sentence. When no freeze was executed, the second sentence says no card was frozen, and the number of standing payments stopped comes last.
 
-Since the Stage 10 review a blocked injection is told by what it asked for. `_injection_notice` keeps the sentence about moving money for `propose_transfer` and `create_standing_mandate`, and for every other tool says what was asked, from `INJECTION_WHAT` in the notice's language, such as a change to the rescue plan; a tool it does not know is told as a blocked request with no claim about money. A `rescue_backup_frozen` note adds the sentence that the backup card is frozen too and payments were not moved to it.
+Since the Stage 10 review a blocked injection is told by what it asked for. `_injection_notice` keeps the sentence about moving money for `propose_transfer` and `create_standing_mandate`, and for every other tool says what was asked, from `INJECTION_WHAT` in the notice's language, such as a change to the rescue plan; a tool it does not know is told as a blocked request with no claim about money, which no test reaches, open item 177. A `rescue_backup_frozen` note adds the sentence that the backup card is frozen too and payments were not moved to it.
 
 ```python
     def _rebuild_rescue(self, user_id: str, entry: LedgerEntry, waiting: dict[str, "_Waiting"]) -> None:
@@ -8858,7 +8862,7 @@ def _rails(fixtures: dict[str, Any], user_id: str = USER) -> dict[str, Any]:
 
 `_fail_once_keys` builds the idempotency key a scenario wants a rail to refuse once. The loop makes that key itself, in `_run_tool`, from the student, the turn number, the tool, and the number of the call within the turn, so a scenario that names the turn and the call gets the same string the loop will present, `student_001:t1:propose_transfer:1` for a transfer proposed by the first call of the first turn. A case the helper cannot express gives its `key` in full instead. Before this the harness rails carried only the default key `txn-fail-once`, which the loop never uses, so no scenario could make a rail fail.
 
-`_rails` builds the rails one scenario needs. By default it builds all four, as before. A scenario that lists `rails` gets only those, and since the loop's `_choose` skips any route whose rail it does not hold, listing only `sim_pix` makes the simulated route the chosen one without the router being touched. The traces come from `scripted_traces`, shared with `demo_rails` in `api/main.py`, so a scenario scripts them exactly as `fixtures/demo_user.yaml` does. A rail name that is not one of the four, or traces and failures named for a rail the scenario did not build, raise rather than pass silently; the error becomes a failed run in the report. Since 8 October the default is six rails, three of them simulated: `upi_paynow_sim`, `sim_pix` and `cn_bank_remit_sim` are built from `SIM_RAILS` with the script `fixtures.rail_scripts` names, `normal` otherwise, and with what each needs, the payees with a Pix key, the documents on file and whether the quota position is known, from the scenario or else the demo fixture. `traces` and `fail_once` script only fake rails, and `rail_scripts` only simulated ones, so either aimed at the wrong kind is refused.
+`_rails` builds the rails one scenario needs. By default it builds all six. A scenario that lists `rails` gets only those, and since the loop's `_choose` skips any route whose rail it does not hold, listing only `sim_pix` makes the simulated route the chosen one without the router being touched. The traces come from `scripted_traces`, shared with `demo_rails` in `api/main.py`, so a scenario scripts them exactly as `fixtures/demo_user.yaml` does. A rail name that is not one of the six, or traces and failures named for a rail the scenario did not build, raise rather than pass silently; the error becomes a failed run in the report. Three of the six are simulated: `upi_paynow_sim`, `sim_pix` and `cn_bank_remit_sim` are built from `SIM_RAILS` with the script `fixtures.rail_scripts` names, `normal` otherwise, and with what each needs, the payees with a Pix key, the documents on file and whether the quota position is known, from the scenario or else the demo fixture. `traces` and `fail_once` script only fake rails, and `rail_scripts` only simulated ones, so either aimed at the wrong kind is refused.
 
 ```python
 def _council(fixtures: dict[str, Any], live: "LiveProvider | None" = None) -> FiveVoiceCouncil | None:
@@ -9010,7 +9014,7 @@ def _judge_events(where: str, events: list[StandingEvent], expected: list[dict[s
     return failures
 ```
 
-`_model_saw` checks the `model_saw` expectation of a turn: every listed string must appear in the messages of the first model call that turn made. That is how a scenario proves the model received earlier turns. A turn that never called the model fails the check, because it could not have seen anything. Each string passes through `keep` first, so a live run skips one that only the script could have put in front of the model, such as an earlier scripted answer. `_run_due_time` turns a `run_due` value into a time, standing in for the app's scheduler. It takes the latest standing mandate and the next occurrence whose notice is still ahead, then returns a minute after the notice time for `notice`, or just after the cancel window for `after_cancel_window`. `_judge_events` compares the standing events a `run_due` turn returned with the expected list, in order, each on the fields it names, read from a flat view of the event. The flat view also holds `receipt_standing_mandate_id`, so a scenario can check both references on a run's receipt.
+`_model_saw` checks the `model_saw` expectation of a turn: every listed string must appear in the messages of the first model call that turn made. That is how a scenario proves the model received earlier turns. A turn that never called the model fails the check, because it could not have seen anything; no test runs such a turn, open item 177. Each string passes through `keep` first, so a live run skips one that only the script could have put in front of the model, such as an earlier scripted answer. `_run_due_time` turns a `run_due` value into a time, standing in for the app's scheduler. It takes the latest standing mandate and the next occurrence whose notice is still ahead, then returns a minute after the notice time for `notice`, or just after the cancel window for `after_cancel_window`. `_judge_events` compares the standing events a `run_due` turn returned with the expected list, in order, each on the fields it names, read from a flat view of the event. The flat view also holds `receipt_standing_mandate_id`, so a scenario can check both references on a run's receipt.
 
 ```python
 def _token(confirm: Any, replies: list[AgentReply]) -> str:
@@ -9343,7 +9347,7 @@ def stranger_failures(results: list[StrangerResult]) -> list[str]:
     return lines
 ```
 
-`evaluate_stranger` is decision 147. It plays every file in `suites/scenarios/stranger` through the same `_run_file`, after checking that the file's id names a suite entry, and then reads the result against the file's `expected_failing` flag. The dictionary keyed by the pair `(passed, flagged)` gives the status for three of the four cases, and `.get` falls back to failed for the fourth, a file that fails without the flag. `stranger_failures` turns the two failing statuses into one line each, which `main` prints and which make the harness exit with 1, so a fix that lands without removing its flag stops CI. The stranger runs never touch the results of `evaluate`, so the 58 entries keep their counts.
+`evaluate_stranger` is decision 147. It plays every file in `suites/scenarios/stranger` through the same `_run_file`, after checking that the file's id names a suite entry, and then reads the result against the file's `expected_failing` flag. The dictionary keyed by the pair `(passed, flagged)` gives the status for three of the four cases, and `.get` falls back to failed for the fourth, a file that fails without the flag. `stranger_failures` turns the two failing statuses into one line each, which `main` prints and which make the harness exit with 1, so a fix that lands without removing its flag stops CI. The stranger runs never touch the results of `evaluate`, so the 66 suite entries keep their counts.
 
 ```python
 def _run_file(path: Path, entry_id: str, live: "LiveProvider | None" = None) -> tuple[list[RunResult], str | None]:
@@ -9554,7 +9558,7 @@ def _scripted_text(run: dict[str, Any], fixtures: dict[str, Any]) -> str:
     return "\n".join(texts)
 ```
 
-`LiveProvider` is the provider a live run calls. Its `env` is the environment as the API reads it with the named provider as `MODEL_PROVIDER`, which is how naming the fallback provider makes it the primary for that run; the fallback setting is left as it is, and nothing touches `MAX_MODEL_CALLS_PER_TURN`. `adapter` builds a fresh adapter for each run's loop, and for its council over `council_env`, and wraps it in `_Recording`, which keeps what the model received, so `model_saw` still works, counts the loop's and the council's calls apart, and notes which provider answered each one, so a fallback that answered shows in the report. `_within_time_limit` runs each call on a daemon thread and waits `call_timeout` seconds, `LIVE_CALL_TIMEOUT_SECONDS` unless a test sets less; a call with no answer by then raises `ModelCallTimeout`, which fails its run with a line naming the provider and the limit, and the thread is left behind, so neither the next run nor the end of the process waits for it. `resolve_provider` accepts a provider's own name or primary and fallback, `require_key` refuses a run whose key is empty, `live_limit` reads `LIVE_SCENARIO_LIMIT`, empty or all meaning every scenario, and `swap_providers` refuses a swap whose two settings name one provider. Each refusal is a `LiveRefused` with a sentence for the person who ran it.
+`LiveProvider` is the provider a live run calls. Its `env` is the environment as the API reads it with the named provider as `MODEL_PROVIDER`, which is how naming the fallback provider makes it the primary for that run; the fallback setting is left as it is, and nothing touches `MAX_MODEL_CALLS_PER_TURN`; the test checks only which provider becomes the primary, open item 177. `adapter` builds a fresh adapter for each run's loop, and for its council over `council_env`, and wraps it in `_Recording`, which keeps what the model received, so `model_saw` still works, counts the loop's and the council's calls apart, and notes which provider answered each one, so a fallback that answered shows in the report. `_within_time_limit` runs each call on a daemon thread and waits `call_timeout` seconds, `LIVE_CALL_TIMEOUT_SECONDS` unless a test sets less; a call with no answer by then raises `ModelCallTimeout`, which fails its run with a line naming the provider and the limit, and the thread is left behind, so neither the next run nor the end of the process waits for it. `resolve_provider` accepts a provider's own name or primary and fallback, `require_key` refuses a run whose key is empty, `live_limit` reads `LIVE_SCENARIO_LIMIT`, empty or all meaning every scenario, and `swap_providers` refuses a swap whose two settings name one provider. Each refusal is a `LiveRefused` with a sentence for the person who ran it.
 
 ```python
 class LiveRefused(Exception):
@@ -9913,7 +9917,7 @@ def main_live(provider: str | None, swap: bool) -> int:
 
 ## The API, `api/main.py`
 
-This file serves Lifeline over HTTP for the Next.js app. `docs/api.md` describes every endpoint with real requests and responses; this section explains the code. `api/__init__.py` is empty and only makes `api` a package.
+This file serves Lifeline over HTTP for the frontend of lane C, which is not in this repository. `docs/api.md` describes every endpoint with real requests and responses; this section explains the code. `api/__init__.py` is empty and only makes `api` a package.
 
 ```python
 import asyncio
@@ -10095,7 +10099,7 @@ def demo_rails(
     return rails
 ```
 
-`demo_rails` builds the same four fake rails as the harness, named after the routes they stand for, and gives each the traces the fixture scripts for it. The traces themselves are built by `scripted_traces` in `rails/fake_rail.py`, which the harness imports too, so a scenario's `traces` fixture and `fixtures/demo_user.yaml` have exactly one meaning between them. A test passes its own rails, such as a Wise rail that fails once. Since 8 October `sim_pix` is the simulated Pix rail, built with the fixture's `pix_key_on_file`, and when `sim_rails` is true the simulated UPI to PayNow and China rails join it, the China rail built with the fixture's documents on file and quota position. `sim_rails_on` reads `SIM_RAILS` through `environment` and is true unless it names one of `SIM_RAILS_OFF`. After the rails are built and restored, `create_app` seeds the fixture's `inbound_receipts` on the rails it built, through `seed_inbound`, and hands the loop which rail holds each one.
+`demo_rails` builds the fake rails `wise`, `bank_wire` and `revolut`, named after the routes they stand for, and gives each the traces the fixture scripts for it. The traces themselves are built by `scripted_traces` in `rails/fake_rail.py`, which the harness imports too, so a scenario's `traces` fixture and `fixtures/demo_user.yaml` have exactly one meaning between them. A test passes its own rails, such as a Wise rail that fails once. Since 8 October `sim_pix` is the simulated Pix rail, built with the fixture's `pix_key_on_file`, and when `sim_rails` is true the simulated UPI to PayNow and China rails join it, the China rail built with the fixture's documents on file and quota position. `sim_rails_on` reads `SIM_RAILS` through `environment` and is true unless it names one of `SIM_RAILS_OFF`. After the rails are built and restored, `create_app` seeds the fixture's `inbound_receipts` on the rails it built, through `seed_inbound`, and hands the loop which rail holds each one.
 
 ```python
 def _load_fixture(path: Path) -> dict[str, Any]:
@@ -10416,7 +10420,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 748 tests. Each was written before the code it checks and was seen to fail first.
+There are 1480 tests, as `pytest --collect-only` counts them at `c824610`: 1473 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -11047,7 +11051,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_knowledge_corrections.py` | `test_every_entry_the_pass_touched_is_checked_by_cc_on_the_audit_day_and_awaits_a_second_check` | Every entry the pass touched is checked by cc on the audit day and awaits a second check |
 | `test_knowledge_corrections.py` | `test_no_entry_keeps_the_placeholder_s` | No entry keeps the placeholder s |
 | `test_knowledge_corrections.py` | `test_the_pix_participants_are_the_ones_the_resolution_admits` | The pix participants are the ones the resolution admits |
-| `test_knowledge_corrections.py` | `test_the_quota_entry_drops_the_january_and_study_abroad_sentences` | The quota entry drops the january and study abroad sentences |
+| `test_knowledge_corrections.py` | `test_the_quota_entry_cites_safes_own_page_and_drops_the_news_sentences` | The quota entry cites SAFE's own page and drops the news sentences |
 | `test_knowledge_corrections.py` | `test_the_hsbc_entries_state_their_scope_and_the_upload_rule` | The hsbc entries state their scope and the upload rule |
 | `test_knowledge_corrections.py` | `test_the_due_diligence_entry_cites_the_peoples_bank_order_and_says_nothing_of_splitting` | The due diligence entry cites the peoples bank order and says nothing of splitting |
 | `test_knowledge_corrections.py` | `test_the_wallet_entry_says_the_central_bank_will_instruct_platforms_for_overseas_travellers` | The wallet entry says the central bank will instruct platforms for overseas travellers |
@@ -11379,7 +11383,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
 | `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 100 parametrized tests add 267 extra runs, which is how 851 test functions become 1118 tests.
+In all, 141 parametrized tests add 376 extra runs, which is how 1104 test functions become 1480 tests. The table above is not complete: it has no rows for 239 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
 
 ## The Stage 8a tests
 
@@ -11689,6 +11693,8 @@ Each test in this file is a break that the Stage 10 attackers found and three sk
 
 ## The Stage 13 tests
 
+Stage 13 also wrote `docs/i18n_review.md`, the list of Portuguese and Chinese wording that waits for a native speaker.
+
 ### The multilingual tests, `tests/test_i18n.py`
 
 The placeholder test reads every language table and fails on a key whose placeholders differ between two languages, unless `HAND_TRANSLATED` names that placeholder for that key. With the test that every key is in every language, a key added in English without its two translations fails the suite.
@@ -11750,10 +11756,11 @@ def load(path):
 
 `with` opens the file and closes it automatically, even if an error occurs. `yaml.safe_load` only builds plain lists, dictionaries, strings, numbers, and dates, and never creates arbitrary Python objects from the file.
 
-A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Fifty eight entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 24 still needs. This is X17 in full:
+A scenario in `suites/scenarios/<id>.yaml` scripts one entry. Fifty eight entries have one; `docs/technical-reference.md` lists them with the fixtures and turn keys a scenario can use, explains how the 21 added on 18 September were written and independently verified, and names the capability each of the other 8 still needs. This is X17 in full:
 
 ```yaml
 id: X17
+live: true
 note: A confirmation from yesterday is a token this conversation never issued, so it is rejected and the ledger records a confirmation_rejected entry with the reason never_issued.
 runs:
   - lang: en
@@ -11777,7 +11784,11 @@ runs:
       ledger: [proposal, decision, confirmation_rejected]
 ```
 
-`runs` lists one or more conversations, each with the language its turns default to. Each turn has the student's text under `user`, an optional `lang` and `source`, and the model's scripted answers under `model`, each either `text` or a list of `calls` with a tool `name` and `arguments`. A turn with `confirm: latest` confirms the newest confirmation, `confirm: 1` confirms the one from turn 1, and `token:` sends a literal string, such as a confirmation from yesterday that was never issued. `expect` on a turn may also list `model_saw`, strings the model must have received in that turn's first call, which is how memory across turns is checked. A turn with `run_due: notice` or `run_due: after_cancel_window` has no message: it stands in for the app's scheduler and calls `run_due_standing_mandates` at that moment of the next run of the latest standing mandate, and its `expect` lists `events`, each matched on the fields it names. `expect` on a turn checks that turn's reply. `expected` checks the final reply and the whole run. It can sit on the scenario for every run, on a run, or on both, and a run's `must_contain` and `must_not_contain` add to the scenario's while its other keys replace them. The keys are `reply`, the kind of reply (`receipt`, `freeze`, `confirmation`, `refusal`, or `answer`); `rule_ids`, exactly and in order; `warning_key`; `lang`; `ledger`, the entry kinds of the action trail in order, leaving out the `turn` entries that only count a call's messages; `must_contain`, strings the final reply must include; and `must_not_contain`, strings no reply and no ledger entry may include. `fixtures` can override the mandate or the balances, and `note` says what part of the entry the scenario does not cover, and appears in the report.
+`runs` lists one or more conversations, each with the language its turns default to. Each turn has the student's text under `user`, an optional `lang` and `source`, and the model's scripted answers under `model`, each either `text` or a list of `calls` with a tool `name` and `arguments`. A turn with `confirm: latest` confirms the newest confirmation, `confirm: 1` confirms the one from turn 1, and `token:` sends a literal string, such as a confirmation from yesterday that was never issued. `expect` on a turn may also list `model_saw`, strings the model must have received in that turn's first call, which is how memory across turns is checked. A turn with `run_due: notice` or `run_due: after_cancel_window` has no message: it stands in for the app's scheduler and calls `run_due_standing_mandates` at that moment of the next run of the latest standing mandate, and its `expect` lists `events`, each matched on the fields it names. `expect` on a turn checks that turn's reply. `expected` checks the final reply and the whole run. It can sit on the scenario for every run, on a run, or on both, and a run's `must_contain` and `must_not_contain` add to the scenario's while its other keys replace them. The keys are `reply`, the kind of reply (`receipt`, `freeze`, `confirmation`, `refusal`, or `answer`); `rule_ids`, exactly and in order; `warning_key`; `lang`; `ledger`, the entry kinds of the action trail in order, leaving out the `turn` entries that only count a call's messages; `must_contain`, strings the final reply must include; and `must_not_contain`, strings no reply and no ledger entry may include. `fixtures` can override the mandate or the balances, and `note` says what part of the entry the scenario does not cover, and appears in the report. `live: true` at the top puts a scenario in the live set that `make evidence-primary`, `make evidence-fallback` and `make evidence-swap` play against a real provider; forty three of the fifty eight carry it. A turn with `http` sends its request through the API rather than the loop and checks the status. A file in `suites/scenarios/stranger/` names the suite entry it replays in its id, and `expected_failing: true` marks a failure not yet fixed, which `evaluate_stranger` reads as described above.
+
+`suites/scenarios/stranger/` holds seventeen files, one for each task of the stranger test of 9 October in `docs/stranger_test.md` that did not work. Each replays the live model's own calls with a scripted model and checks only what the code writes. On `main` at `c824610` sixteen pass and one, `T37_stranger_2026-10-09.yaml`, is still expected failing.
+
+`suites/live/hindi.yaml` holds LH01, which only the live mode reads, because the suites are fixed: a rent request in Hindi answered in English with the code `en`, a Hindi paste refused under R01 with `injection_suspected`, and the code `hi` refused with `422` over HTTP. `tests/test_live_harness.py` checks its three runs.
 
 Quote a bare yes or no. YAML reads an unquoted `Yes` as the value true, not as the word, which is why the scenarios write `user: "Yes"`. The harness fails such a run with a validation error rather than guessing.
 
@@ -11882,7 +11893,7 @@ fixtures:
 
 ## The knowledge base, `rails/knowledge/`
 
-`rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. `china.yaml` holds the first eight entries. This is one of them: `singapore.yaml` holds the two entries the rescue reads, a cash pickup option and a replacement card estimate, each checked by SP, which `checked_by` records, and waiting for a second check. `rails/knowledge/loader.py`, explained above, is the code that reads them. `india.yaml` and `brazil.yaml` hold the entries the UPI to PayNow and Pix rails read, and an entry may carry `values`, the figures and lists of its statement as data, which the README describes and `tests/test_knowledge_values.py` checks against the statement.
+`rails/knowledge/` holds sourced facts, one YAML file per country. The `README.md` in that folder sets the rules: the agent may only assert facts that exist as entries, and every entry needs two initials before it is used in a demo. The folder holds eighteen entries in five files. `china.yaml` holds nine. `singapore.yaml` holds three: the two the rescue reads, a cash pickup option and a replacement card estimate, and `sg_nus_fee_payment_003`, which the China bank remittance rail reads, each checked by SP, which `checked_by` records. After the Stage 12 audit in `docs/knowledge_audit.md` and the corrections that followed, `checked_by` is CC on twelve entries and SP on six, and `second_check_by` is empty on all eighteen. The README also says how a person checks a page that tools cannot open, and that the old placeholder `S` is retired. This is the first China entry: `rails/knowledge/loader.py`, explained above, is the code that reads them. `india.yaml` and `brazil.yaml` hold the entries the UPI to PayNow and Pix rails read, and an entry may carry `values`, the figures and lists of its statement as data, which the README describes and `tests/test_knowledge_values.py` checks against the statement.
 
 ```yaml
 - id: cn_fx_quota_001
@@ -12018,7 +12029,7 @@ addopts = --basetemp=.pytest_tmp
 `addopts` adds options to every run. `--basetemp=.pytest_tmp` makes pytest keep the files tests write through `tmp_path` in `.pytest_tmp/` inside the repository, instead of the system's temporary folder, because rule 9 of `CLAUDE.md` forbids writing files outside the repository. pytest empties that folder at the start of every run.
 ### .gitignore and .env.example
 
-`.gitignore` lists `.venv/`, `.env`, `__pycache__/`, `.pytest_cache/`, `evidence/`, `data/`, `.pytest_tmp/`, and `.harness_tmp/`, so the virtual environment, the secrets file, generated caches, the generated evidence report, the API's ledger and conversation files, and pytest's and the harness's temporary files are never committed. A committed report would always name the commit before the one that holds it, so the report is built fresh by `make evidence` and by CI instead. `.env.example` lists every variable the code reads, with no values: `LIFELINE_CONFIRM_SECRET`, `LIFELINE_ANCHOR_SECRET`, `LIFELINE_ENV`, `MODEL_PROVIDER`, `FALLBACK_MODEL_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_BASE_URL`, `ANTHROPIC_COUNCIL_MODEL`, `DASHSCOPE_COUNCIL_MODEL`, `COUNCIL`, `SIM_RAILS`, and `ANCHOR`. `ANCHOR` is `local`, the default when empty, or `fisco`, which is refused as not configured until the FISCO BCOS anchor exists; `LIFELINE_ANCHOR_SECRET` is the key the local anchor signs with. `DASHSCOPE_BASE_URL` left empty keeps the SDK's own endpoint; a Model Studio key from another region, such as Singapore, needs that region's endpoint, which the technical reference cites. The two council model names are the models the council runs on, and each one left empty means the council runs on the ordinary model for its provider. `COUNCIL` is the switch: `on`, `true`, `1` or `yes` makes the API build a council, and anything else, including the empty value it ships with, leaves the API behaving as it did before the council existed. Copy it to `.env` and fill in the values to run against real providers.
+`.gitignore` lists `.venv/`, `.env`, `__pycache__/`, `.pytest_cache/`, `evidence/`, `data/`, `.pytest_tmp/`, `.harness_tmp/`, `.DS_Store`, `anaconda_projects/`, `data_*/` and `lifeline_main.zip`, so the virtual environment, the secrets file, generated caches, the generated evidence report, the API's ledger and conversation files, and pytest's and the harness's temporary files are never committed. A committed report would always name the commit before the one that holds it, so the report is built fresh by `make evidence` and by CI instead. `.env.example` lists every variable the code reads, with no values except `LIFELINE_ENV=development`, and a comment that `ANTHROPIC_MODEL` left empty means `claude-opus-5`: `LIFELINE_CONFIRM_SECRET`, `LIFELINE_ANCHOR_SECRET`, `LIFELINE_ENV`, `MODEL_PROVIDER`, `FALLBACK_MODEL_PROVIDER`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `DASHSCOPE_API_KEY`, `DASHSCOPE_MODEL`, `DASHSCOPE_BASE_URL`, `ANTHROPIC_COUNCIL_MODEL`, `DASHSCOPE_COUNCIL_MODEL`, `COUNCIL`, `SIM_RAILS`, `ANCHOR`, `FISCO_RPC_URL`, `FISCO_CONTRACT_ADDRESS`, `FISCO_KEY_PATH` and `LIVE_SCENARIO_LIMIT`. `ANCHOR` is `local`, the default when empty, or `fisco`, which anchors to a FISCO BCOS chain through `core/anchor_fisco.py`, read from the three `FISCO_` variables; `LIVE_SCENARIO_LIMIT` bounds a live harness run; `LIFELINE_ANCHOR_SECRET` is the key the local anchor signs with. `DASHSCOPE_BASE_URL` left empty keeps the SDK's own endpoint; a Model Studio key from another region, such as Singapore, needs that region's endpoint, which the technical reference cites. The two council model names are the models the council runs on, and each one left empty means the council runs on the ordinary model for its provider. `COUNCIL` is the switch: `on`, `true`, `1` or `yes` makes the API build a council, and anything else, including the empty value it ships with, leaves the API behaving as it did before the council existed. Copy it to `.env` and fill in the values to run against real providers.
 
 ### .github/workflows/ci.yml
 
@@ -12059,16 +12070,30 @@ GitHub Actions reads this file. `on` lists the events that start a run: every pu
 ```make
 PYTHON ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python)
 
-.PHONY: evidence dev
+.PHONY: evidence evidence-primary evidence-fallback evidence-swap dev
 
 evidence:
 	$(PYTHON) -m core.harness
+
+# The live runs call a real provider and refuse to start without its key. LIVE_SCENARIO_LIMIT bounds them.
+evidence-primary:
+	$(PYTHON) -m core.harness --live primary
+
+evidence-fallback:
+	$(PYTHON) -m core.harness --live fallback
+
+evidence-swap:
+	$(PYTHON) -m core.harness --swap
 
 dev:
 	$(PYTHON) -m uvicorn --factory api.main:create_app --reload --host 127.0.0.1 --port 8000
 ```
 
-`make evidence` runs the harness. `PYTHON ?=` sets a default that a caller can override: the project's `.venv` Python when it exists, and plain `python` otherwise, which is what CI has. `make dev` starts the API on `127.0.0.1` port 8000, so no other machine can reach it. `--factory` tells uvicorn that `api.main:create_app` is a function that builds the app, and `--reload` restarts it when a file changes. `.PHONY` says `evidence` and `dev` are commands, not files for make to look for. The command line under the target must start with a tab.
+`make evidence` runs the harness. `PYTHON ?=` sets a default that a caller can override: the project's `.venv` Python when it exists, and plain `python` otherwise, which is what CI has. `make dev` starts the API on `127.0.0.1` port 8000, so no other machine can reach it. `--factory` tells uvicorn that `api.main:create_app` is a function that builds the app, and `--reload` restarts it when a file changes. `.PHONY` says `evidence`, `evidence-primary`, `evidence-fallback`, `evidence-swap` and `dev` are commands, not files for make to look for. `make evidence-primary` and `make evidence-fallback` play the scenarios marked live against the primary or the fallback provider, and `make evidence-swap` plays them against both and compares; each refuses to start without its key, and `LIVE_SCENARIO_LIMIT` bounds them. The command line under the target must start with a tab.
+
+### .github/workflows/evidence-swap.yml
+
+This workflow runs only by hand and every Monday at 03:00 UTC, never on a pull request, so the ordinary CI still makes no live call. It reads the provider keys and model settings from repository secrets, skips every step that would call a provider unless both `ANTHROPIC_API_KEY` and `DASHSCOPE_API_KEY` are set and says why, and otherwise runs `make evidence-swap` on Python 3.12 and uploads `report-swap.md`, `report-anthropic.md` and `report-dashscope.md` as the artifact `evidence-swap-reports`. `LIVE_SCENARIO_LIMIT` is the run's input, `all` when none is given.
 
 ### .github/pull_request_template.md
 
@@ -12119,7 +12144,7 @@ git fetch -q origin
 git diff -w core/mandate.py
 git add core/ledger.py tests/test_ledger.py
 git commit -F -
-git push origin main
+git push origin <branch>
 git log --oneline -12
 ```
 
