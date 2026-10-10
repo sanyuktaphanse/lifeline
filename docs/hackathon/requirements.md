@@ -6,7 +6,7 @@ What the organisers ask for, where each item lives in the repository, and who ow
 
 | Item | Required by the rules | Where it lives | Owner | Status on 10 October |
 | --- | --- | --- | --- | --- |
-| 1. Technical documentation | System architecture, core algorithm description, security design | `docs/technical-reference.md` is the internal reference. The submission document is planned as `docs/technical_documentation.md`, build program Stage 17. | A, with B for the rails sections | Not yet written |
+| 1. Technical documentation | System architecture, core algorithm description, security design | `docs/technical_documentation.md`, build program Stage 17; `docs/technical-reference.md` is the internal reference behind it | A, with B for the rails sections | Written on 10 October, in review as the Stage 17 pull request; `tests/test_technical_documentation.py` keeps its numbers current |
 | 2. Presentation deck | For a final presentation of no more than 10 minutes | Not in the repository | A content, C design | Not started in the repository |
 | 3. Demo video | Optional, no more than 5 minutes | Not in the repository | C | Not started in the repository |
 | 4. Source code | README, GitHub link, deployment instructions, test cases | This repository. `README.md` has install steps. Tests are in `tests/`. A deployment guide is a lane B deliverable. | All; README and deployment guide B | Code and tests present; deployment guide missing |
