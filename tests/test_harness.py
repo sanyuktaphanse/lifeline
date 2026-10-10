@@ -5,12 +5,17 @@ import pytest
 import yaml
 
 from core.harness import (
+    EXPECTED_FAILING,
+    FLAG_TO_REMOVE,
     NOT_AUTOMATED,
     SCENARIOS_DIR,
+    STRANGER_DIR,
     SUITES_DIR,
     evaluate,
+    evaluate_stranger,
     load_suite,
     render_report,
+    stranger_failures,
 )
 
 SCENARIOS = {
@@ -232,7 +237,7 @@ def test_a_run_due_turn_checks_the_events_it_returns(tmp_path):
             {
                 "lang": "en",
                 "turns": [
-                    {"user": "Pay 1,200 SGD rent to landlord_sp monthly", "model": [{"calls": [{"name": "create_standing_mandate", "arguments": create}]}]},
+                    {"user": "Pay 1,200 SGD rent to landlord_sp monthly on the 1st", "model": [{"calls": [{"name": "create_standing_mandate", "arguments": create}]}]},
                     {"user": "Yes", "confirm": "latest"},
                     {"run_due": "notice", "expect": {"events": [{"kind": "run"}]}},
                 ],
@@ -685,3 +690,102 @@ def test_a_council_fixture_may_script_several_deliberations_five_replies_each():
     assert _council({"council": [reply] * 10}) is not None
     with pytest.raises(ValueError):
         _council({"council": [reply] * 7})
+
+
+# The stranger runs: suites/scenarios/stranger, played as a group of their own. Source: docs/decisions.md, decision 147.
+
+
+def _stranger(suites: Path, name: str, scenario: dict) -> None:
+    folder = suites / "scenarios" / "stranger"
+    folder.mkdir(exist_ok=True)
+    (folder / f"{name}.yaml").write_text(yaml.safe_dump(scenario, allow_unicode=True), encoding="utf-8")
+
+
+def _flagged(scenario: dict, flag: bool = True) -> dict:
+    return {**scenario, "expected_failing": flag, "stranger_run": "2026-10-09", "stranger_task": "T03"}
+
+
+def _failing() -> dict:
+    run = {**OVER_LIMIT["runs"][0], "expected": {**OVER_LIMIT["runs"][0]["expected"], "rule_ids": ["R01"]}}
+    return {**OVER_LIMIT, "runs": [run]}
+
+
+def test_each_stranger_file_is_played_and_judged_against_its_flag(tmp_path):
+    suites = _suites(tmp_path)
+    _stranger(suites, "T07_stranger_a", _flagged(OVER_LIMIT, flag=False))
+    _stranger(suites, "T07_stranger_b", _flagged(_failing()))
+
+    results = {result.file: result for result in evaluate_stranger(suites)}
+
+    assert results["T07_stranger_a.yaml"].status == "passed"
+    assert results["T07_stranger_b.yaml"].status == EXPECTED_FAILING
+    assert results["T07_stranger_b.yaml"].task == "T03"
+    assert stranger_failures(list(results.values())) == []
+
+
+def test_a_flagged_stranger_file_that_passes_fails_the_suite_with_a_message_to_remove_the_flag(tmp_path):
+    suites = _suites(tmp_path)
+    _stranger(suites, "T07_stranger_a", _flagged(OVER_LIMIT))
+
+    results = evaluate_stranger(suites)
+
+    assert results[0].status == FLAG_TO_REMOVE
+    assert stranger_failures(results) == [
+        "T07_stranger_a.yaml passes but is marked expected_failing: remove the flag in the pull request that fixed it."
+    ]
+
+
+def test_an_unflagged_stranger_file_that_fails_fails_the_suite(tmp_path):
+    suites = _suites(tmp_path)
+    _stranger(suites, "T07_stranger_a", _flagged(_failing(), flag=False))
+
+    results = evaluate_stranger(suites)
+
+    assert results[0].status == "failed"
+    assert stranger_failures(results)[0].startswith("T07_stranger_a.yaml fails: ")
+
+
+def test_a_stranger_file_must_name_an_entry_in_a_suite(tmp_path):
+    suites = _suites(tmp_path)
+    _stranger(suites, "T42_stranger_a", _flagged({**OVER_LIMIT, "id": "T42"}, flag=False))
+
+    results = evaluate_stranger(suites)
+
+    assert results[0].status == "failed"
+    assert "T42 names no entry in a suite" in stranger_failures(results)[0]
+
+
+def test_the_stranger_files_leave_the_suite_entries_and_their_counts_alone(tmp_path):
+    suites = _suites(tmp_path)
+    _write_scenario(suites, OVER_LIMIT)
+    _stranger(suites, "T07_stranger_b", _flagged(_failing()))
+
+    results = evaluate(suites)
+
+    assert {result.id: result.status for result in results} == {"T07": "passed", "T99": NOT_AUTOMATED}
+
+
+def test_the_report_counts_stranger_runs_in_a_section_of_their_own(tmp_path):
+    suites = _suites(tmp_path)
+    _write_scenario(suites, OVER_LIMIT)
+    _stranger(suites, "T07_stranger_a", _flagged(OVER_LIMIT, flag=False))
+    _stranger(suites, "T07_stranger_b", _flagged(_failing()))
+    results, stranger = evaluate(suites), evaluate_stranger(suites)
+
+    report = render_report(results, "abc123", datetime(2026, 10, 10, tzinfo=timezone.utc), stranger)
+    plain = render_report(results, "abc123", datetime(2026, 10, 10, tzinfo=timezone.utc))
+
+    assert report.startswith(plain.rstrip("\n"))
+    assert "## Stranger runs" in report and "## Stranger runs" not in plain
+    assert "| Files | Passed | Expected failing | Failed | Passes but flagged |" in report
+    assert "| 2 | 1 | 1 | 0 | 0 |" in report
+    assert "| T07_stranger_b.yaml | T07 | T03 | 2026-10-09 | expected failing |" in report
+
+
+def test_every_real_stranger_file_is_what_its_flag_says():
+    results = evaluate_stranger()
+
+    assert STRANGER_DIR == SCENARIOS_DIR / "stranger"
+    assert stranger_failures(results) == []
+    assert len(results) == 17
+    assert [result.file for result in results if result.status == EXPECTED_FAILING] == ["T37_stranger_2026-10-09.yaml"]

@@ -14,7 +14,7 @@ import pytest
 
 from contracts.schemas import LANGUAGE_META, LANGUAGES
 from core import agent, mandate, monthly
-from core.agent import HAND_TRANSLATED, INJECTION_WHAT, PENDING, QUOTED, REDACTION_MARKER, TEXTS, _text
+from core.agent import HAND_TRANSLATED, INJECTION_WHAT, PENDING, QUOTED, REDACTION_MARKER, SUMMARY_WHAT, TEXTS, _text
 from core.format import fill, format_amount, format_date
 from rails.knowledge.loader import load_knowledge
 from rails.sim import rules
@@ -23,7 +23,12 @@ from tests.test_agent import RENT, USER, _call, _say, _setup, _user
 
 ROOT = Path(__file__).resolve().parent.parent
 # Every table a student can read a sentence from, by the name the review file uses for it.
-TABLES = {"core.agent.TEXTS": TEXTS, "core.agent.INJECTION_WHAT": INJECTION_WHAT, "core.monthly.TEXTS": monthly.TEXTS}
+TABLES = {
+    "core.agent.TEXTS": TEXTS,
+    "core.agent.INJECTION_WHAT": INJECTION_WHAT,
+    "core.agent.SUMMARY_WHAT": SUMMARY_WHAT,
+    "core.monthly.TEXTS": monthly.TEXTS,
+}
 # The modules that turn an amount or a date into text for a student. The engine's reasons reach the student
 # inside every refusal, and the rail rules' sentences inside a refusal or a precheck.
 STUDENT_TEXT_MODULES = (agent, monthly, rules, mandate)
@@ -154,7 +159,8 @@ def test_an_english_refusal_is_unchanged_by_the_wrapper():
     reply = s.loop.handle(USER, _user("pay", lang="en"))
 
     rules_text = ", ".join(reply.decision.rule_ids)
-    assert reply.text == f"I cannot do that. Rules: {rules_text}. {' '.join(reply.decision.reasons)}"
+    summary = f"This turn: a transfer of 1200 SGD to stranger_99: refused under {rules_text}."
+    assert reply.text == f"I cannot do that. Rules: {rules_text}. {' '.join(reply.decision.reasons)} {summary}"
 
 
 @pytest.mark.parametrize("lang", ["pt", "zh"])

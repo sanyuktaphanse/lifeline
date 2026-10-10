@@ -332,4 +332,4 @@ def test_the_verify_ledger_reply_says_nothing_when_no_update_was_skipped():
 
     reply = s.loop.handle(USER, _user("Show me my ledger"))
 
-    assert reply.text == "All good."
+    assert reply.text == "All good. This turn: nothing was proposed, changed or sent."

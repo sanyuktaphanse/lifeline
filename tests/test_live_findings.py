@@ -148,7 +148,11 @@ def test_a_mandate_with_nothing_allowed_says_none_rather_than_leaving_a_gap():
     assert "Balances: none on file.\n" in block
 
 
-def test_every_turn_sends_the_block_and_the_five_rules_in_the_system_prompt_in_every_language():
+# The sixth rule came with the turn summary. Source: docs/decisions.md, decision 146.
+SIXTH_RULE = "Never say a payment was sent, done or submitted; the code says that from the ledger."
+
+
+def test_every_turn_sends_the_block_and_the_six_rules_in_the_system_prompt_in_every_language():
     from core.agent import PROMPT_RULES, mandate_block
     from tests.test_agent import USER, _say as say, _setup, _user
 
@@ -156,12 +160,12 @@ def test_every_turn_sends_the_block_and_the_five_rules_in_the_system_prompt_in_e
     for lang in ("en", "pt", "zh"):
         setup.loop.handle(USER, _user("Hello", lang=lang))
 
-    assert PROMPT_RULES == FIVE_RULES
+    assert PROMPT_RULES == (*FIVE_RULES, SIXTH_RULE)
     for call in range(3):
         prompt = _system_prompt(setup, call)
         assert mandate_block(setup.mandates[USER], {"SGD": Decimal("2300"), "BRL": Decimal("150")}) in prompt
         assert "Allowed purpose codes: rent." in prompt
-        for rule in FIVE_RULES:
+        for rule in PROMPT_RULES:
             assert rule in prompt
 
 

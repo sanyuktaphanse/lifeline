@@ -84,7 +84,7 @@ def test_chat_answers_in_the_language_it_is_given():
     body = client.post("/chat", json={"user_id": USER, "text": "Qual é o meu saldo?", "lang": "pt"}).json()
 
     assert body["lang"] == "pt"
-    assert body["text"] == "O seu saldo é 2.300 SGD."
+    assert body["text"] == "O seu saldo é 2.300 SGD. Neste turno: nada foi proposto, alterado ou enviado."
 
 
 def test_the_confirmation_round_trip_pays_once_and_the_token_never_reaches_the_ledger():
@@ -438,7 +438,8 @@ STANDING_ID = "student_001-standing-1-1"
 
 
 def _with_standing(client: TestClient) -> None:
-    token = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp monthly"}).json()[
+    # The student states the day and any term other than Lifeline's default. Source: docs/decisions.md, decision 143.
+    token = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp monthly on the 1st, 900 notice hours"}).json()[
         "confirmation"
     ]["confirmation_token"]
     client.post("/confirm", json={"user_id": USER, "confirmation_token": token})

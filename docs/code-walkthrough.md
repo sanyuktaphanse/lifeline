@@ -697,9 +697,15 @@ This file holds the calendar arithmetic of standing mandates. It is plain Python
 
 ```python
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 # Source: docs/decisions.md, 18 September 2026. A run may happen from the notice until a day after it falls due.
 RUN_WINDOW_AFTER_DUE = timedelta(hours=24)
+# Lifeline's own settings for the terms of a standing mandate the student does not state, not facts about the world:
+# how far a run may stray from the amount, in percent, how many hours before a run the student is told, and for how
+# many hours after that notice the run can be cancelled. A term the student states in their own words replaces its
+# default, and the schedule day is never defaulted. Source: docs/decisions.md, decision 143.
+STANDING_DEFAULTS: dict[str, Decimal | int] = {"tolerance_pct": Decimal("5"), "notice_hours": 48, "cancel_window_hours": 24}
 
 
 def _day(schedule: str) -> int:
@@ -3804,7 +3810,7 @@ from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.format import fill, format_amount, format_date
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
-from core.standing import next_occurrence, occurrence_containing, period_of
+from core.standing import STANDING_DEFAULTS, next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
 from rails.sim.rules import (
@@ -3963,6 +3969,9 @@ PROMPT_RULES = (
     "Never recommend a simulated route for real money, and say that a route is simulated whenever it is.",
     "Never say you can change a limit or a setting; call the tool, such as change_limit, and let the code answer.",
     "Call add_payee only when the student asks to add a payee.",
+    # The second live run saw DashScope claim a submission and a proposal no tool made, open item 163; the turn
+    # summary now says what the turn did. Source: docs/decisions.md, decision 146.
+    "Never say a payment was sent, done or submitted; the code says that from the ledger.",
 )
 
 
@@ -4002,8 +4011,50 @@ def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
                 SYSTEM_PROMPT.format(lang=lang),
                 " ".join(PROMPT_RULES),
                 mandate_block(self._mandates[user_id], self._balances.get(user_id, {})),
+                receipts_block(self._traceable(user_id)),
             ]
         )
+```
+
+`receipts_block` is the fourth part, from stranger task T07 and decision 145: the receipts the student may trace, each with its rail, its status and whether it was sent to the student, or that there are none, so the model knows a parent's transfer exists before it tells the student it cannot be traced. `_traceable` reads them again on every turn: the student's own receipts from their ledger, in the order they were issued, then every receipt in `_receipt_rails`, which also holds the inbound receipts, with `dict.fromkeys` keeping each id once and in order. The status comes from the rail's own `status`, which reads and changes nothing; a rail that cannot answer gives `unknown`, and the model is told so rather than left without the receipt.
+
+```python
+def receipts_block(receipts: list[tuple[str, str, str, bool]]) -> str:
+    """The receipts the student may trace, written for the system prompt from the student's own ledger and the
+    inbound receipt map: each id with its rail, its status as the rail reports it, and whether it was sent to the
+    student. trace_transfer finds no other. Source: docs/decisions.md, decision 145, from the stranger task T07.
+    """
+    if not receipts:
+        return "Receipts the student may trace: none."
+    lines = [
+        f"{receipt_id} on {rail}, status {status}" + (", sent to the student" if inbound else "")
+        for receipt_id, rail, status, inbound in receipts
+    ]
+    return "Receipts the student may trace, the only ones trace_transfer can find: " + "; ".join(lines) + "."
+```
+
+```python
+    def _traceable(self, user_id: str) -> list[tuple[str, str, str, bool]]:
+        """Every receipt the student may trace, read again on every turn: their own, in the order their ledger issued
+        them, then those sent to them, each with its rail, its status as the rail reports it now, and whether it
+        was sent to the student. Reading a status changes nothing on the rail."""
+        own = [
+            entry.payload.get("receipt", {}).get("receipt_id")
+            for entry in self._ledger.entries()
+            if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+        ]
+        rails = self._receipt_rails.get(user_id, {})
+        listed = []
+        for receipt_id in dict.fromkeys([*own, *rails]):
+            rail = rails.get(receipt_id)
+            if not receipt_id or rail is None:
+                continue
+            try:
+                status = self._rails[rail].status(receipt_id).status.value
+            except (RailError, KeyError):  # anti-pattern: SILENT-EXCEPT ok, the model is told the status is unknown
+                status = "unknown"
+            listed.append((receipt_id, rail, status, receipt_id not in own))
+        return listed
 ```
 
 ```python
@@ -4073,10 +4124,11 @@ TOOLS = [
     ),
     _tool(
         "create_standing_mandate",
-        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28. "
-        "Nothing is set up until the student confirms it.",
+        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28, the day the "
+        "student gave. Pass tolerance_pct, notice_hours or cancel_window_hours only when the student states it; "
+        "Lifeline supplies its own setting for any the student does not. Nothing is set up until the student confirms it.",
         {**{name: TEXT for name in ACTION_FIELDS}, **{name: TEXT for name in STANDING_TERMS}},
-        [*ACTION_FIELDS, *STANDING_TERMS],
+        [*ACTION_FIELDS, "schedule"],
     ),
     _tool(
         "cancel_standing_run",
@@ -4091,7 +4143,13 @@ TOOLS = [
         ["standing_mandate_id"],
     ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
-    _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
+    _tool(
+        "trace_transfer",
+        "Report where a transfer is, by receipt id. The system prompt lists the receipts the student may trace, "
+        "their own and those sent to them; a receipt not in that list cannot be traced.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
     _tool(
         "precheck",
         "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "
@@ -4212,7 +4270,7 @@ REQUIRED_ARGUMENTS = {
     "get_quote": ("corridor", "amount"),
     "add_payee": ("payee_id",),
     "freeze_card": ("instrument_id",),
-    "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
+    "create_standing_mandate": (*ACTION_FIELDS, "schedule"),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
     "cancel_transfer": ("receipt_id",),
@@ -4250,6 +4308,23 @@ TEXTS = {
         "notice_backup_frozen": "Backup card {instrument} is frozen too, so payments were not moved to it.",
         "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
         "notice_injection_any": "A request that did not come from the student was blocked.",
+        "injection_blocked": "{origin} asked Lifeline to {what}, and Lifeline did not do it, because only your own words can start an action.",
+        "injection_from_paste": "Text you pasted",
+        "injection_from_data": "Information Lifeline read",
+        "injection_act": "take an action",
+        "turn_nothing": "This turn: nothing was proposed, changed or sent.",
+        "turn_summary": "This turn: {items}.",
+        "turn_joiner": "; ",
+        "turn_transfer": "a transfer of {amount} to {payee}",
+        "turn_proposed": "{what}: proposed, waiting for your confirmation",
+        "turn_refused": "{what}: refused under {rules}",
+        "turn_receipt": "{what}: confirmed and executed, receipt {receipt_id}, status {status}",
+        "turn_executed_receipt": "{what}: executed, receipt {receipt_id}, status {status}",
+        "turn_result": "{what}: confirmed, result {status}",
+        "turn_confirmed": "{what}: confirmed and done",
+        "turn_not_executed": "{what}: confirmed but not executed",
+        "turn_done": "{what}: done",
+        "turn_rejected": "a confirmation: not accepted, so nothing was done",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
@@ -4346,6 +4421,23 @@ TEXTS = {
         "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
         "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
         "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
+        "injection_blocked": "{origin} pediu ao Lifeline para {what}, e o Lifeline não fez isso, porque só as suas próprias palavras podem iniciar uma ação.",
+        "injection_from_paste": "O texto que você colou",
+        "injection_from_data": "Uma informação que o Lifeline leu",
+        "injection_act": "realizar uma ação",
+        "turn_nothing": "Neste turno: nada foi proposto, alterado ou enviado.",
+        "turn_summary": "Neste turno: {items}.",
+        "turn_joiner": "; ",
+        "turn_transfer": "uma transferência de {amount} para {payee}",
+        "turn_proposed": "{what}: proposta feita, aguardando sua confirmação",
+        "turn_refused": "{what}: recusa pelas regras {rules}",
+        "turn_receipt": "{what}: confirmação e execução, recibo {receipt_id}, estado {status}",
+        "turn_executed_receipt": "{what}: execução, recibo {receipt_id}, estado {status}",
+        "turn_result": "{what}: confirmação feita, resultado {status}",
+        "turn_confirmed": "{what}: confirmação feita e ação concluída",
+        "turn_not_executed": "{what}: confirmação feita, mas sem execução",
+        "turn_done": "{what}: ação concluída",
+        "turn_rejected": "uma confirmação: não aceita, então nada foi feito",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
@@ -4442,6 +4534,23 @@ TEXTS = {
         "notice_backup_frozen": "备用卡 {instrument} 也已被冻结，因此付款没有转到这张卡上。",
         "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
         "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
+        "injection_blocked": "{origin}要求 Lifeline {what}，Lifeline 没有这样做，因为只有你自己的话才能发起操作。",
+        "injection_from_paste": "你粘贴的文字",
+        "injection_from_data": "Lifeline 读取的信息",
+        "injection_act": "执行一项操作",
+        "turn_nothing": "本轮：没有提出、更改或发送任何内容。",
+        "turn_summary": "本轮：{items}。",
+        "turn_joiner": "；",
+        "turn_transfer": "向 {payee} 转账 {amount}",
+        "turn_proposed": "{what}：已提出，等待你确认",
+        "turn_refused": "{what}：被拒绝，规则 {rules}",
+        "turn_receipt": "{what}：已确认并执行，回执 {receipt_id}，状态 {status}",
+        "turn_executed_receipt": "{what}：已执行，回执 {receipt_id}，状态 {status}",
+        "turn_result": "{what}：已确认，结果 {status}",
+        "turn_confirmed": "{what}：已确认并完成",
+        "turn_not_executed": "{what}：已确认，但未执行",
+        "turn_done": "{what}：已完成",
+        "turn_rejected": "一项确认：未被接受，因此没有执行任何操作",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，在 {key} 下没有产生任何扣款。次优路线是 {rail}，手续费 {fee}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
@@ -4680,6 +4789,9 @@ class _Trail:
     notices: list[str] = field(default_factory=list)
     # What the student typed in this turn, read as the provenance check reads it.
     said: str = ""
+    # What pastes and tool results in this turn alone say, so a value on the student's own records that one of them
+    # names, and the student did not, is still read as data. Source: docs/decisions.md, decision 143.
+    this_turn: _Details = field(default_factory=_Details)
 
 
 @dataclass
@@ -4854,10 +4966,57 @@ def _named_in(wanted: str, texts: list[tuple[str, Source]]) -> Source | None:
     return next((source for text, source in texts if word.search(text)), None)
 
 
-def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
+def _own_record(value: str, records: set[str], trail: _Trail) -> bool:
+    """Whether a value is the student's own, not data: one of their own records, a payee their current mandate lists
+    or a receipt their own ledger or their inbound transfers hold, while the student's words this turn name no other
+    record and no paste or tool result this turn names a record the student's words do not. An amount is never one.
+    Source: docs/decisions.md, decision 143, from the stranger tasks T03 and T15.
+    """
+    if value not in records:
+        return False
+    named = {record for record in records if _named_in(record, [(trail.said, Source.USER_TURN)]) is not None}
+    if named - {value}:
+        return False
+    return not {record for record in records if _named_in(record, trail.this_turn.texts) is not None} - named
+
+
+def _standing_terms(arguments: dict[str, Any], trail: _Trail) -> tuple[dict[str, Any], set[str]]:
+    """A standing mandate's terms and the names of those Lifeline supplied.
+
+    The schedule is the model's, and its day is read by the provenance check, never defaulted. Each other term is
+    the model's when the student's own words hold its value, or when a paste or tool result in this turn does, so
+    the provenance check can refuse it as data; otherwise it is Lifeline's default, which is the student's own
+    because code supplied it. A cancel window Lifeline supplies is cut to the notice, so a short notice the student
+    states is never refused for the default window. Source: docs/decisions.md, decision 143, from the stranger task T10.
+    """
+    terms: dict[str, Any] = {"schedule": arguments["schedule"]}
+    supplied: set[str] = set()
+    for name, default in STANDING_DEFAULTS.items():
+        try:
+            given = Decimal(str(arguments.get(name, "")).strip())
+        except InvalidOperation:  # anti-pattern: SILENT-EXCEPT ok, a value that is not a number is not the student's
+            given = None
+        if given is not None and (given in trail.from_user.amounts or given in trail.this_turn.amounts):
+            terms[name] = arguments[name]
+        else:
+            terms[name] = default
+            supplied.add(name)
+    if "cancel_window_hours" in supplied:
+        terms["cancel_window_hours"] = min(int(terms["cancel_window_hours"]), int(Decimal(str(terms["notice_hours"]))))
+    return terms, supplied
+
+
+def _untrusted_fields(
+    trail: _Trail, action: Action, payees: set[str], receipts: set[str], supplied: set[str] = frozenset()
+) -> dict[str, Source]:
     untrusted: dict[str, Source] = {}
     payee = _skeleton(action.payee_id or "")
-    if payee and payee not in trail.from_user.payee_ids and _named_in(payee, trail.from_user.texts) is None:
+    if (
+        payee
+        and payee not in trail.from_user.payee_ids
+        and _named_in(payee, trail.from_user.texts) is None
+        and not _own_record(payee, payees, trail)
+    ):
         source = trail.from_data.payee_ids.get(payee) or _named_in(payee, trail.from_data.texts)
         if source is not None:
             untrusted["payee_id"] = source
@@ -4869,16 +5028,23 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
             untrusted["instrument_id"] = source
     if action.standing_terms is not None:
         terms = action.standing_terms
-        day = Decimal(terms.schedule.partition(":")[2] or 0)
-        for value in (terms.tolerance_pct, Decimal(terms.notice_hours), Decimal(terms.cancel_window_hours), day):
-            if value not in trail.from_user.amounts and value in trail.from_outside.amounts:
-                untrusted["standing_terms"] = trail.from_outside.amounts[value]
+        given = {"tolerance_pct": terms.tolerance_pct, "notice_hours": Decimal(terms.notice_hours), "cancel_window_hours": Decimal(terms.cancel_window_hours)}
+        for name, value in given.items():
+            # A term Lifeline supplied is its own; one the model gave is data when only this turn's paste or tool
+            # results hold it.
+            if name not in supplied and value not in trail.from_user.amounts and value in trail.this_turn.amounts:
+                untrusted["standing_terms"] = trail.this_turn.amounts[value]
                 break
+        # The day is never defaulted: a day the student's words do not hold came from data, or from the model,
+        # whose words count as tool output.
+        day = Decimal(terms.schedule.partition(":")[2] or 0)
+        if "standing_terms" not in untrusted and day not in trail.from_user.amounts:
+            untrusted["standing_terms"] = trail.from_outside.amounts.get(day, Source.TOOL_RESULT)
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
     receipt = _skeleton(action.receipt_id or "")
-    if receipt and receipt not in trail.from_user.payee_ids:
+    if receipt and receipt not in trail.from_user.payee_ids and not _own_record(receipt, receipts, trail):
         # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
         # as a whole word anywhere in the data.
         word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
@@ -4889,6 +5055,8 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
             untrusted["receipt_id"] = source
     return untrusted
 ```
+
+`_own_record` is decision 143, from stranger tasks T03 and T15. A value is the student's own when it is one of their records, a payee their current mandate lists or a receipt their ledger or their inbound transfers hold, and two conditions hold: the student's words this turn name no other record of the same kind, and no paste or tool result this turn names a record the student's words do not. `trail.this_turn` holds only the current turn's pastes and tool results, so a payee the model named three turns ago no longer counts against the student, while one a paste names right now still does. `_untrusted_fields` asks it before treating a payee or a receipt as data. Set difference, `named - {value}`, gives the records named other than this one. `_standing_terms` is the same decision for a standing mandate, from stranger task T10: each term the model gives is kept when the student's words hold its value, kept for the check to refuse when only this turn's paste or tool result holds it, and otherwise replaced by `STANDING_DEFAULTS`, the names of the replaced ones returned beside the terms so the check never reads a default as data. `Decimal(str(value))` raises `InvalidOperation` for text that is not a number, which is read as no value. The day of the schedule is never replaced; `_untrusted_fields` refuses a day the student's words do not hold.
 
 `detect_lang` checks for a Chinese character first, then for any of the Portuguese words in the lowercased text, and otherwise answers English. `PendingConfirmation` is everything the loop must remember between proposing a T2 action and hearing the student confirm it: whose it is, the exact `Action`, the warning, when it was created, the turn, and the provider and model that proposed it. Only a transfer fills in the routes, the chosen route, and the rails that have already failed, so they default to empty. Only adding a payee fills in `display_name`, the name the student gave, which is shown in the replies and kept in the ledger. Fields with defaults must come after fields without them in a dataclass, which is why the order changed. `_Trail` collects what one call to `handle` writes: the user, the turn, the provider and model, and the sequence numbers of its ledger entries. `mandate_id` is the id of the mandate version in force for this call, written on every entry. It also holds two `_Details` for the turn: `from_user`, the payee ids and amounts in the student's own message, and `from_data`, those in pasted text and in tool results. A third, `from_outside`, holds pastes, translations and tool results without the model's own words; the terms of a new standing mandate are traced against it, because the loop's own confirmation sentence, which the memory keeps as the model's words, repeats the terms of a standing mandate the student already confirmed. Its name starts with an underscore because nothing outside this module uses it. `_Waiting` holds what the rebuild learns from the ledger about a confirmation that may still be waiting, before it becomes a `PendingConfirmation`. `_remembered` copies a message keeping only `REMEMBERED_FIELDS`, so the provider's reasoning blocks and the model's name are not kept. `_for_model` wraps a pasted message in `PASTED_FRAME` whenever it is sent, so pasted text is stored as it was pasted and always reaches the model marked as data. `_bounded` keeps the last twenty messages and then drops any at the front until the first is from the student, so the history never opens with a tool result whose call was trimmed away. `_closing_results` answers every tool call of an answer whose turn ended at one of them, the first with a note that the reply follows and the rest as not run, because a provider rejects a tool call with no result. When the reply is a confirmation the council advised on, the first result also carries that advice, which is how a student who asks in the next turn why that route was chosen is answered from the conversation instead of from a guess. `_next_version` names the next version of a mandate: `fullmatch` requires the whole id to fit the pattern, the number after `-v` goes up by one, and an id with no version ending gains `-v2`. `match['base']` reads a named group from the match. `_now` gives the current time in UTC. `_text` picks the language's replies, falls back to English for any other language, and fills in the values. `_action_json` and `_decision_json` turn models into plain JSON data for the ledger, and both leave out `confirmation_token`. The token is what lets a transfer go ahead, so it never enters the ledger, where anyone who can read the history could copy it. `_route_values` gathers the values the confirm and retry replies need. `_untrusted_fields` names the payment details of a proposed transfer that the student never typed but that did appear in data during the turn, each with the source where it first appeared. A payee id or an amount is untrusted only when both are true. A detail the student typed is trusted even if a tool result repeats it, and a detail that appeared nowhere is left to the mandate engine. Since the Stage 10 review a payee id is also looked for as a whole word, with `_named_in`, on both sides, so `maria.santos` inside `maria.santos@nubank` in a paste is found there, and the same id glued to more text in the student's own words is still theirs. A card a freeze names is untrusted when only data names it, and the terms of a new standing mandate, its tolerance, its notice and cancel hours and its day of the month, are untrusted when a value appears in data from outside and not in the student's words. `_standing_from` builds a `StandingMandate` from a confirmed `create_standing_mandate` action, its confirmation time, and its token; it raises when the action has no terms, which the engine's R04 already prevents. `_Rescue` and `_Outcome` are the rescue's records, described with the rescue below, `RESTING` names the states where it waits for the student, `_from_student` says whether a message is the student's own turn, and `_normal` is how the identity answer is compared: outer spaces stripped and case folded, and nothing more.
 
@@ -5045,6 +5213,8 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
                 trail.from_outside.add(earlier.text, earlier.source)
+                if any(earlier is current for current in turn_messages):
+                    trail.this_turn.add(earlier.text, earlier.source)
             elif earlier.role is Role.ASSISTANT:
                 # The model's own words come from what it was given, so a detail only the model
                 # named counts as data, labelled as tool output, even after its source has left the
@@ -5085,6 +5255,7 @@ The constructor keeps every collaborator it is given. `pending` is passed in rat
                 text = json.dumps(result, ensure_ascii=False, default=str)
                 trail.from_data.add(text, Source.TOOL_RESULT)
                 trail.from_outside.add(text, Source.TOOL_RESULT)
+                trail.this_turn.add(text, Source.TOOL_RESULT)
                 tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
                 messages.append(tool_message)
                 turn_messages.append(tool_message)
@@ -5101,7 +5272,110 @@ A conversation turn takes the next turn number and starts a trail. The student's
 ```python
     def _finish(self, trail: _Trail, turn_messages: list[Message], reply: AgentReply) -> AgentReply:
         self._remember(trail, turn_messages)
-        return reply.model_copy(update={"ledger_seqs": list(trail.seqs)})
+        return self._told(trail.user_id, reply.model_copy(update={"ledger_seqs": list(trail.seqs)}))
+
+    def _told[ReplyT: AgentReply](self, user_id: str, reply: ReplyT) -> ReplyT:
+        """The reply with what the code tells the student from this call's ledger entries, kept out of the memory:
+        first, for every request from data the loop blocked, what it asked for and that Lifeline did not do it,
+        Source: docs/decisions.md, decision 144; last, one sentence saying what the call did, decision 146.
+        """
+        seqs = set(reply.ledger_seqs)
+        entries = [entry for entry in self._ledger.entries() if entry.seq in seqs]
+        blocked = [_injection_sentence(reply.lang, entry.payload) for entry in entries if entry.kind == "injection_suspected"]
+        first = list(dict.fromkeys(blocked))
+        # The summary names payees and receipts from the ledger, so it passes the same patterns as every reply.
+        summary = self._redacted(self._turn_summary(user_id, reply.lang, entries))[0]
+        return reply.model_copy(update={"text": " ".join(filter(None, [*first, reply.text, summary]))})
+
+    def _turn_summary(self, user_id: str, lang: str, entries: list[LedgerEntry]) -> str:
+        """One sentence, in the student's language, of what this call did, read from its ledger entries alone and
+        never from the model's text: each action proposed and waiting, refused with its rule ids, confirmed, executed
+        with its receipt id and status, or done at tier T1, each confirmation not accepted, or that nothing was
+        proposed, changed or sent. A read at tier T0 changes nothing and is left out. A request from data is named
+        by its kind only. Source: docs/decisions.md, decision 146, from the stranger task T14 and open item 163.
+        """
+        actions: dict[str, dict[str, Any]] = {}
+        blocked: set[str] = set()
+        rejected = False
+        for entry in entries:
+            payload = entry.payload
+            if entry.kind == "confirmation_rejected":
+                rejected = True
+                continue
+            if entry.kind == "injection_suspected":
+                blocked.add(str(payload.get("idempotency_key")))
+                continue
+            key = {
+                "proposal": (payload.get("action") or {}).get("idempotency_key"),
+                "decision": payload.get("idempotency_key"),
+                "confirmation": payload.get("idempotency_key"),
+                "execution": (payload.get("action") or {}).get("idempotency_key"),
+                "receipt": (payload.get("receipt") or {}).get("idempotency_key"),
+            }.get(entry.kind)
+            if key is None:
+                continue
+            seen = actions.setdefault(key, {})
+            if entry.kind in ("proposal", "execution"):
+                seen.setdefault("action", payload.get("action") or {})
+            if entry.kind == "decision":
+                seen["decision"] = payload.get("decision") or {}
+            elif entry.kind == "confirmation":
+                seen["confirmed"] = True
+            elif entry.kind == "execution":
+                seen["result"] = payload.get("result") or {}
+            elif entry.kind == "receipt":
+                seen["receipt"] = payload.get("receipt") or {}
+        items = [item for key, seen in actions.items() if (item := self._summary_item(user_id, lang, key, seen, key in blocked))]
+        if rejected:
+            items.append(_text(lang, "turn_rejected"))
+        if not items:
+            return _text(lang, "turn_nothing")
+        return _text(lang, "turn_summary", items=_text(lang, "turn_joiner").join(items))
+
+    def _summary_item(self, user_id: str, lang: str, key: str, seen: dict[str, Any], blocked: bool) -> str | None:
+        """What one action did in this call, or None when it changed nothing."""
+        action = seen.get("action") or self._proposed_action(user_id, key)
+        what = self._summary_what(lang, action, blocked)
+        decision = seen.get("decision")
+        if decision is not None and not decision.get("allowed"):
+            return _text(lang, "turn_refused", what=what, rules=", ".join(decision.get("rule_ids", [])))
+        receipt = seen.get("receipt")
+        if receipt is not None:
+            name = "turn_receipt" if seen.get("confirmed") else "turn_executed_receipt"
+            return _text(lang, name, what=what, receipt_id=receipt.get("receipt_id"), status=receipt.get("status"))
+        result = seen.get("result")
+        if seen.get("confirmed"):
+            if result is None:
+                return _text(lang, "turn_not_executed", what=what)
+            status = (result.get("freeze") or result.get("cancel") or {}).get("status")
+            return _text(lang, "turn_result", what=what, status=status) if status else _text(lang, "turn_confirmed", what=what)
+        if result is not None:
+            kind = action.get("type")
+            tier = TIERS.get(ActionType(kind)) if kind in ActionType._value2member_map_ else None
+            return None if tier is Tier.T0 else _text(lang, "turn_done", what=what)
+        if decision is not None and decision.get("requires_confirmation"):
+            return _text(lang, "turn_proposed", what=what)
+        return None
+
+    def _proposed_action(self, user_id: str, key: str) -> dict[str, Any]:
+        """The action a confirmation in this call confirmed, from the proposal an earlier call wrote."""
+        for entry in self._ledger.entries():
+            if entry.kind == "proposal" and entry.payload.get("user_id") == user_id:
+                action = entry.payload.get("action") or {}
+                if action.get("idempotency_key") == key:
+                    return action
+        return {}
+
+    @staticmethod
+    def _summary_what(lang: str, action: dict[str, Any], blocked: bool) -> str:
+        """The name of an action in the summary: a transfer with its amount and payee, any other by its type, and a
+        request from data by its type only, so no amount or account it carried is repeated."""
+        kind = str(action.get("type", ""))
+        names = SUMMARY_WHAT.get(lang, SUMMARY_WHAT["en"])
+        if kind == ActionType.TRANSFER.value and not blocked and action.get("amount") and action.get("payee_id"):
+            amount = format_amount(Decimal(str(action["amount"])), action.get("currency"), lang)
+            return _text(lang, "turn_transfer", amount=amount, payee=action["payee_id"])
+        return names.get(kind) or _text(lang, "injection_act")
 
     def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
         remembered = [_remembered(message) for message in turn_messages]
@@ -5115,10 +5389,23 @@ A conversation turn takes the next turn number and starts a trail. The student's
         trail = _Trail(user_id, self._turns.get(user_id, 0), reply.provider, reply.model, mandate.id)
         said = [_remembered(message)] if message.text.strip() else []
         self._remember(trail, [*said, Message(role=Role.ASSISTANT, text=reply.text, lang=lang)])
-        return reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]})
+        return self._told(user_id, reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 ```
 
-`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. `_remember` appends the messages to the conversation store as one record, then writes a `turn` entry to the ledger that holds only how many messages there were, so the ledger never holds the student's words. It then adds the messages to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
+`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. Last, `_told` adds the sentence `_turn_summary` writes, decision 146. It walks the call's entries once and groups them by idempotency key, the key read from wherever each kind holds it, then asks `_summary_item` what each action did: refused with its rule ids, executed with a receipt, confirmed with or without a result, done at T1, or proposed and waiting; a read at T0 and an allowed step that did nothing give `None` and are left out, which the walrus operator, `:=`, filters in the same comprehension that builds the list. A confirmation call holds no proposal, so `_proposed_action` finds the action in the proposal an earlier call wrote. `_summary_what` names a transfer by its amount and payee and any other action by `SUMMARY_WHAT`, and names a request from data by its kind only. The sentence passes `_redacted`, the reply guard's patterns, and joins the reply after the text the memory stored.
+
+```python
+def _injection_sentence(lang: str, payload: dict[str, Any]) -> str:
+    """What the student is told a blocked request from data asked for: its kind and where it came from, never an
+    address or an amount it carried, and that Lifeline did not do it. Source: docs/decisions.md, decision 144."""
+    pasted = Source.PASTED_TEXT.value in (payload.get("fields") or {}).values()
+    origin = _text(lang, "injection_from_paste" if pasted else "injection_from_data")
+    what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(payload.get("tool"))) or _text(lang, "injection_act")
+    return _text(lang, "injection_blocked", origin=origin, what=what)
+```
+
+`_injection_sentence` reads the fields of an `injection_suspected` entry: when any came from a paste the sentence says text the student pasted, otherwise information Lifeline read. The kind comes from `INJECTION_WHAT` in the student's language, which names a payment and a standing payment as well as the T1 tools, and `injection_act` covers a tool it does not know.
+ `_remember` appends the messages to the conversation store as one record, then writes a `turn` entry to the ledger that holds only how many messages there were, so the ledger never holds the student's words. It then adds the messages to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
 
 ```python
     def _run_tool(
@@ -5142,6 +5429,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        supplied: set[str] = set()
         latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
         if latest:
             # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
@@ -5160,7 +5448,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
             fields["withdrawal_date"] = call.arguments.get("date") or _now().date()
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
-            fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
+            fields["standing_terms"], supplied = _standing_terms(call.arguments, trail)
         try:
             action = Action(
                 type=action_type,
@@ -5190,7 +5478,9 @@ A conversation turn takes the next turn number and starts a trail. The student's
         elif action.type is ActionType.SET_REMINDER:
             untrusted = _untrusted_reminder(trail, call.arguments)
         else:
-            untrusted = _untrusted_fields(trail, action) if checked else {}
+            payees = {_skeleton(payee) for payee in mandate.allowed_payees}
+            receipts = {_skeleton(receipt) for receipt in self._receipt_rails.get(user_id, {})}
+            untrusted = _untrusted_fields(trail, action, payees, receipts, supplied) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
@@ -6810,6 +7100,13 @@ TOKEN_PIECE = re.compile(r"[0-9a-fA-F]{16,}")
         A note of kind redaction records which classes were found, never a value. Source:
         docs/decisions.md, 8 October 2026. Every reply passes here before it leaves the loop.
         """
+        text, classes = self._redacted(text)
+        if classes:
+            self._write(trail, "note", {"kind": "redaction", "classes": classes})
+        return text
+
+    def _redacted(self, text: str) -> tuple[str, list[str]]:
+        """Text with every card number, issued token and secret value replaced by the marker, and the classes found."""
         classes: list[str] = []
         for name, values in (("confirmation_token", self._issued_tokens()), ("secret", self._secret_values())):
             # Longest first, so a value that contains another is replaced whole.
@@ -6829,14 +7126,12 @@ TOKEN_PIECE = re.compile(r"[0-9a-fA-F]{16,}")
         text, count = CARD_NUMBER.subn(REDACTION_MARKER, text)
         if count:
             classes.append("card_number")
-        if classes:
-            self._write(trail, "note", {"kind": "redaction", "classes": classes})
-        return text
+        return text, classes
 ```
 
 `_issued_tokens` gathers every token the loop has handed out: those still waiting in `_pending`, those used in `_consumed`, and those closed in `_closed`. The `*` inside a set display unpacks each dictionary's keys into one set. `_secret_values` reads the four variables on every call, so a key set after the loop started is still caught, and adds the two development fallbacks; a value shorter than eight characters is dropped so an empty variable cannot blank out ordinary words.
 
-`_guarded` replaces the longest values first, so a value that contains another is replaced whole. `re.subn` returns the new text and the number of replacements, which is how the method knows a class was found. The inner function `piece` is passed to `TOKEN_PIECE.sub`; for each match it returns the marker when the match is part of a token and the match itself otherwise. When anything was found, one `note` of kind `redaction` lists the classes, never a value. `_reply` calls `_guarded` on every reply it builds, `_rescue_reply` on every rescue reply, and `_converse` joins the loop's own sentences to a reply only after guarding them too, which the attacker brief showed was needed.
+`_redacted` does the replacing and returns the text with the classes it found, and `_guarded` writes the note of kind `redaction` when it found any; the turn summary passes `_redacted` alone, because it is added after the call's entries are written. `_redacted` replaces the longest values first, so a value that contains another is replaced whole. `re.subn` returns the new text and the number of replacements, which is how the method knows a class was found. The inner function `piece` is passed to `TOKEN_PIECE.sub`; for each match it returns the marker when the match is part of a token and the match itself otherwise. When anything was found, one `note` of kind `redaction` lists the classes, never a value. `_reply` calls `_guarded` on every reply it builds, `_rescue_reply` on every rescue reply, and `_converse` joins the loop's own sentences to a reply only after guarding them too, which the attacker brief showed was needed.
 
 ### The precheck argument mapping, `core/agent.py`
 
@@ -7429,7 +7724,7 @@ MAX_IDENTITY_ATTEMPTS = 3
         do_now = self._do_now(after, rescue)
         plan = self._plans[user_id]
         freeze = rescue.freeze if rescue is not None else None
-        return RescueReply(
+        return self._told(user_id, RescueReply(
             text=text,
             lang=lang,
             confirmation=out.confirmation,
@@ -7445,7 +7740,7 @@ MAX_IDENTITY_ATTEMPTS = 3
                 live_instrument=self._live.get(user_id),
                 issuer_link=freeze.deep_link if freeze is not None else None,
             ),
-        )
+        ))
 
     @staticmethod
     def _do_now(state: RescueState | None, rescue: _Rescue | None) -> str:
@@ -8321,6 +8616,11 @@ from rails.fake_router import FakeRouter
 ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "suites"
 SCENARIOS_DIR = SUITES_DIR / "scenarios"
+# The stranger runs: scenarios from each stranger test, played as a group apart from the suite entries, so the
+# entries' counts keep their meaning. Source: docs/decisions.md, decision 147.
+STRANGER_DIR = SCENARIOS_DIR / "stranger"
+EXPECTED_FAILING = "expected failing"
+FLAG_TO_REMOVE = "passes but flagged"
 REPORT_PATH = ROOT / "evidence" / "report.md"
 # Scenarios only the live mode reads, such as a language the loop cannot write in. The ordinary run never opens it.
 LIVE_DIR = SUITES_DIR / "live"
@@ -8988,6 +9288,64 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
 `evaluate` walks both suites in order and gives every entry a result. An entry starts as not automated, and it becomes passed or failed only when `suites/scenarios/<id>.yaml` exists and has been run. A scenario whose `id` does not match its file name, or that has no runs, fails. That is why a missing or empty scenario can never count as passed.
 
 ```python
+class StrangerResult:
+    """One file of a stranger run, judged against its expected_failing flag."""
+
+    file: str
+    id: str
+    task: str
+    run: str
+    expected_failing: bool
+    status: str
+    runs: list[RunResult] = field(default_factory=list)
+    note: str | None = None
+```
+
+```python
+def evaluate_stranger(suites_dir: Path = SUITES_DIR, stranger_dir: Path | None = None) -> list[StrangerResult]:
+    """Play every file in the stranger folder and judge it against its flag.
+
+    A file passes or fails as a scenario does. One marked expected_failing that fails is expected failing; one so
+    marked that passes is a failure of the suite, because its fix must be recorded by removing the flag in the
+    same pull request; one not so marked that fails is a failure. Its id must name an entry in a suite.
+    Source: docs/decisions.md, decision 147.
+    """
+    stranger_dir = suites_dir / "scenarios" / "stranger" if stranger_dir is None else stranger_dir
+    ids = {entry["id"] for _, filename in SUITES for entry in load_suite(suites_dir / filename)}
+    results = []
+    for path in sorted(stranger_dir.glob("*.yaml")) if stranger_dir.is_dir() else []:
+        scenario = load_suite(path)
+        flagged = scenario.get("expected_failing") is True
+        entry_id = str(scenario.get("id", ""))
+        if entry_id in ids:
+            runs, note = _run_file(path, entry_id)
+        else:
+            runs, note = [RunResult([], [f"{entry_id or 'the file'} names no entry in a suite"])], scenario.get("note")
+        passed = all(run.passed for run in runs)
+        status = {(True, False): PASSED, (True, True): FLAG_TO_REMOVE, (False, True): EXPECTED_FAILING}.get((passed, flagged), FAILED)
+        results.append(
+            StrangerResult(path.name, entry_id, str(scenario.get("stranger_task", "")), str(scenario.get("stranger_run", "")), flagged, status, runs, note)
+        )
+    return results
+```
+
+```python
+def stranger_failures(results: list[StrangerResult]) -> list[str]:
+    """Why the stranger runs fail the suite, one line per file: a flagged file that passes, or a file that fails
+    without the flag."""
+    lines = []
+    for result in results:
+        if result.status == FLAG_TO_REMOVE:
+            lines.append(f"{result.file} passes but is marked expected_failing: remove the flag in the pull request that fixed it.")
+        elif result.status == FAILED:
+            reasons = "; ".join(failure for run in result.runs for failure in run.failures)
+            lines.append(f"{result.file} fails: {reasons}")
+    return lines
+```
+
+`evaluate_stranger` is decision 147. It plays every file in `suites/scenarios/stranger` through the same `_run_file`, after checking that the file's id names a suite entry, and then reads the result against the file's `expected_failing` flag. The dictionary keyed by the pair `(passed, flagged)` gives the status for three of the four cases, and `.get` falls back to failed for the fourth, a file that fails without the flag. `stranger_failures` turns the two failing statuses into one line each, which `main` prints and which make the harness exit with 1, so a fix that lands without removing its flag stops CI. The stranger runs never touch the results of `evaluate`, so the 58 entries keep their counts.
+
+```python
 def _run_file(path: Path, entry_id: str, live: "LiveProvider | None" = None) -> tuple[list[RunResult], str | None]:
     try:
         scenario = load_suite(path)
@@ -9017,7 +9375,9 @@ def _count_table(title: str, key: str, groups: dict[str, list[EntryResult]]) -> 
 `_row` writes one Markdown table row. `_count_table` writes a table of entries by group, with counts made by `Counter`, a dictionary that counts how often each value appears and answers zero for a value it has never seen.
 
 ```python
-def render_report(results: list[EntryResult], commit: str, generated_at: datetime) -> str:
+def render_report(
+    results: list[EntryResult], commit: str, generated_at: datetime, stranger: list[StrangerResult] | None = None
+) -> str:
     lines = [
         "# Lifeline evidence report",
         "",
@@ -9054,7 +9414,34 @@ def render_report(results: list[EntryResult], commit: str, generated_at: datetim
     for result in results:
         if result.status == NOT_AUTOMATED:
             lines.append(_row(result.id, result.suite, result.tier or "", result.title, result.status))
+    if stranger is not None:
+        lines += _stranger_section(stranger)
     return "\n".join(lines) + "\n"
+
+
+def _stranger_section(stranger: list[StrangerResult]) -> list[str]:
+    """The stranger runs, apart from the suite entries above, so those counts keep their meaning."""
+    counts = Counter(result.status for result in stranger)
+    lines = [
+        "",
+        "## Stranger runs",
+        "",
+        "Every file in `suites/scenarios/stranger`, from the stranger tests in `docs/stranger_test.md`, played apart from "
+        "the suite entries above. A file marked expected failing records a failure not yet fixed; one that passes "
+        "while so marked fails the suite until the flag is removed.",
+        "",
+        _row("Files", "Passed", "Expected failing", "Failed", "Passes but flagged"),
+        _row(*["---"] * 5),
+        _row(len(stranger), counts[PASSED], counts[EXPECTED_FAILING], counts[FAILED], counts[FLAG_TO_REMOVE]),
+        "",
+        _row("File", "Entry", "Task", "Run", "Result", "Note"),
+        _row(*["---"] * 6),
+    ]
+    lines += [_row(r.file, r.id, r.task, r.run, r.status, r.note or "") for r in stranger]
+    failures = stranger_failures(stranger)
+    if failures:
+        lines += ["", "### Stranger failures", "", *(f"1. {line}" for line in failures)]
+    return lines
 ```
 
 `render_report` writes the report from the results alone. It opens with the time and the commit it was given, then counts entries by suite and tasks by tier. Runs are counted by language, and a run that switches languages counts under each one it used. The table of automated entries shows each result, the languages run beside the languages the suite declares, and the scenario's note, which is where a scenario says what part of an entry it does not cover. Any failures are listed with their reasons, and every entry without a scenario is listed as not automated. The function takes the commit and the time as arguments, so the tests can check the text exactly.
@@ -9082,14 +9469,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.live is not None or arguments.swap:
         return main_live(arguments.live, arguments.swap)
     results = evaluate()
+    stranger = evaluate_stranger()
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc)), encoding="utf-8")
+    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc), stranger), encoding="utf-8")
     counts = Counter(result.status for result in results)
+    strange = Counter(result.status for result in stranger)
     print(
         f"{REPORT_PATH.relative_to(ROOT)}: {counts[PASSED]} passed, {counts[FAILED]} failed, "
-        f"{counts[NOT_AUTOMATED]} not automated"
+        f"{counts[NOT_AUTOMATED]} not automated; stranger runs: {strange[PASSED]} passed, "
+        f"{strange[EXPECTED_FAILING]} expected failing, {strange[FAILED]} failed, {strange[FLAG_TO_REMOVE]} passes but flagged"
     )
-    return 1 if counts[FAILED] else 0
+    for line in stranger_failures(stranger):
+        print(line)
+    return 1 if counts[FAILED] or stranger_failures(stranger) else 0
 
 
 if __name__ == "__main__":
@@ -11015,7 +11407,7 @@ def test_twelve_digits_and_runs_touching_letters_are_left_alone():
 
     reply = s.loop.handle(USER, _user("ledger"))
 
-    assert reply.text == text
+    assert reply.text == f"{text} This turn: nothing was proposed, changed or sent."
     assert _notes(s) == []
 ```
 
