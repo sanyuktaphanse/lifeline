@@ -267,13 +267,13 @@ What was fixed, decisions 143 to 147: the student's own records are no longer re
 
 ```bash
 git clone https://github.com/sanyuktaphanse/lifeline.git
-cd lifeline && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+cd lifeline && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 pytest
 make evidence
 python -c "from core.harness import evaluate; r=[e for e in evaluate() if e.suite=='attacks']; print(len(r), 'attacks,', sum(e.status=='passed' for e in r), 'passed, not passed:', [e.id+' '+e.status for e in r if e.status!='passed'])"
 ```
 
-1. Clone the repository and install, in a virtual environment named `.venv`. The repository is private on 10 October 2026, so a judge needs the access the submission grants, or the submitted archive in place of the clone.
+1. Clone the repository and install, in a virtual environment named `.venv`. Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. The repository is private on 10 October 2026, so a judge needs the access the submission grants, or the submitted archive in place of the clone.
 2. Since the technical documentation added its own test, `pytest` collects 1503 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
 3. `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`, whose By suite table shows the attacks: 28 entries, 27 passed, 1 not automated.
 4. The last command plays the attack scenarios alone and prints `28 attacks, 27 passed, not passed: ['X25 not automated']`.
