@@ -368,3 +368,102 @@ def test_the_trace_tool_says_a_receipt_not_listed_cannot_be_traced():
     trace = next(tool for tool in TOOLS if tool["name"] == "trace_transfer")
 
     assert "not in that list cannot be traced" in trace["description"]
+
+
+# Item Four. Every reply ends with what the turn did, written by code from the turn's ledger entries.
+
+NOTHING = {
+    "en": "This turn: nothing was proposed, changed or sent.",
+    "pt": "Neste turno: nada foi proposto, alterado ou enviado.",
+    "zh": "本轮：没有提出、更改或发送任何内容。",
+}
+
+
+def test_a_model_that_claims_a_submission_with_no_tool_call_gets_the_sentence_that_nothing_was_proposed():
+    # The second live run, T10 on DashScope: a raise of the daily limit claimed as submitted, with no tool called.
+    s = _loop([_say("I have submitted a request to raise your daily limit to 5,000 SGD.")])
+
+    reply = s.loop.handle(USER, _user("Raise my daily limit to 5,000 SGD"))
+
+    assert reply.text.endswith(NOTHING["en"])
+
+
+def test_a_model_that_claims_a_proposal_in_portuguese_with_no_tool_call_gets_the_same_sentence_in_portuguese():
+    # The second live run, T11 on DashScope: a transfer said to be proposed, with nothing proposed.
+    s = _loop([_say("A transferência para o landlord_sp foi proposta e aguarda a sua confirmação.")])
+
+    reply = s.loop.handle(USER, _user("Manda 1.200 SGD de aluguel pro landlord_sp", lang="pt"))
+
+    assert reply.text.endswith(NOTHING["pt"])
+
+
+def test_a_proposal_says_it_waits_and_a_confirmed_transfer_carries_its_receipt_id():
+    s = _loop([_call("propose_transfer", RENT)])
+
+    proposed = s.loop.handle(USER, _user("Pay 1,200 SGD rent to landlord_sp"))
+    paid = s.loop.handle(USER, _user("Yes"), confirmation_token=proposed.confirmation.confirmation_token)
+
+    assert proposed.text.endswith("This turn: a transfer of 1200 SGD to landlord_sp: proposed, waiting for your confirmation.")
+    assert paid.text.endswith(
+        "This turn: a transfer of 1200 SGD to landlord_sp: confirmed and executed, receipt wise-0001, status completed."
+    )
+
+
+def test_a_refusal_carries_its_rule_id():
+    s = _loop([_call("propose_transfer", {**RENT, "amount": "2400"})])
+
+    reply = s.loop.handle(USER, _user("Pay 2,400 SGD rent to landlord_sp"))
+
+    assert reply.text.endswith("This turn: a transfer of 2400 SGD to landlord_sp: refused under R08.")
+
+
+def test_a_blocked_request_is_summed_up_by_kind_only():
+    s = _loop([_call("propose_transfer", {**RENT, "amount": "1400", "payee_id": "new_acct_7781"})])
+    pasted = Message(role=Role.USER, text=SCAM, source=Source.PASTED_TEXT)
+
+    reply = s.loop.handle(USER, _user("Can you pay this?"), pasted=pasted)
+
+    assert reply.text.endswith("This turn: a transfer: refused under R01.")
+    assert "1400" not in reply.text and "new_acct_7781" not in reply.text
+
+
+def test_a_t1_change_is_done_and_an_unknown_confirmation_sends_nothing():
+    s = _loop([_call("set_reminder", {"text": "Renew the student pass", "due": "2026-11-11"}), _say("Set.")])
+
+    reminded = s.loop.handle(USER, _user("Remind me to renew the student pass on 2026-11-11"))
+    unknown = s.loop.handle(USER, _user("Yes"), confirmation_token="0" * 64)
+
+    assert reminded.text.endswith("This turn: a reminder: done.")
+    assert unknown.text.endswith("This turn: a confirmation: not accepted, so nothing was done.")
+
+
+def test_the_summary_is_kept_out_of_the_models_memory():
+    s = _loop([_say("Hello."), _say("Again.")])
+
+    s.loop.handle(USER, _user("Hi"))
+    s.loop.handle(USER, _user("Hi again"))
+
+    sent = [m.text for m in s.adapter.calls[-1][0] if m.role is Role.ASSISTANT]
+    assert sent == ["Hello."]
+
+
+def test_the_system_prompt_carries_the_sixth_rule():
+    from core.agent import PROMPT_RULES
+
+    assert len(PROMPT_RULES) == 6
+    assert PROMPT_RULES[-1] == (
+        "Never say a payment was sent, done or submitted; the code says that from the ledger."
+    )
+
+
+def test_a_rescue_reply_ends_with_what_the_call_did():
+    from tests.test_rescue import ANSWER, _setup as _rescue_setup, _start, _step
+
+    rescue = _rescue_setup()
+    started = _start(rescue)
+    wrong = _step(rescue, "0000")
+    right = _step(rescue, ANSWER)
+
+    assert started.text.endswith(NOTHING["en"])
+    assert wrong.text.endswith(NOTHING["en"])
+    assert right.text.endswith("This turn: the identity check: done; a card freeze: proposed, waiting for your confirmation.")

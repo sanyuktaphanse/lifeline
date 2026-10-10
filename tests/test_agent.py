@@ -247,7 +247,7 @@ def test_read_balance_in_portuguese_gets_a_portuguese_reply():
     reply = s.loop.handle(USER, _user("Qual é o meu saldo?", lang="pt"))
 
     assert reply.lang == "pt"
-    assert reply.text == "O seu saldo é 2.300 SGD e 150 BRL."
+    assert reply.text == "O seu saldo é 2.300 SGD e 150 BRL. Neste turno: nada foi proposto, alterado ou enviado."
     system = s.adapter.calls[0][0][0]
     assert system.role is Role.SYSTEM
     assert "pt" in system.text
@@ -405,7 +405,7 @@ def test_a_simulated_receipt_says_so_in_the_users_language(lang):
     reply = s.loop.handle(USER, _user("ok", lang=lang), confirmation_token=token)
 
     assert reply.receipt.simulated is True
-    assert reply.text.endswith(SIMULATED_TEXT[lang])
+    assert SIMULATED_TEXT[lang] in reply.text
 
 
 def test_a_rail_that_disagrees_with_its_route_writes_a_note_and_its_own_flag_wins():

@@ -3969,6 +3969,9 @@ PROMPT_RULES = (
     "Never recommend a simulated route for real money, and say that a route is simulated whenever it is.",
     "Never say you can change a limit or a setting; call the tool, such as change_limit, and let the code answer.",
     "Call add_payee only when the student asks to add a payee.",
+    # The second live run saw DashScope claim a submission and a proposal no tool made, open item 163; the turn
+    # summary now says what the turn did. Source: docs/decisions.md, decision 146.
+    "Never say a payment was sent, done or submitted; the code says that from the ledger.",
 )
 
 
@@ -4268,6 +4271,19 @@ TEXTS = {
         "injection_from_paste": "Text you pasted",
         "injection_from_data": "Information Lifeline read",
         "injection_act": "take an action",
+        "turn_nothing": "This turn: nothing was proposed, changed or sent.",
+        "turn_summary": "This turn: {items}.",
+        "turn_joiner": "; ",
+        "turn_transfer": "a transfer of {amount} to {payee}",
+        "turn_proposed": "{what}: proposed, waiting for your confirmation",
+        "turn_refused": "{what}: refused under {rules}",
+        "turn_receipt": "{what}: confirmed and executed, receipt {receipt_id}, status {status}",
+        "turn_executed_receipt": "{what}: executed, receipt {receipt_id}, status {status}",
+        "turn_result": "{what}: confirmed, result {status}",
+        "turn_confirmed": "{what}: confirmed and done",
+        "turn_not_executed": "{what}: confirmed but not executed",
+        "turn_done": "{what}: done",
+        "turn_rejected": "a confirmation: not accepted, so nothing was done",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
@@ -4368,6 +4384,19 @@ TEXTS = {
         "injection_from_paste": "O texto que você colou",
         "injection_from_data": "Uma informação que o Lifeline leu",
         "injection_act": "realizar uma ação",
+        "turn_nothing": "Neste turno: nada foi proposto, alterado ou enviado.",
+        "turn_summary": "Neste turno: {items}.",
+        "turn_joiner": "; ",
+        "turn_transfer": "uma transferência de {amount} para {payee}",
+        "turn_proposed": "{what}: proposta feita, aguardando sua confirmação",
+        "turn_refused": "{what}: recusa pelas regras {rules}",
+        "turn_receipt": "{what}: confirmação e execução, recibo {receipt_id}, estado {status}",
+        "turn_executed_receipt": "{what}: execução, recibo {receipt_id}, estado {status}",
+        "turn_result": "{what}: confirmação feita, resultado {status}",
+        "turn_confirmed": "{what}: confirmação feita e ação concluída",
+        "turn_not_executed": "{what}: confirmação feita, mas sem execução",
+        "turn_done": "{what}: ação concluída",
+        "turn_rejected": "uma confirmação: não aceita, então nada foi feito",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
@@ -4468,6 +4497,19 @@ TEXTS = {
         "injection_from_paste": "你粘贴的文字",
         "injection_from_data": "Lifeline 读取的信息",
         "injection_act": "执行一项操作",
+        "turn_nothing": "本轮：没有提出、更改或发送任何内容。",
+        "turn_summary": "本轮：{items}。",
+        "turn_joiner": "；",
+        "turn_transfer": "向 {payee} 转账 {amount}",
+        "turn_proposed": "{what}：已提出，等待你确认",
+        "turn_refused": "{what}：被拒绝，规则 {rules}",
+        "turn_receipt": "{what}：已确认并执行，回执 {receipt_id}，状态 {status}",
+        "turn_executed_receipt": "{what}：已执行，回执 {receipt_id}，状态 {status}",
+        "turn_result": "{what}：已确认，结果 {status}",
+        "turn_confirmed": "{what}：已确认并完成",
+        "turn_not_executed": "{what}：已确认，但未执行",
+        "turn_done": "{what}：已完成",
+        "turn_rejected": "一项确认：未被接受，因此没有执行任何操作",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，在 {key} 下没有产生任何扣款。次优路线是 {rail}，手续费 {fee}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
@@ -5187,20 +5229,110 @@ A conversation turn takes the next turn number and starts a trail. The student's
 ```python
     def _finish(self, trail: _Trail, turn_messages: list[Message], reply: AgentReply) -> AgentReply:
         self._remember(trail, turn_messages)
-        return self._told(reply.model_copy(update={"ledger_seqs": list(trail.seqs)}))
+        return self._told(trail.user_id, reply.model_copy(update={"ledger_seqs": list(trail.seqs)}))
 
-    def _told[ReplyT: AgentReply](self, reply: ReplyT) -> ReplyT:
+    def _told[ReplyT: AgentReply](self, user_id: str, reply: ReplyT) -> ReplyT:
         """The reply with what the code tells the student from this call's ledger entries, kept out of the memory:
-        first, for every request from data the loop blocked, what it asked for and that Lifeline did not do it.
-        Source: docs/decisions.md, decision 144.
+        first, for every request from data the loop blocked, what it asked for and that Lifeline did not do it,
+        Source: docs/decisions.md, decision 144; last, one sentence saying what the call did, decision 146.
         """
         seqs = set(reply.ledger_seqs)
         entries = [entry for entry in self._ledger.entries() if entry.seq in seqs]
         blocked = [_injection_sentence(reply.lang, entry.payload) for entry in entries if entry.kind == "injection_suspected"]
         first = list(dict.fromkeys(blocked))
-        if not first:
-            return reply
-        return reply.model_copy(update={"text": " ".join([*first, reply.text]).strip()})
+        # The summary names payees and receipts from the ledger, so it passes the same patterns as every reply.
+        summary = self._redacted(self._turn_summary(user_id, reply.lang, entries))[0]
+        return reply.model_copy(update={"text": " ".join(filter(None, [*first, reply.text, summary]))})
+
+    def _turn_summary(self, user_id: str, lang: str, entries: list[LedgerEntry]) -> str:
+        """One sentence, in the student's language, of what this call did, read from its ledger entries alone and
+        never from the model's text: each action proposed and waiting, refused with its rule ids, confirmed, executed
+        with its receipt id and status, or done at tier T1, each confirmation not accepted, or that nothing was
+        proposed, changed or sent. A read at tier T0 changes nothing and is left out. A request from data is named
+        by its kind only. Source: docs/decisions.md, decision 146, from the stranger task T14 and open item 163.
+        """
+        actions: dict[str, dict[str, Any]] = {}
+        blocked: set[str] = set()
+        rejected = False
+        for entry in entries:
+            payload = entry.payload
+            if entry.kind == "confirmation_rejected":
+                rejected = True
+                continue
+            if entry.kind == "injection_suspected":
+                blocked.add(str(payload.get("idempotency_key")))
+                continue
+            key = {
+                "proposal": (payload.get("action") or {}).get("idempotency_key"),
+                "decision": payload.get("idempotency_key"),
+                "confirmation": payload.get("idempotency_key"),
+                "execution": (payload.get("action") or {}).get("idempotency_key"),
+                "receipt": (payload.get("receipt") or {}).get("idempotency_key"),
+            }.get(entry.kind)
+            if key is None:
+                continue
+            seen = actions.setdefault(key, {})
+            if entry.kind in ("proposal", "execution"):
+                seen.setdefault("action", payload.get("action") or {})
+            if entry.kind == "decision":
+                seen["decision"] = payload.get("decision") or {}
+            elif entry.kind == "confirmation":
+                seen["confirmed"] = True
+            elif entry.kind == "execution":
+                seen["result"] = payload.get("result") or {}
+            elif entry.kind == "receipt":
+                seen["receipt"] = payload.get("receipt") or {}
+        items = [item for key, seen in actions.items() if (item := self._summary_item(user_id, lang, key, seen, key in blocked))]
+        if rejected:
+            items.append(_text(lang, "turn_rejected"))
+        if not items:
+            return _text(lang, "turn_nothing")
+        return _text(lang, "turn_summary", items=_text(lang, "turn_joiner").join(items))
+
+    def _summary_item(self, user_id: str, lang: str, key: str, seen: dict[str, Any], blocked: bool) -> str | None:
+        """What one action did in this call, or None when it changed nothing."""
+        action = seen.get("action") or self._proposed_action(user_id, key)
+        what = self._summary_what(lang, action, blocked)
+        decision = seen.get("decision")
+        if decision is not None and not decision.get("allowed"):
+            return _text(lang, "turn_refused", what=what, rules=", ".join(decision.get("rule_ids", [])))
+        receipt = seen.get("receipt")
+        if receipt is not None:
+            name = "turn_receipt" if seen.get("confirmed") else "turn_executed_receipt"
+            return _text(lang, name, what=what, receipt_id=receipt.get("receipt_id"), status=receipt.get("status"))
+        result = seen.get("result")
+        if seen.get("confirmed"):
+            if result is None:
+                return _text(lang, "turn_not_executed", what=what)
+            status = (result.get("freeze") or result.get("cancel") or {}).get("status")
+            return _text(lang, "turn_result", what=what, status=status) if status else _text(lang, "turn_confirmed", what=what)
+        if result is not None:
+            kind = action.get("type")
+            tier = TIERS.get(ActionType(kind)) if kind in ActionType._value2member_map_ else None
+            return None if tier is Tier.T0 else _text(lang, "turn_done", what=what)
+        if decision is not None and decision.get("requires_confirmation"):
+            return _text(lang, "turn_proposed", what=what)
+        return None
+
+    def _proposed_action(self, user_id: str, key: str) -> dict[str, Any]:
+        """The action a confirmation in this call confirmed, from the proposal an earlier call wrote."""
+        for entry in self._ledger.entries():
+            if entry.kind == "proposal" and entry.payload.get("user_id") == user_id:
+                action = entry.payload.get("action") or {}
+                if action.get("idempotency_key") == key:
+                    return action
+        return {}
+
+    @staticmethod
+    def _summary_what(lang: str, action: dict[str, Any], blocked: bool) -> str:
+        """The name of an action in the summary: a transfer with its amount and payee, any other by its type, and a
+        request from data by its type only, so no amount or account it carried is repeated."""
+        kind = str(action.get("type", ""))
+        names = SUMMARY_WHAT.get(lang, SUMMARY_WHAT["en"])
+        if kind == ActionType.TRANSFER.value and not blocked and action.get("amount") and action.get("payee_id"):
+            amount = format_amount(Decimal(str(action["amount"])), action.get("currency"), lang)
+            return _text(lang, "turn_transfer", amount=amount, payee=action["payee_id"])
+        return names.get(kind) or _text(lang, "injection_act")
 
     def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
         remembered = [_remembered(message) for message in turn_messages]
@@ -5214,7 +5346,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         trail = _Trail(user_id, self._turns.get(user_id, 0), reply.provider, reply.model, mandate.id)
         said = [_remembered(message)] if message.text.strip() else []
         self._remember(trail, [*said, Message(role=Role.ASSISTANT, text=reply.text, lang=lang)])
-        return self._told(reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
+        return self._told(user_id, reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 ```
 
 `_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. `_remember` appends the messages to the conversation store as one record, then writes a `turn` entry to the ledger that holds only how many messages there were, so the ledger never holds the student's words. It then adds the messages to the student's history and bounds it. `_remember_confirmation` does the same for a confirmation: the student's words when there are any, and the reply they saw. It takes the reply's provider and model, so every entry of a confirmed payment still names the model that proposed it.
@@ -6912,6 +7044,13 @@ TOKEN_PIECE = re.compile(r"[0-9a-fA-F]{16,}")
         A note of kind redaction records which classes were found, never a value. Source:
         docs/decisions.md, 8 October 2026. Every reply passes here before it leaves the loop.
         """
+        text, classes = self._redacted(text)
+        if classes:
+            self._write(trail, "note", {"kind": "redaction", "classes": classes})
+        return text
+
+    def _redacted(self, text: str) -> tuple[str, list[str]]:
+        """Text with every card number, issued token and secret value replaced by the marker, and the classes found."""
         classes: list[str] = []
         for name, values in (("confirmation_token", self._issued_tokens()), ("secret", self._secret_values())):
             # Longest first, so a value that contains another is replaced whole.
@@ -6931,14 +7070,12 @@ TOKEN_PIECE = re.compile(r"[0-9a-fA-F]{16,}")
         text, count = CARD_NUMBER.subn(REDACTION_MARKER, text)
         if count:
             classes.append("card_number")
-        if classes:
-            self._write(trail, "note", {"kind": "redaction", "classes": classes})
-        return text
+        return text, classes
 ```
 
 `_issued_tokens` gathers every token the loop has handed out: those still waiting in `_pending`, those used in `_consumed`, and those closed in `_closed`. The `*` inside a set display unpacks each dictionary's keys into one set. `_secret_values` reads the four variables on every call, so a key set after the loop started is still caught, and adds the two development fallbacks; a value shorter than eight characters is dropped so an empty variable cannot blank out ordinary words.
 
-`_guarded` replaces the longest values first, so a value that contains another is replaced whole. `re.subn` returns the new text and the number of replacements, which is how the method knows a class was found. The inner function `piece` is passed to `TOKEN_PIECE.sub`; for each match it returns the marker when the match is part of a token and the match itself otherwise. When anything was found, one `note` of kind `redaction` lists the classes, never a value. `_reply` calls `_guarded` on every reply it builds, `_rescue_reply` on every rescue reply, and `_converse` joins the loop's own sentences to a reply only after guarding them too, which the attacker brief showed was needed.
+`_redacted` does the replacing and returns the text with the classes it found, and `_guarded` writes the note of kind `redaction` when it found any; the turn summary passes `_redacted` alone, because it is added after the call's entries are written. `_redacted` replaces the longest values first, so a value that contains another is replaced whole. `re.subn` returns the new text and the number of replacements, which is how the method knows a class was found. The inner function `piece` is passed to `TOKEN_PIECE.sub`; for each match it returns the marker when the match is part of a token and the match itself otherwise. When anything was found, one `note` of kind `redaction` lists the classes, never a value. `_reply` calls `_guarded` on every reply it builds, `_rescue_reply` on every rescue reply, and `_converse` joins the loop's own sentences to a reply only after guarding them too, which the attacker brief showed was needed.
 
 ### The precheck argument mapping, `core/agent.py`
 
@@ -7531,7 +7668,7 @@ MAX_IDENTITY_ATTEMPTS = 3
         do_now = self._do_now(after, rescue)
         plan = self._plans[user_id]
         freeze = rescue.freeze if rescue is not None else None
-        return self._told(RescueReply(
+        return self._told(user_id, RescueReply(
             text=text,
             lang=lang,
             confirmation=out.confirmation,
@@ -11117,7 +11254,7 @@ def test_twelve_digits_and_runs_touching_letters_are_left_alone():
 
     reply = s.loop.handle(USER, _user("ledger"))
 
-    assert reply.text == text
+    assert reply.text == f"{text} This turn: nothing was proposed, changed or sent."
     assert _notes(s) == []
 ```
 
