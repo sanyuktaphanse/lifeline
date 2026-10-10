@@ -1,6 +1,6 @@
 # Lifeline API
 
-This document describes the HTTP API in `api/main.py`, which the Next.js app in lane C builds against. Every example below is a real response, recorded through FastAPI's test client with a scripted model, so the shapes are exactly what the app will receive. Only the times, hashes, and token differ from run to run.
+This document describes the HTTP API in `api/main.py`, which the frontend of lane C, not in this repository, builds against. It describes `main` at commit `c824610`, 10 October 2026, and every route and response shape below was checked that day against a running app with a scripted model. The examples were recorded through FastAPI's test client. Times, hashes, tokens and ledger sequence numbers differ from run to run, and `provider` and `model` name whichever model answered: the examples recorded against the real provider show `anthropic` and `claude-opus-5`, and a scripted run shows `fake`.
 
 ## Running it
 
@@ -20,7 +20,7 @@ CORS allows `http://localhost` and `http://127.0.0.1` on any port, for `GET` and
 
 When `LIFELINE_ENV` is `production` the API does not start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are both set to non empty values; the error names the variable that is missing.
 
-The server binds to `127.0.0.1` only, so no other machine can reach it. It has no sign in: anyone who can reach it can act as the demo student. Run it only on a developer's machine, and never expose it on a network. Authentication is out of scope for the hackathon.
+`make dev` binds the server to `127.0.0.1` only, so no other machine can reach it; the Makefile sets it, and no test checks it. It has no sign in: anyone who can reach it can act as the demo student. Run it only on a developer's machine, and never expose it on a network. Authentication is out of scope for the hackathon.
 
 ## Persistence and restarts
 
@@ -34,7 +34,11 @@ The ledger is written to `data/ledger.jsonl`, one JSON entry per line, as each e
 6. the receipts each fake rail issued, so receipt numbers continue and a trace still finds its receipt;
 7. the last twenty messages of each student's conversation, read from `data/conversations.jsonl`, so the model keeps its context.
 8. every rescue in progress, at the step it had reached, with the card it chose, the result of its freeze, and the backup card payments moved to, so a rescue can be finished after a restart.
-9. every overseas cash withdrawal the student recorded, which the cash cap reads from the ledger on every call, so the position after a restart is the fixture's starting position plus those withdrawals.
+9. every overseas cash withdrawal the student recorded, which the cash cap reads from the ledger on every call, so the position after a restart is the fixture's starting position plus those withdrawals;
+10. the balances, which start from the fixture and fall by the amount and the route's fee on every receipt the rail issued, at any stage except failed or returned, and come back once on a cancel that is done or a trace that finds the receipt returned;
+11. every cancel that came back done, so a cancelled transfer stays cancelled.
+
+When a fake rail cannot read back a receipt it issued, the API starts with the ledger on hold, as `integrity_hold` shows.
 
 The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on start the loop reads the time of the last anchor from the ledger, so the hourly anchor keeps its pace. The token itself is never written to the ledger; the engine recomputes it from the waiting action. To start again from nothing, stop the API and delete the three files. A file that was edited still loads, and `/ledger/{user_id}/verify` names the first entry that no longer matches its hash. A line that cannot be read at all, or a file saved without a final newline, also loads, and while the ledger fails verification every payment and confirmed action is paused, as `integrity_hold` in that response shows.
 
@@ -43,7 +47,7 @@ The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on s
 1. Requests and responses are JSON.
 2. Amounts are strings, such as `"1200"` or `"5.60"`, because they are exact decimals. Parse them as decimals, never as floating point numbers.
 3. Times are ISO 8601 in UTC.
-4. `lang` is `en`, `pt`, or `zh`. When `/chat` gets no `lang`, the language is detected from `text`.
+4. `lang` is `en`, `pt`, or `zh`. When `/chat` gets no `lang`, the language is detected from `text`. Text Lifeline holds only in English, a quoted knowledge statement or a rule's reason, appears inside a Portuguese or Chinese reply behind one sentence in the student's language saying it is quoted in English or that its translation is pending, so the app will meet English sentences inside `pt` and `zh` replies.
 5. A confirmation token appears only in `confirmation.confirmation_token`: in a `/chat` response when an action first waits for confirmation, and in a `/confirm` response when a rail failed and the same token is offered again for the next route. It is never in `decision`, never in the action inside a confirmation, and never in the ledger. Hold it in memory only, and send it back to `/confirm` when the student says yes.
 
 ## Reading an AgentReply
@@ -54,15 +58,16 @@ The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on s
 | --- | --- | --- |
 | `receipt` | A payment was executed | The receipt and its `status`. `text` says the money was sent only when `status` is `completed`, says the transfer failed and no money arrived when it is `failed` or `returned`, and says it is not completed, naming the status, otherwise. If `receipt.simulated` is true, `text` also says it was a simulation |
 | `freeze` | A card freeze ran | `freeze.status`: `done`, `not_supported` with `freeze.deep_link` to the issuer's app, or `failed` with `freeze.reason` |
+| `cancel` | A confirmed cancel of a transfer ran | `cancel.status`: `done`, `not_supported` with `cancel.reason`, or `failed` with `cancel.reason` |
 | `confirmation` | An action waits for the student's yes | The warning for `confirmation.warning_key`, the action, and for a transfer the routes with `selected_route` marked, then a confirm button. When `confirmation.council` is present, what the council advised: `chosen`, `runner_up`, `reason`, `disagreement` and `triggers` |
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
 | none of these | An answer | `text` only |
 
 Two sentences in `text` are always written by code from the ledger entries of the call, never by the model, and the model never sees them in its memory. When the call blocked a request that came from pasted text or from data Lifeline read, `text` begins with one sentence saying what that request asked for, by kind such as a payment or a payee, never its account or amount, and that Lifeline did not do it. Every `text` from `/chat`, `/confirm` and the rescue ends with one sentence of what the call did, beginning `This turn:` in English, `Neste turno:` in Portuguese and `本轮：` in Chinese: each action proposed and waiting, refused with its rule ids, confirmed and executed with its receipt id and status, or done, or that nothing was proposed, changed or sent. The app can rely on that last sentence even when the model's words before it are wrong.
 
-The system prompt tells the model which receipts the student may trace, their own and those sent to them, so a parent's transfer such as `cn_bank_remit_sim-in-0001` can be traced in chat as through `POST /trace`. A standing mandate's tolerance, notice and cancel window are Lifeline's settings, 5 percent, 48 hours and 24 hours, unless the student states others in their own words; the confirmation states all three, and the day of the month must be in the student's words.
+The system prompt also carries a block written in code from the student's current mandate, the allowed payee ids, corridor codes and purpose codes exactly as the mandate lists them, the two limits and the balances, with six rules, among them to propose every payment the student asks for and let the engine decide, and never to say a payment was sent unless a tool sent it. It tells the model which receipts the student may trace, their own and those sent to them, so a parent's transfer such as `cn_bank_remit_sim-in-0001` can be traced in chat as through `POST /trace`. A standing mandate's tolerance, notice and cancel window are Lifeline's settings, 5 percent, 48 hours and 24 hours, unless the student states others in their own words; the confirmation states all three, and the day of the month must be in the student's words.
 
-The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, `warn.freeze.card`, and `warn.standing.new`, the last for setting up a recurring transfer. Translate them in the app. A payment the student makes under one of their standing mandates, within its pattern, comes back from `/chat` with a `receipt` straight away, decided under rule R12 without a confirmation. A transfer under a standing mandate the student stopped is refused under R12. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
+The warning keys are `warn.transfer.irreversible`, `warn.payee.new`, `warn.freeze.card`, `warn.standing.new`, for setting up a recurring transfer, and `warn.transfer.cancel`, for cancelling a transfer. An action carries `standing_mandate_id` and `standing_terms` for a standing mandate, `plan_update` for a change to the resilience plan, `receipt_id` and `cancel_of` for a cancel, and `withdrawal_date` for a recorded cash withdrawal; each is null otherwise. A route carries `purpose`, the purpose it was quoted for, and `payee_id`, which the loop sets on the route it is about to pay, or null. Translate them in the app. A payment the student makes under one of their standing mandates, within its pattern, comes back from `/chat` with a `receipt` straight away, decided under rule R12 without a confirmation. A transfer under a standing mandate the student stopped is refused under R12. `ledger_seqs` lists the ledger entries this reply wrote, so the app can link to them. `provider` and `model` name the model that answered.
 
 ## GET /health
 
@@ -120,7 +125,13 @@ Response `200`, a transfer waiting for confirmation:
       "payee_id": "landlord_sp",
       "purpose": "rent",
       "instrument_id": null,
-      "confirmation_token": null
+      "standing_mandate_id": null,
+      "standing_terms": null,
+      "confirmation_token": null,
+      "plan_update": null,
+      "receipt_id": null,
+      "cancel_of": null,
+      "withdrawal_date": null
     },
     "confirmation_token": "42d046aaa09c785c8e0ea68e463562102b32120b6091bf121d8518c60c48568a",
     "warning_key": "warn.transfer.irreversible",
@@ -142,7 +153,9 @@ Response `200`, a transfer waiting for confirmation:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:17:40.409489Z"
+        "quoted_at": "2026-09-18T08:17:40.409489Z",
+        "purpose": "rent",
+        "payee_id": null
       },
       {
         "rail": "sim_pix",
@@ -161,7 +174,9 @@ Response `200`, a transfer waiting for confirmation:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:17:40.409489Z"
+        "quoted_at": "2026-09-18T08:17:40.409489Z",
+        "purpose": "rent",
+        "payee_id": null
       },
       {
         "rail": "bank_wire",
@@ -180,7 +195,9 @@ Response `200`, a transfer waiting for confirmation:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:17:40.409489Z"
+        "quoted_at": "2026-09-18T08:17:40.409489Z",
+        "purpose": "rent",
+        "payee_id": null
       }
     ],
     "selected_route": {
@@ -200,7 +217,9 @@ Response `200`, a transfer waiting for confirmation:
       "rule_id": null,
       "fee_source_url": null,
       "rate_source": "fixture",
-      "quoted_at": "2026-09-18T08:17:40.409489Z"
+      "quoted_at": "2026-09-18T08:17:40.409489Z",
+      "purpose": "rent",
+      "payee_id": null
     },
     "council": null,
     "expires_in_seconds": 300
@@ -218,6 +237,7 @@ Response `200`, a transfer waiting for confirmation:
   },
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     1,
     2,
@@ -232,7 +252,7 @@ The token to keep is `confirmation.confirmation_token`. It expires after `expire
 
 ### Pasted text
 
-Send the student's own words in `text` and anything they pasted, such as a message from a landlord, an email, or a page, in `pasted_text`. Pasted text reaches the model marked as data, never an instruction. A payee or an amount that appears only in the pasted text and never in `text` is treated as coming from the paste: the mandate engine refuses the action under R01, and the ledger records an `injection_suspected` entry. When the student types the payee and the amount themselves, the action goes ahead as usual even if the paste repeats them.
+Send the student's own words in `text` and anything they pasted, such as a message from a landlord, an email, or a page, in `pasted_text`. Pasted text reaches the model marked as data, never an instruction. A payee or an amount that appears only in the pasted text and never in `text` is treated as coming from the paste: the mandate engine refuses the action under R01, and the ledger records an `injection_suspected` entry. An amount written in words, in Chinese numerals or with an exponent is traced like one in digits, and a payee id glued to other text in the paste is still found. The same rule covers a freeze of a card only the paste names, a stop or skip of a standing mandate, and a reminder whose text or amount only the paste holds. When the student types the payee and the amount themselves, the action goes ahead as usual even if the paste repeats them, as `tests/test_agent.py::test_details_the_student_typed_are_trusted_even_when_the_paste_repeats_them` shows in the loop; no test sends that over HTTP. The student's own records are not data: a payee on the student's current mandate, or a receipt in their own ledger or among the transfers sent to them, counts as the student's own even when a tool result or the model's earlier words name it, unless the paste or a tool result in that turn names another record of the same kind.
 
 **Note to lane C:** the chat screen needs a separate paste box. Whatever the student pastes must go in `pasted_text`, never into `text`. Text in `text` counts as the student's own instruction, so a scam message pasted into the ordinary chat box would be trusted as if the student had typed it.
 
@@ -269,6 +289,7 @@ Response `200`, refused because the payee and amount came only from the paste. T
   },
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     1,
     2,
@@ -332,6 +353,7 @@ Response `200`, the payment made:
     "standing_mandate_id": null
   },
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     4,
     5,
@@ -367,10 +389,11 @@ Response `200` when the token was already used to pay. The action it paid is reb
   },
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
-    8,
     9,
-    10
+    10,
+    11
   ],
   "provider": null,
   "model": null
@@ -387,9 +410,10 @@ Response `200` when the token was never issued, has expired, was refused when it
   "decision": null,
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
-    11,
-    12
+    12,
+    13
   ],
   "provider": null,
   "model": null
@@ -400,7 +424,7 @@ The ledger entry for that attempt:
 
 ```json
 {
-  "seq": 11,
+  "seq": 12,
   "ts": "2026-09-18T08:17:40.412839Z",
   "actor": "agent",
   "kind": "confirmation_rejected",
@@ -433,7 +457,13 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
       "payee_id": "landlord_sp",
       "purpose": "rent",
       "instrument_id": null,
-      "confirmation_token": null
+      "standing_mandate_id": null,
+      "standing_terms": null,
+      "confirmation_token": null,
+      "plan_update": null,
+      "receipt_id": null,
+      "cancel_of": null,
+      "withdrawal_date": null
     },
     "confirmation_token": "42d046aaa09c785c8e0ea68e463562102b32120b6091bf121d8518c60c48568a",
     "warning_key": "warn.transfer.irreversible",
@@ -455,7 +485,9 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:17:40.426357Z"
+        "quoted_at": "2026-09-18T08:17:40.426357Z",
+        "purpose": "rent",
+        "payee_id": null
       },
       {
         "rail": "sim_pix",
@@ -474,7 +506,9 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:17:40.426357Z"
+        "quoted_at": "2026-09-18T08:17:40.426357Z",
+        "purpose": "rent",
+        "payee_id": null
       },
       {
         "rail": "bank_wire",
@@ -493,7 +527,9 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-09-18T08:17:40.426357Z"
+        "quoted_at": "2026-09-18T08:17:40.426357Z",
+        "purpose": "rent",
+        "payee_id": null
       }
     ],
     "selected_route": {
@@ -513,7 +549,9 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
       "rule_id": null,
       "fee_source_url": null,
       "rate_source": "fixture",
-      "quoted_at": "2026-09-18T08:17:40.426357Z"
+      "quoted_at": "2026-09-18T08:17:40.426357Z",
+      "purpose": "rent",
+      "payee_id": null
     },
     "council": null,
     "expires_in_seconds": 300
@@ -521,6 +559,7 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
   "decision": null,
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     4,
     5,
@@ -563,7 +602,13 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
         "corridor": "SG>BR",
         "payee_id": "landlord_sp",
         "purpose": "rent",
-        "instrument_id": null
+        "instrument_id": null,
+        "standing_mandate_id": null,
+        "standing_terms": null,
+        "plan_update": null,
+        "receipt_id": null,
+        "cancel_of": null,
+        "withdrawal_date": null
       },
       "provider": "anthropic",
       "model": "claude-opus-5",
@@ -601,7 +646,7 @@ Every ledger entry for that student, oldest first. Each entry's `hash` covers it
 ]
 ```
 
-The entry kinds are `proposal`, `decision`, `council`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, and `turn`. A `council` entry holds one whole deliberation of the council and appears only when the API runs with a council, which it does when `COUNCIL` in the environment is `on`, `true`, `1` or `yes`, and not otherwise. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
+The entry kinds are `proposal`, `decision`, `council`, `confirmation`, `execution`, `receipt`, `note`, `injection_suspected`, `confirmation_rejected`, `turn` and `anchor`, and `unreadable` for a line of the file that could not be read as an entry. A `council` entry holds one whole deliberation of the council and appears only when the API runs with a council, which it does when `COUNCIL` in the environment is `on`, `true`, `1` or `yes`, and not otherwise. Every payload carries `user_id`, `turn`, and `mandate_id`, and `provider` and `model` when a model answered.
 
 Each `/chat` or `/confirm` call ends with one `turn` entry, which records only how many messages the call added to the student's conversation. The ledger never holds the student's words: they live in a separate store, `data/conversations.jsonl`, one line per call, which git ignores. The API rebuilds each student's memory from that store on start, and the model sees the last twenty messages on every call. A student's conversation can be erased with `AgentLoop.erase_conversation(user_id)`, which removes their lines from the store and from memory and leaves the ledger, and its hash chain, untouched. A `turn` entry:
 
@@ -740,7 +785,7 @@ Response `200` on a ledger file whose first entry was edited, after the API rest
 }
 ```
 
-The confirmation was answered with `receipt` null and the text "Lifeline has paused every payment and confirmed action, because its ledger failed verification at entry 1. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean.", and the ledger holds a note of kind `ledger_integrity_hold` with `first_broken_seq`, `reason` and the `idempotency_key` of the confirmation it held.
+The confirmation was answered with `receipt` null and the text "Lifeline has paused every payment and confirmed action, because its ledger failed verification at entry 1. Nothing was done. Your balance and history can still be read, and this waits until the ledger is clean. This turn: nothing was proposed, changed or sent.", and the ledger holds a note of kind `ledger_integrity_hold` with `first_broken_seq`, `reason` and the `idempotency_key` of the confirmation it held.
 
 | Field | Meaning |
 | --- | --- |
@@ -853,7 +898,7 @@ Response `200`:
 }
 ```
 
-An `action_kind` the router knows nothing about returns empty lists and `ready` null, not an error.
+An `action_kind` the router knows nothing about comes back as `unknown`, with empty lists and `ready` null, not an error.
 
 Two optional fields carry what the chat tool carries, so the app can run the document request flag and the structuring check without the model:
 
@@ -1012,7 +1057,7 @@ With one sender, or none, `remit_from_china` gives its ordinary answer shown abo
 
 ### Ledger notes from Stage 8
 
-`GET /ledger/{user_id}` can now hold four more note kinds: `redaction`, with `classes`, when a reply was cleaned of a card number, a confirmation token or a secret; `document_request_flagged`, with `claimed_provider`, `channel` and `entry_ids`; `structuring_refused`, with `senders` by role and `entry_ids`; and `cash_cap_warning`, with `remaining_year`, `per_card_daily_cap`, `cards_today_total` and `entry_id`. A plan update is a `proposal`, a `decision` at T1 and an `execution` whose `result.plan_updated` holds the fields changed.
+`GET /ledger/{user_id}` can now hold four more note kinds: `redaction`, with `classes`, when a reply was cleaned of a card number, a confirmation token or a secret; `document_request_flagged`, with `claimed_provider`, `channel` and `entry_ids`; `structuring_refused`, with `senders` by role and `entry_ids`; and `cash_cap_warning`, with `remaining_year`, `per_card_daily_cap`, `cards_today_total` and `entry_id`. A standing mandate writes `standing_created` and, before each run, `standing_notice`, and a rescue writes `rescue_started`, `rescue_transition`, `rescue_identity_failed` after a wrong answer, `rescue_replacement` and `rescue_backup_frozen`. A plan update is a `proposal`, a `decision` at T1 and an `execution` whose `result.plan_updated` holds the fields changed.
 
 ## Standing mandates
 
@@ -1172,6 +1217,7 @@ Response `200`:
   "decision": null,
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     1,
     2,
@@ -1197,7 +1243,7 @@ Calling it again while a rescue is running restarts nothing; the reply says a re
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `user_id` | string | yes | |
-| `text` | string | no | The identity answer or the card name; empty when the step only confirms or continues |
+| `text` | string | no | The identity answer or the card name, up to 4,000 characters; empty when the step only confirms or continues |
 | `confirmation_token` | string | no | The token from the last `confirmation`, at `confirm_freeze` and `confirm_transfer_or_skip` |
 | `lang` | string | no | `en`, `pt`, or `zh`; the rescue's language when absent |
 
@@ -1220,6 +1266,7 @@ Response `200`:
   "decision": null,
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     4,
     5,
@@ -1268,7 +1315,11 @@ Response `200`:
       "instrument_id": "wise:card_01",
       "standing_mandate_id": null,
       "standing_terms": null,
-      "confirmation_token": null
+      "confirmation_token": null,
+      "plan_update": null,
+      "receipt_id": null,
+      "cancel_of": null,
+      "withdrawal_date": null
     },
     "confirmation_token": "c23903bef15f761d6351daeadbf604095b02bfc8f13d09697f2136791eb49155",
     "warning_key": "warn.freeze.card",
@@ -1290,6 +1341,7 @@ Response `200`:
   },
   "receipt": null,
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
     8,
     9,
@@ -1341,7 +1393,11 @@ Response `200`:
       "instrument_id": null,
       "standing_mandate_id": null,
       "standing_terms": null,
-      "confirmation_token": null
+      "confirmation_token": null,
+      "plan_update": null,
+      "receipt_id": null,
+      "cancel_of": null,
+      "withdrawal_date": null
     },
     "confirmation_token": "ef1452a94bec109bf2e0e2a1575e61c8099cf16e82d215f779fdca1f27be701c",
     "warning_key": "warn.transfer.irreversible",
@@ -1363,7 +1419,9 @@ Response `200`:
         "rule_id": null,
         "fee_source_url": null,
         "rate_source": "fixture",
-        "quoted_at": "2026-10-08T08:32:11.737319Z"
+        "quoted_at": "2026-10-08T08:32:11.737319Z",
+        "purpose": "emergency",
+        "payee_id": null
       }
     ],
     "selected_route": {
@@ -1383,7 +1441,9 @@ Response `200`:
       "rule_id": null,
       "fee_source_url": null,
       "rate_source": "fixture",
-      "quoted_at": "2026-10-08T08:32:11.737319Z"
+      "quoted_at": "2026-10-08T08:32:11.737319Z",
+      "purpose": "emergency",
+      "payee_id": null
     },
     "council": null,
     "expires_in_seconds": 300
@@ -1405,6 +1465,7 @@ Response `200`:
     "deep_link": null,
     "reason": null
   },
+  "cancel": null,
   "ledger_seqs": [
     15,
     16,
@@ -1475,8 +1536,8 @@ Response `200`:
     "standing_mandate_id": null
   },
   "freeze": null,
+  "cancel": null,
   "ledger_seqs": [
-    29,
     30,
     31,
     32,
@@ -1488,7 +1549,8 @@ Response `200`:
     38,
     39,
     40,
-    41
+    41,
+    42
   ],
   "provider": null,
   "model": null,
@@ -1503,7 +1565,9 @@ Response `200`:
 }
 ```
 
-A token that belongs to another action is refused with a `confirmation_rejected` entry whose reason is `not_this_rescue_step`, and the action it belongs to keeps waiting. A step with no rescue running answers that none is in progress, with `do_now` set to `start_rescue`.
+A token that belongs to another action is refused with a `confirmation_rejected` entry whose reason is `not_this_rescue_step`, and the action it belongs to keeps waiting. A step when no rescue has started answers that none is in progress, with `do_now` set to `start_rescue`; a step after a rescue has finished gives the same text with `do_now` set to `done`.
+
+A rescue stops every active standing mandate on the student's mandate, because it cannot tell which card each one uses, and says so: "Lifeline stopped all 1 of your standing payments, because it cannot tell which card each one uses. Set them up again once your new card works." With none, it says "You have no standing payments to stop.", as in the example above; `tests/test_rescue.py::test_a_full_rescue_with_the_wise_rail` covers both. A backup card that is itself frozen is not used: the ledger holds a `rescue_backup_frozen` note and the rescue takes the no backup path, and the family notice says so, as `tests/test_attack_seven.py::test_a_backup_card_that_is_itself_frozen_takes_the_no_backup_path` shows. While the ledger is on hold the reroute is refused and the event `reroute_held` takes the rescue from S4 to S5, as `tests/test_attack_seven.py::test_a_freeze_goes_through_on_a_tampered_ledger_while_the_reroute_and_the_allowance_are_held` shows.
 
 ## The demo parent
 
@@ -1538,7 +1602,8 @@ Response `200`, with the token and the times replaced by placeholders:
       "confirmation_token": null,
       "plan_update": null,
       "receipt_id": null,
-      "cancel_of": null
+      "cancel_of": null,
+      "withdrawal_date": null
     },
     "confirmation_token": "<token>",
     "warning_key": "warn.transfer.irreversible",
@@ -1735,14 +1800,14 @@ The chat tool `record_cash_withdrawal` records an overseas cash withdrawal the s
 
 | Status | When | Body |
 | --- | --- | --- |
-| `404` | The `user_id` is not known, on every endpoint | `{"detail": "No user <id>."}` |
+| `404` | The `user_id` is not known, on every endpoint that takes a user | `{"detail": "No user <id>."}` |
 | `404` | `/trace` for a receipt this student does not hold | `{"detail": "<reason>"}` |
 | `403` | `/trace` or `/precheck` refused by the mandate engine | `{"detail": {"rule_ids": [...], "reasons": [...]}}` |
-| `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long, or a rescue `trigger` or a `lang` is outside its list | FastAPI's validation detail |
+| `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long, or a rescue `trigger` or a `lang` is outside its list | FastAPI's validation detail; a `422` from `/rescue/start` or `/rescue/step` leaves out `input`, because a rescue request can hold the identity answer, and a `lang` outside the list has type `string_pattern_mismatch` |
 | `403` | `/standing/run_due` when `LIFELINE_ENV` is `production` | `{"detail": "<reason>"}` |
 | `422` | `/note/{user_id}/monthly` with a `month` that is not `YYYY-MM`; the detail never repeats it | `{"detail": "month must be a four digit year, a hyphen and a two digit month."}` |
 | `422` | `/reminders/{user_id}` with a `now` that is not a time with a zone | FastAPI's validation detail |
-| `503` | `/chat` or `/confirm` could not get an answer from a model, such as a missing key or a status error from the provider; the reason names the provider and, when there was one, the status | `{"detail": "<reason>"}` |
+| `503` | `/chat` could not get an answer from a model; `/confirm` makes no model call today but would answer a model error the same way, such as a missing key or a status error from the provider; the reason names the provider and, when there was one, the status | `{"detail": "<reason>"}` |
 
 Unknown user, `404`:
 
@@ -1790,3 +1855,7 @@ A status error from the provider, `503`. This is the error of 22 September, a ke
 ```
 
 A refusal by the mandate engine is not an HTTP error. It comes back as `200` with `decision.allowed` false, because the student needs to read why.
+
+## What no test covers
+
+Every behaviour above has a test in `tests/` except these, which were checked by hand against a running app on 10 October 2026 and are open item 176 of `docs/technical-reference.md`: a `confirmation_rejected` entry with the reason `no_route`; a `422` that echoes the body on the endpoints other than the rescue, which open item 79 also records; a `403` from `/precheck` or `/trace` when the mandate engine refuses, over HTTP; the `422` for a `now` with no time zone and the `404` for an unknown user on `/reminders`; an unknown `action_kind` coming back as `unknown` over HTTP; an anchor after a new payee, a freeze or a new standing mandate, each on its own, where the tests cover a payment and the hourly anchor; the family notice reporting every wrong identity answer; and a transfer the student typed going ahead over HTTP beside a paste that repeats it, which is tested in the loop.
