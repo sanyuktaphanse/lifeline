@@ -7,6 +7,7 @@ This folder holds the competition's own documents and the team's admin notes: th
 | File | What it is |
 | --- | --- |
 | `international-topics-rules-en.docx` | The organisers' International Track rules, as received. |
+| `international-registration-form-en.xlsx` | The organisers' blank registration form, with only their own example row. **Never commit a filled copy**: it asks for passport and student ID numbers, and this repository is shared. Fill it outside the repository and email it as `rules.md` and the form say. |
 | `rules.md` | The same rules as plain text, so they can be searched and diffed. The docx governs where the two differ. |
 | `schedule.md` | Official dates from the rules, the team's own dates, and which dates in older team documents no longer hold. |
 | `requirements.md` | The submission checklist and scoring, each item mapped to where it lives in the repository and who owns it. |

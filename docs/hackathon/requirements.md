@@ -22,6 +22,19 @@ What the organisers ask for, where each item lives in the repository, and who ow
 | Innovation and interaction | 30% | The council, Protect and the rescue, three languages, the app |
 | Challenge bonus | 0 to 5 points | On chain exploration. Lifeline anchors its ledger head on FISCO BCOS; whether that counts toward the bonus on Topic C is not stated in the rules. |
 
+## Topic C and what Lifeline answers
+
+Topic C asks for solutions to real financial pain points of international students and cross border users, such as remittances, tuition payments, credit building, and multi currency management. Status on `main`, 10 October 2026:
+
+| Pain point named in the topic | What Lifeline does | Status |
+| --- | --- | --- |
+| Remittances | Quotes and compares routes, pays within the student's mandate after a confirmation, traces a transfer that has not arrived, and runs recurring payments under a standing mandate. Corridors Singapore to Brazil, India to Singapore, Singapore to China and China to Singapore | Built; every rail is simulated or a fixture, Wise sandbox in review |
+| Tuition payments | Refuses a direct bank remittance from China to NUS, because NUS asks for payment through Flywire or Convera (`sg_nus_fee_payment_003`), and says why | Built as a sourced refusal; Lifeline does not pay tuition itself |
+| Credit building | Nothing | Not built |
+| Multi currency management | Balances per currency, read and moved by each payment, and a monthly note of fees and spread per currency | Built |
+
+Beyond the topic's examples, Lifeline's Protect job covers scams, lost cards and documents requests, which the attack suite tests.
+
 ## Rules to keep in mind
 
 1. Everything submitted is in English.
