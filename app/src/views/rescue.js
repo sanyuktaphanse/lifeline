@@ -66,11 +66,13 @@ export function rescueView(ctx, root) {
   }
 
   function drawStatus(rescue) {
-    status.replaceChildren(
+    // replaceChildren would write a missing part as the word "null", so missing parts are left out first.
+    const parts = [
       rescue.state_after ? label(ctx, "p", "rescue_step", { state: rescue.state_after }, { id: "rescue-step", class: "hint" }) : null,
       rescue.live_instrument ? label(ctx, "p", "rescue_backup", { card: rescue.live_instrument }, { id: "rescue-backup" }) : null,
       rescue.issuer_link ? issuerLink(ctx, rescue.issuer_link, "rescue_issuer") : null,
-    );
+    ];
+    status.replaceChildren(...parts.filter(Boolean));
   }
 
   function drawControls(next) {

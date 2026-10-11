@@ -48,6 +48,7 @@ test("LIVE: the whole rescue, from start to done, driven only by do_now", async 
   await expect(allowance).toContainText("300 SGD");
   await expect(allowance).toContainText("self_sg");
   await expect(page.locator("#rescue-skip")).toBeVisible();
+  expect(await page.locator("#view-rescue").innerText()).not.toMatch(/\b(null|undefined)\b/);
 
   await allowance.locator(".confirm-button").click();
   await expect(latest(page).locator(".receipt")).toContainText("completed");
