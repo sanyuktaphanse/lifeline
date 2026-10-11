@@ -263,3 +263,4 @@ This file records product decisions for Lifeline, newest last, with the date eac
 2. Every Chinese sentence Lifeline writes addresses the student with the polite 您, never 你, so one reply never mixes the two.
 3. When two wordings say the same thing, the shorter one is used.
 4. The scenario and test expectations that quote these sentences changed with them. The recorded replies of the stranger test of 9 October did not, because they are a record of that day.
+5. Portuguese is Brazilian Portuguese throughout, the variant the demo student and the Brazil corridor speak; the stranger test caught replies in European Portuguese. The shorter wording wins in Portuguese too, except that a sentence carrying a rule id, a receipt id, an amount or a date keeps every one of them. Decided by Sanyukta and Joanne on 11 October 2026.

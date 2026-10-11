@@ -126,3 +126,5 @@ Joanne, a native Chinese speaker, decided every Chinese item above on 11 October
 | Every Chinese key | The polite 您 throughout, in place of 你 |
 
 The recorded replies of the stranger test of 9 October 2026 in `suites/scenarios/stranger/` keep the old wording, because they are a record of what was said that day. The Portuguese items still wait for a native speaker.
+
+Portuguese is Brazilian Portuguese throughout, decided on 11 October 2026. When two wordings say the same thing the shorter one is used, except that a sentence carrying a rule id, a receipt id, an amount or a date keeps every one of them.
