@@ -32,8 +32,10 @@ class Backend {
     mkdirSync(this.data, { recursive: true });
   }
 
-  async start() {
-    this.process = spawn(PYTHON, [join(APP, "tests", "e2e", "backend.py"), String(this.port), this.data], { stdio: "inherit" });
+  async start(variant) {
+    const args = [join(APP, "tests", "e2e", "backend.py"), String(this.port), this.data];
+    if (variant) args.push(variant);
+    this.process = spawn(PYTHON, args, { stdio: "inherit" });
     await waitForHealth(this.url);
   }
 
@@ -43,6 +45,14 @@ class Backend {
     this.process.kill("SIGTERM");
     await exited;
     this.process = null;
+  }
+
+  // Starts again from nothing, as deleting data/ and running make dev again would.
+  async restartEmpty(variant) {
+    await this.stop();
+    rmSync(this.data, { recursive: true, force: true });
+    mkdirSync(this.data, { recursive: true });
+    await this.start(variant);
   }
 }
 

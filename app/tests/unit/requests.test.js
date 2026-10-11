@@ -50,3 +50,23 @@ test("a rescue confirmation sends the token unchanged and no text", () => {
     lang: "zh",
   });
 });
+
+import { rescueStartBody } from "../../src/requests.js";
+
+test("a rescue starts with the student's own typed words and never a pasted_text field", () => {
+  assert.deepEqual(rescueStartBody("student_001", "card_lost", "I lost my Wise card", "en"), {
+    user_id: "student_001",
+    trigger: "card_lost",
+    text: "I lost my Wise card",
+    lang: "en",
+  });
+  assert.equal(rescueStartBody("student_001", "card_lost", "  ", "en"), null);
+});
+
+test("a rescue answer or card name goes in text, and continuing without money sends neither text nor token", () => {
+  assert.deepEqual(rescueStepBody("student_001", { text: "7Q2K" }, "en"), { user_id: "student_001", text: "7Q2K", lang: "en" });
+  assert.deepEqual(rescueStepBody("student_001", {}, "en"), { user_id: "student_001", text: "", lang: "en" });
+  for (const body of [rescueStepBody("student_001", { text: "x" }, "en"), rescueStepBody("student_001", { token: "t" }, "en")]) {
+    assert.ok(!("pasted_text" in body));
+  }
+});
