@@ -15,6 +15,9 @@ Two dates matter. **15 October 2026** is the team's own deadline for the build. 
 
 ## Sanyukta, person A
 
+- [ ] Decide whether an entry first checked by Claude Code, `checked_by: CC`, counts as checked, so a person's initials are the first human check, not the second, before any document claims two person verification. Raised by Pearlin on 11 October.
+- [ ] Merge every pull request; nobody else merges. Order for lane B: #39, then #40, then #42.
+
 - [ ] Review and merge #39 (Wise sandbox and deployment guide; it edits `api/main.py` and `tests/conftest.py`), then #40 (translator), in that order, because both change the test count the documents state. Due 11 October.
 - [x] #41, lane B's submission drafts, closed on 11 October: superseded by the final documents.
 - [ ] Decide open item 178, numbered 168 before the renumbering: the fixture `wise` and `bank_wire` routes say they are not simulated, so the agent picks the fixture bank wire over the honest Wise sandbox route.
@@ -30,8 +33,11 @@ Two dates matter. **15 October 2026** is the team's own deadline for the build. 
 
 ## Joanne, person B
 
+- [ ] Rewrite `sg_nus_fee_payment_003` from the live NUS page with Pearlin's findings, and fix what depends on it, task T36 and the China tuition refusal. Due 13 October.
+- [ ] Ask Pearlin whether the app exists and has run against the API, for Sanyukta.
+
 - [ ] Make a Wise sandbox account and API token, and put `WISE_SANDBOX_TOKEN` and `WISE_SANDBOX_PROFILE_ID` in `.env`. Then Claude Code makes the sandbox recipients and runs `make evidence-wise` for the sandbox operation log, submission item 6. Due 12 October.
-- [ ] Open each of the 18 knowledge entries' source pages and add your initials in `second_check_by`, as `docs/knowledge_audit.md` lists under "For lane B". Eight of them say to check again before 16 October, and open item 164 wants all of them before the demo of 15 October. Due 14 October.
+- [ ] Second check the nine China entries, `rails/knowledge/china.yaml`: open each source page and add your initials in `second_check_by`, as `docs/knowledge_audit.md` lists under "For lane B". Pearlin takes the other nine. Due 14 October.
 - [ ] Find native speakers to check the Portuguese and Chinese of the English only sentences in `docs/i18n_review.md` and the translator's warning, open items 156 and 172. Due 16 October.
 - [ ] Design the presentation deck with Pearlin. Due 17 October.
 - [ ] Execution evidence pack: `evidence/report.md`, `evidence/wise-sandbox.md` and the demo video link, in one place for the submission. Due 18 October.
@@ -40,6 +46,9 @@ Two dates matter. **15 October 2026** is the team's own deadline for the build. 
 - [ ] Keep the project out of iCloud: a copy on an iCloud synced Desktop or Documents folder hangs tests and corrupts git. Use a folder such as `~/Projects`.
 
 ## Pearlin, person C
+
+- [ ] Second check the nine Brazil, India, Singapore and provider entries. Started 11 October.
+- [x] Found that `sg_nus_fee_payment_003` does not match its page: NUS lists Flywire and Convera beside PayNow QR and cards rather than strongly recommending them, and a third party payment is a payer link emailed to the parent, with no KYC and no relationship documents. Not initialled.
 
 - [ ] **Put the app in the repository** under `app/`. It is not there yet, and judges score interaction from it. Due 13 October.
 - [ ] Connect the app to the backend, `docs/api.md`, and show the simulated label wherever a route or receipt is simulated.
