@@ -1,6 +1,6 @@
 # Team to do list
 
-Person A is Sanyukta (core), person B is Joanne (rails and knowledge), person C is Pearlin (app and story). Made on 10 October 2026 from the repository, the rules and the master plan. Tick an item by changing `[ ]` to `[x]` in a pull request, and add new items under the right person.
+Person A is Sanyukta (core), person B is Joanne (rails and knowledge), person C is Pearlin (app and story). Made on 10 October 2026 and updated on 11 October 2026 from the repository, the rules and the master plan. Tick an item by changing `[ ]` to `[x]` in a pull request, and add new items under the right person.
 
 Two dates matter. **15 October 2026** is the team's own deadline for the build. **20 October 2026, 23:59 Beijing time** is the official deadline for both registration and submission; nothing is accepted after it.
 
@@ -15,24 +15,29 @@ Two dates matter. **15 October 2026** is the team's own deadline for the build. 
 
 ## Sanyukta, person A
 
-- [ ] Review and merge #39 (Wise sandbox and deployment guide; it edits `api/main.py` and `tests/conftest.py`), #40 (translator) and #41 (submission drafts). Due 11 October.
-- [ ] Decide open item 168: the fixture `wise` and `bank_wire` routes say they are not simulated, so the agent picks the fixture bank wire over the honest Wise sandbox route.
-- [ ] Connect the translator to the agent so tasks T04 and T05 work, open item 171.
-- [ ] Fix the conversation problems the stranger test of 9 October found: 17 expected failing scenarios in `suites/scenarios/stranger/`, 5 of them failures. This is most of the task completion score, 40%. Due 15 October.
+- [ ] Review and merge #39 (Wise sandbox and deployment guide; it edits `api/main.py` and `tests/conftest.py`), then #40 (translator), in that order, because both change the test count the documents state. Due 11 October.
+- [x] #41, lane B's submission drafts, closed on 11 October: superseded by the final documents.
+- [ ] Decide open item 178, numbered 168 before the renumbering: the fixture `wise` and `bank_wire` routes say they are not simulated, so the agent picks the fixture bank wire over the honest Wise sandbox route.
+- [ ] Connect the translator to the agent so tasks T04 and T05 work, open item 181.
+- [x] Fix the conversation problems the stranger test of 9 October found: done in #43; the evidence report now gives 16 of 17 stranger runs passed and 1 expected failing.
+- [ ] Run a second stranger test against the fixes, since the model's own words can still be wrong (self assessment, limitation 3). Due 15 October.
 - [ ] Automate the 7 tasks not yet automated (T03, T04, T24, T25, T27, T28, T33), or cut the ones the cut list allows.
-- [ ] Final technical documentation, build program Stage 17, folding in the drafts in `docs/submission/`. Due 17 October.
-- [ ] Final security self assessment, Stage 16, from the draft in `docs/submission/`. Due 17 October.
+- [x] Final technical documentation, Stage 17: `docs/technical_documentation.md`, #46.
+- [x] Final security self assessment, Stage 16: `docs/self_assessment.md`, #45.
 - [ ] Deck content: the story, the numbers, the demo flow. Due 16 October.
-- [ ] Documentation truth check, Stage 15, and the clean machine release check, Stage 18. Due 18 October.
+- [x] Documentation truth check, Stage 15, #44, and accuracy fixes, #47.
+- [ ] Clean machine release check, Stage 18. Due 18 October.
 
 ## Joanne, person B
 
 - [ ] Make a Wise sandbox account and API token, and put `WISE_SANDBOX_TOKEN` and `WISE_SANDBOX_PROFILE_ID` in `.env`. Then Claude Code makes the sandbox recipients and runs `make evidence-wise` for the sandbox operation log, submission item 6. Due 12 October.
-- [ ] Open each of the 18 knowledge entries' source pages and add your initials in `second_check_by`, as `docs/knowledge_audit.md` lists under "For lane B". Eight of them say to check again before 16 October. Due 15 October.
+- [ ] Open each of the 18 knowledge entries' source pages and add your initials in `second_check_by`, as `docs/knowledge_audit.md` lists under "For lane B". Eight of them say to check again before 16 October, and open item 164 wants all of them before the demo of 15 October. Due 14 October.
 - [ ] Find native speakers to check the Portuguese and Chinese of the English only sentences in `docs/i18n_review.md` and the translator's warning, open items 156 and 172. Due 16 October.
 - [ ] Design the presentation deck with Pearlin. Due 17 October.
 - [ ] Execution evidence pack: `evidence/report.md`, `evidence/wise-sandbox.md` and the demo video link, in one place for the submission. Due 18 October.
-- [ ] Final README and deployment guide after a clean machine test by Pearlin. Due 18 October.
+- [x] Deployment guide written, `docs/deployment.md`, in #39.
+- [ ] Final README after a clean machine test by Pearlin. Due 18 October.
+- [ ] Keep the project out of iCloud: a copy on an iCloud synced Desktop or Documents folder hangs tests and corrupts git. Use a folder such as `~/Projects`.
 
 ## Pearlin, person C
 
