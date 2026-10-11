@@ -22,6 +22,8 @@ from rails.wise_sandbox import (
 )
 
 TOKEN = "sandbox-token-for-tests-only"
+# The profile, recipient account, quote and transfer ids are the example values in Wise's own API reference
+# (https://docs.wise.com/api-docs/api-reference/standard-transfer and .../quote), or made up, such as 555; none is an id from a real account.
 PROFILE = 101
 RECIPIENTS = {"landlord_sp": 8692237, "self_sg": 555}
 

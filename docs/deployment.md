@@ -73,7 +73,7 @@ Without a token the `wise` rail is a fixture. With one, its quotes, transfers, t
 2. Put the token in `WISE_SANDBOX_TOKEN` and the sandbox profile's number in `WISE_SANDBOX_PROFILE_ID`.
 3. Make a recipient in the sandbox for each payee the demo pays, and list them in `WISE_SANDBOX_RECIPIENTS` as `payee_id:recipient_account_id` pairs separated by commas, such as `self_sg:12345678`.
 4. Top up the sandbox balance in the sending currency, because the rail funds transfers from it.
-5. Run `make evidence-wise`. It writes `evidence/wise-sandbox.md`, the sandbox operation log: a quote, a paid transfer moved through Wise's simulated statuses, and a cancelled transfer.
+5. Run `make evidence-wise`. It writes `evidence/wise-sandbox.md`, the sandbox operation log: two transfers the demo student proposes and confirms through Lifeline's API and mandate engine, one moved through Wise's simulated statuses and one cancelled, and a check that the ledger verifies. The ledger of the run is kept in `.harness_tmp/wise-sandbox/`.
 
 ## 6. The FISCO BCOS anchor
 

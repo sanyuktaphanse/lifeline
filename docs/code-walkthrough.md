@@ -10435,7 +10435,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 1568 tests, as `pytest --collect-only` counts them after the accuracy fixes of 10 October 2026: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
+There are 1569 tests, as `pytest --collect-only` counts them after the accuracy fixes of 10 October 2026: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -11398,7 +11398,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
 | `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 145 parametrized tests add 394 extra runs, which is how 1174 test functions become 1568 tests. The table above is not complete: it has no rows for 283 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
+In all, 145 parametrized tests add 394 extra runs, which is how 1175 test functions become 1569 tests. The table above is not complete: it has no rows for 284 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
 
 ## The Stage 8a tests
 
