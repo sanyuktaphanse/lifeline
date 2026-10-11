@@ -129,7 +129,7 @@ def test_live_mode_still_fails_a_code_produced_expectation_the_live_model_did_no
 
     assert entry.status == FAILED
     assert "turn 2: reply was answer, expected confirmation" in run.failures
-    assert run.replies == ["I can help you send money.", "I would rather not send anything today."]
+    assert run.replies == ["I can help you send money. This turn: nothing was proposed, changed or sent.", "I would rather not send anything today. This turn: nothing was proposed, changed or sent."]
 
 
 def test_a_run_whose_every_expectation_is_scripted_text_is_skipped_not_passed(tmp_path):

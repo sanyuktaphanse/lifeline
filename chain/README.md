@@ -4,7 +4,7 @@ Lifeline can anchor its ledger head on a FISCO BCOS chain instead of in the loca
 
 ## What reaches the chain
 
-`LifelineEvidence.sol` stores, for each anchored head, the head hash, its sequence number, a SHA 256 hash of the user id, the block time, the block number and the sender. It holds no funds and no balances, accepts no payment, and stores no names, amounts, payees or user ids.
+`LifelineEvidence.sol` stores, for each anchored head, the head hash, its sequence number, a keyed hash of the user id, an HMAC SHA 256 under `LIFELINE_ANCHOR_SECRET`, the block time, the block number and the sender. It holds no funds and no balances, accepts no payment, and stores no names, amounts, payees or user ids.
 
 ## What worked on this machine
 

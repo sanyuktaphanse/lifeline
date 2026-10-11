@@ -37,6 +37,8 @@ CONFIRM_TEXT = (
     "Please confirm: send 1200 SGD to landlord_sp for rent over wise, fee 5.60 SGD "
     "and exchange cost 0 SGD. Nothing moves until you confirm."
 )
+# The code's sentence that ends every reply: what the turn did, from its ledger entries. Source: docs/decisions.md, decision 146.
+PROPOSED = "This turn: a transfer of 1200 SGD to landlord_sp: proposed, waiting for your confirmation."
 COUNCIL_SENTENCE = "The council chose wise."
 RUNNER_UP_SENTENCE = "The council was divided. The next choice was bank_wire."
 WAIT_SENTENCE = "The council advised waiting."
@@ -194,7 +196,7 @@ def test_the_reply_names_the_chosen_rail_and_its_reason():
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
-    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON}"
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON} {PROPOSED}"
 
 
 def test_the_spoken_reason_is_the_one_sentence_of_the_most_confident_agreeing_voice():
@@ -210,7 +212,7 @@ def test_the_spoken_reason_is_the_one_sentence_of_the_most_confident_agreeing_vo
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
-    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {FAST_REASON}"
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {FAST_REASON} {PROPOSED}"
     for other in (CHEAP_REASON, RULES_REASON, TIMING_REASON, WIRE_REASON):
         assert other not in reply.text
     # The full composed reason is unchanged as data, for the app to show on request.
@@ -232,7 +234,7 @@ def test_voices_equally_confident_are_spoken_for_by_the_first_in_voice_order():
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
-    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON}"
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} {PROPOSED}"
 
 
 def test_the_spoken_sentence_is_in_the_students_language():
@@ -240,7 +242,10 @@ def test_the_spoken_sentence_is_in_the_students_language():
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST, lang="pt"))
 
-    assert reply.text.endswith("O conselho escolheu wise. A Wise cobra a menor taxa.")
+    assert reply.text.endswith(
+        "O conselho escolheu wise. A Wise cobra a menor taxa. "
+        "Neste turno: uma transferência de 1200 SGD para landlord_sp: proposta feita, aguardando sua confirmação."
+    )
     assert reply.text.count("A Wise cobra a menor taxa.") == 1
 
 
@@ -404,6 +409,7 @@ def test_two_of_five_agreeing_score_above_the_threshold_and_show_the_runner_up()
     assert reply.text == (
         f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON} "
         f"{RUNNER_UP_SENTENCE} {WIRE_REASON}"
+        f" {PROPOSED}"
     )
 
 
@@ -423,6 +429,7 @@ def test_the_runner_up_is_spoken_for_by_its_most_confident_voice():
 
     assert reply.text == (
         f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} {RUNNER_UP_SENTENCE} {second_wire}"
+        f" {PROPOSED}"
     )
     assert WIRE_REASON not in reply.text
 
@@ -471,7 +478,7 @@ def test_every_voice_saying_wait_makes_the_chair_say_wait_and_still_offers_the_c
     assert advice["disagreement"] == 0.0
     # The safety voice waited, so its sentence comes first; the chair's sentence is the cost
     # voice's, the first of five equally confident voices.
-    assert reply.text == f"{WAIT_REASON} {CONFIRM_TEXT} {WAIT_SENTENCE} {WAIT_REASON}"
+    assert reply.text == f"{WAIT_REASON} {CONFIRM_TEXT} {WAIT_SENTENCE} {WAIT_REASON} {PROPOSED}"
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
     assert reply.confirmation.council.chosen == WAIT
@@ -487,7 +494,7 @@ def test_no_voice_validating_gives_no_answer_and_the_loop_proceeds_as_before():
     assert advice["reason"] == ""
     assert advice["disagreement"] == 0.0
     assert reply.confirmation.selected_route.rail == "wise"
-    assert reply.text == CONFIRM_TEXT
+    assert reply.text == f"{CONFIRM_TEXT} {PROPOSED}"
 
 
 # A wait from the safety voice always reaches the student
@@ -509,7 +516,7 @@ def test_a_safety_wait_is_shown_before_the_prompt_at_a_low_disagreement():
 
     assert _advice(s)["disagreement"] == 0.2
     assert _advice(s)["chosen"] == "wise"
-    assert reply.text == f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON}"
+    assert reply.text == f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} {PROPOSED}"
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
 
@@ -531,6 +538,7 @@ def test_a_safety_wait_and_the_runner_up_are_both_shown_above_the_threshold():
     assert reply.text == (
         f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} "
         f"{RUNNER_UP_SENTENCE} {WIRE_REASON}"
+        f" {PROPOSED}"
     )
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
@@ -546,7 +554,7 @@ def test_a_wait_from_any_other_voice_alone_is_not_shown_below_the_threshold():
 
         assert _advice(s)["disagreement"] == 0.2
         assert WAIT_REASON not in reply.text, waiting
-        assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON}"
+        assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON} {PROPOSED}"
         assert reply.confirmation is not None
         assert reply.confirmation.selected_route.rail == "wise"
 
@@ -558,7 +566,7 @@ def test_an_abstaining_safety_voice_adds_no_sentence():
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
-    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON}"
+    assert reply.text == f"{CONFIRM_TEXT} {COUNCIL_SENTENCE} {WISE_REASON} {PROPOSED}"
 
 
 def test_a_safety_wait_that_is_also_the_chairs_wait_is_said_once():
@@ -575,7 +583,7 @@ def test_a_safety_wait_that_is_also_the_chairs_wait_is_said_once():
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
     assert _advice(s)["chosen"] == WAIT
-    assert reply.text == f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {WAIT_SENTENCE}"
+    assert reply.text == f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {WAIT_SENTENCE} {PROPOSED}"
     assert reply.text.count(SAFETY_WAIT_REASON) == 1
     assert reply.confirmation is not None
 
@@ -598,6 +606,7 @@ def test_a_safety_wait_that_is_also_the_runner_up_is_said_once():
     assert reply.text == (
         f"{SAFETY_WAIT_REASON} {CONFIRM_TEXT} {COUNCIL_SENTENCE} {CHEAP_REASON} "
         "The council was divided. The next choice was wait."
+        f" {PROPOSED}"
     )
     assert reply.text.count(SAFETY_WAIT_REASON) == 1
     assert reply.confirmation is not None
@@ -695,7 +704,7 @@ def test_a_council_that_raises_leaves_a_note_and_the_payment_path_untouched():
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
     assert reply.confirmation.council is None
-    assert reply.text == CONFIRM_TEXT
+    assert reply.text == f"{CONFIRM_TEXT} {PROPOSED}"
 
 
 def test_an_escalated_turn_leaves_the_model_call_cap_alone():
@@ -719,7 +728,7 @@ def test_without_a_council_the_transfer_reply_and_trail_are_what_they_were():
 
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
-    assert reply.text == CONFIRM_TEXT
+    assert reply.text == f"{CONFIRM_TEXT} {PROPOSED}"
     assert _kinds(s.ledger) == ["proposal", "decision"]
     assert reply.confirmation.council is None
     assert reply.confirmation.selected_route.rail == "wise"
@@ -811,8 +820,8 @@ def test_a_reason_longer_than_one_sentence_abstains():
     assert _advice(s)["chosen"] == NO_ANSWER
     assert all(voice["abstained"] for voice in _advice(s)["voices"])
     assert AgentReply.model_validate(reply.model_dump()) == reply
-    assert reply.text == CONFIRM_TEXT
-    assert len(reply.text) == len(CONFIRM_TEXT)
+    assert reply.text == f"{CONFIRM_TEXT} {PROPOSED}"
+    assert len(reply.text) == len(f"{CONFIRM_TEXT} {PROPOSED}")
 
 
 def test_one_long_reason_among_five_still_bounds_the_sentence_the_student_reads():
@@ -869,7 +878,7 @@ def test_voices_that_are_not_records_leave_a_note_and_the_payment_path_untouched
     assert _note(s)["kind"] == "council_failed"
     assert reply.confirmation is not None
     assert reply.confirmation.selected_route.rail == "wise"
-    assert reply.text == CONFIRM_TEXT
+    assert reply.text == f"{CONFIRM_TEXT} {PROPOSED}"
 
 
 def test_a_field_the_loop_never_asked_for_reaches_neither_the_ledger_nor_the_reply():
@@ -891,7 +900,7 @@ def test_a_chosen_rail_the_loop_never_quoted_is_never_named_to_the_student():
     reply = s.loop.handle(USER, _user(RENT_REQUEST))
 
     assert reply.confirmation.selected_route.rail == "wise"
-    assert reply.text == CONFIRM_TEXT
+    assert reply.text == f"{CONFIRM_TEXT} {PROPOSED}"
     assert _kinds(s.ledger) == ["proposal", "decision", "note"]
     assert _note(s)["kind"] == "council_failed"
 

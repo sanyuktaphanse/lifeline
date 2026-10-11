@@ -15,3 +15,13 @@ def no_real_provider_calls(monkeypatch):
 
     monkeypatch.setattr(anthropic, "Anthropic", refuse)
     monkeypatch.setattr(dashscope.Generation, "call", refuse)
+
+
+@pytest.fixture(autouse=True)
+def no_wise_sandbox_from_env(monkeypatch):
+    """Keep every test off the Wise sandbox, whatever .env holds; a test that wants it passes a fake one.
+
+    An empty value is set rather than the variable removed, because load_dotenv fills in a removed variable
+    from .env but never overrides one that is set.
+    """
+    monkeypatch.setenv("WISE_SANDBOX_TOKEN", "")

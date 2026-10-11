@@ -59,6 +59,11 @@ from rails.fake_router import FakeRouter
 ROOT = Path(__file__).resolve().parent.parent
 SUITES_DIR = ROOT / "suites"
 SCENARIOS_DIR = SUITES_DIR / "scenarios"
+# The stranger runs: scenarios from each stranger test, played as a group apart from the suite entries, so the
+# entries' counts keep their meaning. Source: docs/decisions.md, decision 147.
+STRANGER_DIR = SCENARIOS_DIR / "stranger"
+EXPECTED_FAILING = "expected failing"
+FLAG_TO_REMOVE = "passes but flagged"
 REPORT_PATH = ROOT / "evidence" / "report.md"
 # Scenarios only the live mode reads, such as a language the loop cannot write in. The ordinary run never opens it.
 LIVE_DIR = SUITES_DIR / "live"
@@ -159,6 +164,20 @@ class EntryResult:
     title: str
     tier: str | None
     langs: list[str]
+    status: str
+    runs: list[RunResult] = field(default_factory=list)
+    note: str | None = None
+
+
+@dataclass
+class StrangerResult:
+    """One file of a stranger run, judged against its expected_failing flag."""
+
+    file: str
+    id: str
+    task: str
+    run: str
+    expected_failing: bool
     status: str
     runs: list[RunResult] = field(default_factory=list)
     note: str | None = None
@@ -767,6 +786,46 @@ def evaluate(suites_dir: Path = SUITES_DIR, scenarios_dir: Path | None = None) -
     return results
 
 
+def evaluate_stranger(suites_dir: Path = SUITES_DIR, stranger_dir: Path | None = None) -> list[StrangerResult]:
+    """Play every file in the stranger folder and judge it against its flag.
+
+    A file passes or fails as a scenario does. One marked expected_failing that fails is expected failing; one so
+    marked that passes is a failure of the suite, because its fix must be recorded by removing the flag in the
+    same pull request; one not so marked that fails is a failure. Its id must name an entry in a suite.
+    Source: docs/decisions.md, decision 147.
+    """
+    stranger_dir = suites_dir / "scenarios" / "stranger" if stranger_dir is None else stranger_dir
+    ids = {entry["id"] for _, filename in SUITES for entry in load_suite(suites_dir / filename)}
+    results = []
+    for path in sorted(stranger_dir.glob("*.yaml")) if stranger_dir.is_dir() else []:
+        scenario = load_suite(path)
+        flagged = scenario.get("expected_failing") is True
+        entry_id = str(scenario.get("id", ""))
+        if entry_id in ids:
+            runs, note = _run_file(path, entry_id)
+        else:
+            runs, note = [RunResult([], [f"{entry_id or 'the file'} names no entry in a suite"])], scenario.get("note")
+        passed = all(run.passed for run in runs)
+        status = {(True, False): PASSED, (True, True): FLAG_TO_REMOVE, (False, True): EXPECTED_FAILING}.get((passed, flagged), FAILED)
+        results.append(
+            StrangerResult(path.name, entry_id, str(scenario.get("stranger_task", "")), str(scenario.get("stranger_run", "")), flagged, status, runs, note)
+        )
+    return results
+
+
+def stranger_failures(results: list[StrangerResult]) -> list[str]:
+    """Why the stranger runs fail the suite, one line per file: a flagged file that passes, or a file that fails
+    without the flag."""
+    lines = []
+    for result in results:
+        if result.status == FLAG_TO_REMOVE:
+            lines.append(f"{result.file} passes but is marked expected_failing: remove the flag in the pull request that fixed it.")
+        elif result.status == FAILED:
+            reasons = "; ".join(failure for run in result.runs for failure in run.failures)
+            lines.append(f"{result.file} fails: {reasons}")
+    return lines
+
+
 class ModelCallTimeout(ModelAdapterError):
     """A live call that gave no answer within the run's time limit."""
 
@@ -1125,7 +1184,9 @@ def _count_table(title: str, key: str, groups: dict[str, list[EntryResult]]) -> 
     return lines + [""]
 
 
-def render_report(results: list[EntryResult], commit: str, generated_at: datetime) -> str:
+def render_report(
+    results: list[EntryResult], commit: str, generated_at: datetime, stranger: list[StrangerResult] | None = None
+) -> str:
     lines = [
         "# Lifeline evidence report",
         "",
@@ -1162,7 +1223,34 @@ def render_report(results: list[EntryResult], commit: str, generated_at: datetim
     for result in results:
         if result.status == NOT_AUTOMATED:
             lines.append(_row(result.id, result.suite, result.tier or "", result.title, result.status))
+    if stranger is not None:
+        lines += _stranger_section(stranger)
     return "\n".join(lines) + "\n"
+
+
+def _stranger_section(stranger: list[StrangerResult]) -> list[str]:
+    """The stranger runs, apart from the suite entries above, so those counts keep their meaning."""
+    counts = Counter(result.status for result in stranger)
+    lines = [
+        "",
+        "## Stranger runs",
+        "",
+        "Every file in `suites/scenarios/stranger`, from the stranger tests in `docs/stranger_test.md`, played apart from "
+        "the suite entries above. A file marked expected failing records a failure not yet fixed; one that passes "
+        "while so marked fails the suite until the flag is removed.",
+        "",
+        _row("Files", "Passed", "Expected failing", "Failed", "Passes but flagged"),
+        _row(*["---"] * 5),
+        _row(len(stranger), counts[PASSED], counts[EXPECTED_FAILING], counts[FAILED], counts[FLAG_TO_REMOVE]),
+        "",
+        _row("File", "Entry", "Task", "Run", "Result", "Note"),
+        _row(*["---"] * 6),
+    ]
+    lines += [_row(r.file, r.id, r.task, r.run, r.status, r.note or "") for r in stranger]
+    failures = stranger_failures(stranger)
+    if failures:
+        lines += ["", "### Stranger failures", "", *(f"1. {line}" for line in failures)]
+    return lines
 
 
 def _commit() -> str:
@@ -1187,14 +1275,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.live is not None or arguments.swap:
         return main_live(arguments.live, arguments.swap)
     results = evaluate()
+    stranger = evaluate_stranger()
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc)), encoding="utf-8")
+    REPORT_PATH.write_text(render_report(results, _commit(), datetime.now(timezone.utc), stranger), encoding="utf-8")
     counts = Counter(result.status for result in results)
+    strange = Counter(result.status for result in stranger)
     print(
         f"{REPORT_PATH.relative_to(ROOT)}: {counts[PASSED]} passed, {counts[FAILED]} failed, "
-        f"{counts[NOT_AUTOMATED]} not automated"
+        f"{counts[NOT_AUTOMATED]} not automated; stranger runs: {strange[PASSED]} passed, "
+        f"{strange[EXPECTED_FAILING]} expected failing, {strange[FAILED]} failed, {strange[FLAG_TO_REMOVE]} passes but flagged"
     )
-    return 1 if counts[FAILED] else 0
+    for line in stranger_failures(stranger):
+        print(line)
+    return 1 if counts[FAILED] or stranger_failures(stranger) else 0
 
 
 if __name__ == "__main__":

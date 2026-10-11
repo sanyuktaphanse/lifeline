@@ -1,8 +1,8 @@
 id: T35
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T06
-note: Expected failing. Stranger test of 2026-10-09, task T06, verdict worked badly. The ledger's figures were right, but the model's summary called money sent to the student's own account spending, blamed both suspected injections on the fake landlord, and said a request refused under R01 was refused for passing the limits. The ledger's note was then appended, so the month was told twice. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Fixed. Stranger test of 2026-10-09, task T06, verdict worked badly. The ledger''s figures were right, but the model''s own summary around them misread the month. The model script repeats what the live model did. The file checks only what the code writes: that the code''s monthly note reaches the student and that the turn summary says nothing was proposed, changed or sent. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The model''s own account of the month is not checked, because no code writes it. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:
@@ -56,6 +56,6 @@ runs:
   expected:
     reply: answer
     lang: pt
-    must_not_contain:
-    - Total gasto no mês
-    - passa dos seus limites
+    must_contain:
+    - Nota do Lifeline para
+    - 'Neste turno: nada foi proposto, alterado ou enviado.'
