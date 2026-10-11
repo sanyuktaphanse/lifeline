@@ -1857,7 +1857,8 @@ class AgentLoop:
         first = list(dict.fromkeys(blocked))
         # The summary names payees and receipts from the ledger, so it passes the same patterns as every reply.
         summary = self._redacted(self._turn_summary(user_id, reply.lang, entries))[0]
-        return reply.model_copy(update={"text": " ".join(filter(None, [*first, reply.text, summary]))})
+        text = " ".join(filter(None, [*first, reply.text, summary]))
+        return reply.model_copy(update={"text": text, "blocked": first, "turn_summary": summary})
 
     def _turn_summary(self, user_id: str, lang: str, entries: list[LedgerEntry]) -> str:
         """One sentence, in the student's language, of what this call did, read from its ledger entries alone and
