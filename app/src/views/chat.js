@@ -3,7 +3,7 @@
 // `text` counts as the student's own instruction (docs/api.md, "Note to lane C").
 import { el, errorText, label } from "../dom.js";
 import { t } from "../i18n.js";
-import { chatBody } from "../requests.js";
+import { chatBody, confirmBody } from "../requests.js";
 import { renderReply } from "./reply.js";
 
 // Source: docs/api.md, POST /chat: text is 1 to 4,000 characters and pasted_text 1 to 20,000.
@@ -99,5 +99,15 @@ function yourMessage(ctx, body) {
 }
 
 export function lifelineMessage(ctx, reply) {
-  return el("div", { class: "msg msg-lifeline" }, label(ctx, "span", "lifeline", null, { class: "msg-who" }), renderReply(ctx, reply));
+  // A yes goes to POST /confirm; its answer, which may offer the next route under the same token, joins the thread.
+  const onConfirm = async (token) => {
+    const answer = await ctx.api.confirm(confirmBody(ctx.userId, token, ctx.lang()));
+    ctx.addToThread(lifelineMessage(ctx, answer));
+  };
+  return el(
+    "div",
+    { class: "msg msg-lifeline" },
+    label(ctx, "span", "lifeline", null, { class: "msg-who" }),
+    renderReply(ctx, reply, { onConfirm }),
+  );
 }

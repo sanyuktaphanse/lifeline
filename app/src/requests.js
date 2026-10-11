@@ -9,3 +9,22 @@ export function chatBody(userId, typed, pasted, lang) {
   body.lang = lang;
   return body;
 }
+
+// The token goes back exactly as /chat or /confirm gave it (docs/api.md, "Conventions", point 5).
+export function confirmBody(userId, token, lang) {
+  return { user_id: userId, confirmation_token: token, lang };
+}
+
+// docs/api.md, POST /rescue/start. Only the student's own typed words; the rescue takes no pasted text.
+export function rescueStartBody(userId, trigger, typed, lang) {
+  if (typeof typed !== "string" || typed.trim() === "") return null;
+  return { user_id: userId, trigger, text: typed, lang };
+}
+
+// docs/api.md, POST /rescue/step: an answer or a card name in text, or a token to confirm, or neither to continue.
+export function rescueStepBody(userId, { text = "", token = null } = {}, lang) {
+  const body = { user_id: userId, text };
+  if (token !== null) body.confirmation_token = token;
+  body.lang = lang;
+  return body;
+}

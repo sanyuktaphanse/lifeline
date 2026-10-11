@@ -26,3 +26,27 @@ test("with no typed words there is nothing to send, even when something was past
   assert.equal(chatBody("student_001", "", "a pasted scam", "en"), null);
   assert.equal(chatBody("student_001", "   ", "a pasted scam", "en"), null);
 });
+
+import { confirmBody, rescueStepBody } from "../../src/requests.js";
+
+test("the confirmation token is sent back exactly as it came, character for character", () => {
+  const tokens = [
+    "42d046aaa09c785c8e0ea68e463562102b32120b6091bf121d8518c60c48568a",
+    "  spaces kept  ",
+    "MiXeD-case_and.punctuation/+=",
+  ];
+  for (const token of tokens) {
+    const body = confirmBody("student_001", token, "en");
+    assert.equal(body.confirmation_token, token);
+    assert.deepEqual(body, { user_id: "student_001", confirmation_token: token, lang: "en" });
+  }
+});
+
+test("a rescue confirmation sends the token unchanged and no text", () => {
+  assert.deepEqual(rescueStepBody("student_001", { token: "abc123" }, "zh"), {
+    user_id: "student_001",
+    text: "",
+    confirmation_token: "abc123",
+    lang: "zh",
+  });
+});
