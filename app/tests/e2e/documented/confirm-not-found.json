@@ -1,0 +1,15 @@
+{
+  "text": "That confirmation was not found, so nothing was sent. This turn: a confirmation: not accepted, so nothing was done.",
+  "lang": "en",
+  "confirmation": null,
+  "decision": null,
+  "receipt": null,
+  "freeze": null,
+  "cancel": null,
+  "ledger_seqs": [
+    12,
+    13
+  ],
+  "provider": null,
+  "model": null
+}

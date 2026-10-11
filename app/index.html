@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lifeline</title>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="src/main.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="brand">Lifeline</h1>
+    <label class="lang-picker">
+      <span id="lang-label" data-i18n="language_label">Language</span>
+      <select id="lang" aria-labelledby="lang-label" disabled></select>
+    </label>
+  </header>
+  <div id="health-error" class="banner banner-error" role="alert" hidden></div>
+  <nav class="tabs" role="tablist">
+    <button role="tab" id="tab-chat" aria-controls="view-chat" aria-selected="true" data-i18n="tab_chat">Chat</button>
+    <button role="tab" id="tab-rescue" aria-controls="view-rescue" aria-selected="false" data-i18n="tab_rescue">Lost card</button>
+    <button role="tab" id="tab-ledger" aria-controls="view-ledger" aria-selected="false" data-i18n="tab_ledger">Ledger</button>
+  </nav>
+  <main>
+    <section id="view-chat" role="tabpanel" aria-labelledby="tab-chat"></section>
+    <section id="view-rescue" role="tabpanel" aria-labelledby="tab-rescue" hidden></section>
+    <section id="view-ledger" role="tabpanel" aria-labelledby="tab-ledger" hidden></section>
+  </main>
+</body>
+</html>
