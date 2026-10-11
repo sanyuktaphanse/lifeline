@@ -1,7 +1,13 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 # Source: docs/decisions.md, 18 September 2026. A run may happen from the notice until a day after it falls due.
 RUN_WINDOW_AFTER_DUE = timedelta(hours=24)
+# Lifeline's own settings for the terms of a standing mandate the student does not state, not facts about the world:
+# how far a run may stray from the amount, in percent, how many hours before a run the student is told, and for how
+# many hours after that notice the run can be cancelled. A term the student states in their own words replaces its
+# default, and the schedule day is never defaulted. Source: docs/decisions.md, decision 143.
+STANDING_DEFAULTS: dict[str, Decimal | int] = {"tolerance_pct": Decimal("5"), "notice_hours": 48, "cancel_window_hours": 24}
 
 
 def _day(schedule: str) -> int:

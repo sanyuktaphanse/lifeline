@@ -191,7 +191,7 @@ def test_an_upload_in_the_app_writes_no_flag():
     reply = s.loop.handle(USER, _user("The Wise app asks me to upload my passport"))
 
     assert _notes(s, "document_request_flagged") == []
-    assert reply.text == "That is how Wise asks."
+    assert reply.text == "That is how Wise asks. This turn: nothing was proposed, changed or sent."
 
 
 def test_a_pasted_payment_instruction_beside_the_document_request_cannot_produce_a_transfer():
@@ -504,7 +504,7 @@ def test_far_from_the_cap_the_loop_writes_no_warning():
     reply = s.loop.handle(USER, _user("cash"))
 
     assert _notes(s, "cash_cap_warning") == []
-    assert reply.text == "Plenty left."
+    assert reply.text == "Plenty left. This turn: nothing was proposed, changed or sent."
 
 
 def _figures(text: str) -> set[Decimal]:

@@ -1,8 +1,8 @@
 id: T26
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T15
-note: Expected failing. Stranger test of 2026-10-09, task T15, verdict failed. The student asked in their own words to cancel the last rent transfer. The model passed the receipt id it had read, the engine traced it to tool output, refused under R01 and wrote injection_suspected. The cancel of the last transfer that docs/api.md describes did not happen and the reason was false, half in English. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Fixed. Stranger test of 2026-10-09, task T15, verdict failed. The student asked in their own words to cancel the last rent transfer. The model passed the receipt id, which the student''s own ledger holds but which earlier replies had also named, so the engine refused under R01 and wrote injection_suspected. The model script repeats what the live model did. The file checks only what the code writes: that the cancel of the student''s own receipt is offered for confirmation with warn.transfer.cancel and that no injection_suspected entry is written. It passes since item One of the stranger fixes, the student''s own records, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:
@@ -19,6 +19,7 @@ runs:
           purpose: rent
   - user: 'Yes'
     confirm: latest
+    lang: en
   - user: nossa, que confusão. então cancela essa última transferência do aluguel, prefiro não arriscar pagar duas vezes
     lang: pt
     model:
@@ -28,7 +29,13 @@ runs:
           receipt_id: wise-0001
   expected:
     reply: confirmation
+    warning_key: warn.transfer.cancel
     lang: pt
-    must_not_contain:
-    - R01
-    - tool_result
+    ledger:
+    - proposal
+    - decision
+    - confirmation
+    - execution
+    - receipt
+    - proposal
+    - decision

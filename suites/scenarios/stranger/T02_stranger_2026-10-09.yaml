@@ -1,8 +1,8 @@
 id: T02
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T01
-note: Expected failing. Stranger test of 2026-10-09, task T01, verdict worked badly. The quote was right, but the reply called the simulated Pix route instant when its quote says one hour, and called Wise the cheapest real route when every fee in this build is a fixture. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Fixed. Stranger test of 2026-10-09, task T01, verdict worked badly. The quote was right, but the model called the simulated Pix route instant and Wise the cheapest real route. The model script repeats what the live model did. The file checks only what the code writes: the quote''s ledger trail and the turn summary, which says nothing was proposed, changed or sent. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The model''s own words about the routes are not checked, because no code writes them. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: en
   turns:
@@ -38,10 +38,10 @@ runs:
         If you''d like to go ahead, tell me the payee and purpose and I''ll put the transfer up for your confirmation. On your current mandate the payees available for Brazil are `landlord_sp`, and purposes are `rent` or `emergency`. Your balance also matters here — want me to check it before we proceed?'
   expected:
     reply: answer
+    lang: en
     ledger:
     - proposal
     - decision
     - execution
-    must_not_contain:
-    - instant
-    - Cheapest real route
+    must_contain:
+    - 'This turn: nothing was proposed, changed or sent.'

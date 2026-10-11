@@ -348,7 +348,7 @@ def test_far_from_every_line_a_recorded_withdrawal_writes_no_warning():
     reply = s.loop.handle(USER, _user("I took out 1000 yuan on icbc:card_03 today"))
 
     assert _warnings(s) == []
-    assert reply.text == "Recorded."
+    assert reply.text == "Recorded. This turn: a cash withdrawal record: done."
 
 
 @pytest.mark.parametrize("name", ["cash_cap_year", "cash_cap_year_consequence", "cash_cap_card_day"])

@@ -1,4 +1,9 @@
 import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import anthropic
@@ -646,3 +651,34 @@ def test_the_council_adapter_falls_back_to_the_ordinary_model(monkeypatch):
     council_adapter(env=KEYS).complete(MESSAGES, [])
 
     assert anthropic_calls[0]["model"] == "claude-opus-5"
+
+
+def _clone_reads(clone: Path, name: str) -> str:
+    script = (
+        "import os\n"
+        "from core.model_adapter import environment\n"
+        f"print(environment().get({name!r}, 'unset'))\n"
+    )
+    env = {key: value for key, value in os.environ.items() if key != name}
+    result = subprocess.run([sys.executable, "-c", script], cwd=clone, env=env, capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
+
+def test_a_clone_inside_another_folder_never_reads_the_parent_folders_env():
+    # Open item 173: a clone made inside the repository read the outer repository's .env and its keys.
+    root = Path(__file__).resolve().parent.parent
+    parent = root / ".harness_tmp" / "env_trap"
+    shutil.rmtree(parent, ignore_errors=True)
+    clone = parent / "clone"
+    try:
+        for package in ("core", "contracts", "rails"):
+            shutil.copytree(root / package, clone / package, ignore=shutil.ignore_patterns("__pycache__"))
+        name = "LIFELINE_ENV_TRAP_CHECK"
+        (parent / ".env").write_text(f"{name}=from_the_parent_folder\n", encoding="utf-8")
+
+        assert _clone_reads(clone, name) == "unset"
+
+        (clone / ".env").write_text(f"{name}=from_the_clone_itself\n", encoding="utf-8")
+        assert _clone_reads(clone, name) == "from_the_clone_itself"
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)

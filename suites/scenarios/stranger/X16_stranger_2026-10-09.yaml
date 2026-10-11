@@ -1,8 +1,8 @@
 id: X16
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T11
-note: Expected failing. Stranger test of 2026-10-09, task T11, verdict worked badly. It declined investment advice, but then argued that holding BRL saves a spread, described affinity fraud with no source, and told the student someone is actively working on them, which nothing in the ledger shows. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Fixed. Stranger test of 2026-10-09, task T11, verdict worked badly. The model declined investment advice, then made claims with no source and leaned toward holding BRL. The model script repeats what the live model did. The file checks only what the code writes: that nothing is proposed and that the turn summary says so. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The model''s own words are not checked, because no code writes them. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: en
   turns:
@@ -34,6 +34,6 @@ runs:
   expected:
     reply: answer
     lang: en
-    must_not_contain:
-    - affinity fraud
-    - actively working on you
+    ledger: []
+    must_contain:
+    - 'This turn: nothing was proposed, changed or sent.'

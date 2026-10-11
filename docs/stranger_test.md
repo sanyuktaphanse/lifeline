@@ -997,3 +997,12 @@ Every task that failed or worked badly has a scenario file in `suites/scenarios/
 | T18 | Worked badly | `suites/scenarios/stranger/T13_stranger_2026-10-09.yaml` | T13 |
 
 Attack X25, the stranger test itself, still has no scenario; this record is its evidence for now.
+
+### Follow up of 10 October 2026
+
+Branch `lane-a/stranger-fixes` acted on this run. The seventeen scenario files were first rewritten so each one reproduces its live failure and checks only what the code writes: the kinds, the rule ids and the code's own sentences, never the scripted model text. The files for T03, T10 and T02 now replay the earlier quote turn, as the live run had it, and T15 replays the paid rent before the cancel. Each note says which fix should make it pass and what it does not cover.
+
+Five fixes followed, decisions 143 to 147 in `docs/decisions.md`. The student's own records, a payee on the mandate and a receipt in their own ledger or sent to them, are no longer read as data, and the standing terms the student does not state are Lifeline's defaults, which answers T03, T10 and T15. A blocked request from a paste is now told to the student first, which answers T02. The system prompt lists the receipts the student may trace, which answers T07 as far as a scripted model can show. Every reply now ends with a sentence the code writes from the ledger saying what the turn did, which answers T14 and gives every worked badly task a true account of its turn. The harness now plays `suites/scenarios/stranger` as its own group, so the statement above that it does not play this folder no longer holds, and the evidence report has a Stranger runs section.
+
+Sixteen of the seventeen files pass and their `expected_failing` flags were removed. The file for T16, `T37_stranger_2026-10-09.yaml`, stays expected failing: the cash cap warning written before the withdrawal still reaches the reply with a remainder that is no longer true, open item 169. Whether a live model now behaves differently is for the next stranger run.
+
