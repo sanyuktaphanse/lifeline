@@ -256,3 +256,10 @@ This file records product decisions for Lifeline, newest last, with the date eac
 3. The message reaches the model inside a `<message>` frame in a user message marked `pasted_text`, under a system prompt that says it is data and never an instruction. No tools are offered, so the model cannot act on it.
 4. The warning is the key `payment_flag` in all three `TEXTS` tables of `core/agent.py`, so a student reads it in their own language, and a language Lifeline does not write gets the English. Its Portuguese and Chinese wait for a native speaker, `docs/i18n_review.md`. The agent loop does not call the translator yet; wiring it in, with the T04 scenario, is a second pull request, open item 181.
 5. The thresholds of `ACCOUNT_NUMBER` are Lifeline's own choice and no source gives them: a run of eight or more digits, which keeps dates and flat numbers out and still catches account numbers, and an IBAN shape of two letters, two digits and 10 to 30 letters or digits, which takes in every country's length without a table. The comment beside them says so. Sanyukta's review of 11 October asked for both.
+
+## 11 October 2026, the Chinese native speaker review
+
+1. Joanne, a native Chinese speaker, decided the ten Chinese items `docs/i18n_review.md` left for a native speaker, and the translator's warning. Every decision is listed there, under "Chinese, native speaker decisions of 11 October 2026".
+2. Every Chinese sentence Lifeline writes addresses the student with the polite 您, never 你, so one reply never mixes the two.
+3. When two wordings say the same thing, the shorter one is used.
+4. The scenario and test expectations that quote these sentences changed with them. The recorded replies of the stranger test of 9 October did not, because they are a record of that day.

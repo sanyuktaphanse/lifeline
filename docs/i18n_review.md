@@ -107,3 +107,22 @@ The council's sentence is not on this list. A voice writes its reason in the stu
 | --- | --- | --- |
 | Portuguese | This message contains payment instructions. Lifeline treats them as information only and will not pay anyone because a message asks; any payment needs your own request and your confirmation. | Esta mensagem contém instruções de pagamento. A Lifeline as trata apenas como informação e não vai pagar ninguém só porque uma mensagem pede; qualquer pagamento precisa do seu próprio pedido e da sua confirmação. |
 | Chinese | The same | 这条消息包含付款指示。Lifeline 只把它当作信息，不会因为一条消息要求就向任何人付款；任何付款都需要您本人提出并确认。 |
+
+## Chinese, native speaker decisions of 11 October 2026
+
+Joanne, a native Chinese speaker, decided every Chinese item above on 11 October 2026, with one rule for all of them: the shorter wording wins when it says the same thing. All of these are now in the code.
+
+| Key | Decision |
+| --- | --- |
+| `core.agent.TEXTS` `plan_updated` | 您的计划现已包含：{fields}。 |
+| `core.agent.TEXTS` `cash_cap_warning` | Opens with 注意 instead of 提醒 |
+| `core.agent.TEXTS` `cash_cap_year`, `cash_cap_year_consequence`, `cash_cap_card_day` | 预警线 instead of 提醒线 |
+| `core.agent.TEXTS` `document_request_flagged` | 不要回复该消息 |
+| `core.agent.TEXTS` `identity_locked` | 已通知您的家人, which says Lifeline told the family, not that they received it |
+| `core.agent.TEXTS` `notice_identity_failed` | 安全问题收到了一个错误答案。 |
+| `core.monthly.TEXTS` `note` | 下月（{next_month}）安排：{coming} |
+| `core.monthly.TEXTS` `refused_by_rail` | 已拒绝 |
+| `core.agent.TEXTS` `payment_flag` | Kept as written |
+| Every Chinese key | The polite 您 throughout, in place of 你 |
+
+The recorded replies of the stranger test of 9 October 2026 in `suites/scenarios/stranger/` keep the old wording, because they are a record of what was said that day. The Portuguese items still wait for a native speaker.

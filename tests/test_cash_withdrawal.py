@@ -360,7 +360,7 @@ def test_the_warning_texts_exist_in_english_portuguese_and_chinese(name):
 @pytest.mark.parametrize(
     ("lang", "piece"),
     [
-        ("zh", "你所有中国银行卡本年度境外取现已用 91,000 CNY，年度额度为 100,000 CNY，已达到 Lifeline 的 90% 提醒线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。"),
+        ("zh", "您所有中国银行卡本年度境外取现已用 91,000 CNY，年度额度为 100,000 CNY，已达到 Lifeline 的 90% 预警线。超过年度额度后，当年余下时间和下一年都不能在境外取现。来源：cn_atm_cap_005。"),
         ("pt", "Você já sacou 91,000 CNY do limite anual de 100,000 CNY para saques em dinheiro no exterior, somando todos os seus cartões bancários chineses, o que atingiu o aviso de 90 por cento do Lifeline. Ultrapassar o limite anual bloqueia saques no exterior pelo resto daquele ano e durante o ano seguinte. Fonte: cn_atm_cap_005."),
     ],
 )

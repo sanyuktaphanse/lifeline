@@ -53,4 +53,4 @@ runs:
                 arguments: {backup_instrument: "revolut:card_02", wallet_token_present: true}
           - text: ""
         expect:
-          must_contain: ["你的计划现在为：backup_instrument: revolut:card_02; wallet_token_present: true。"]
+          must_contain: ["您的计划现已包含：backup_instrument: revolut:card_02; wallet_token_present: true。"]

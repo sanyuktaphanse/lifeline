@@ -280,7 +280,7 @@ AUNT = {"action_kind": "remit_from_china", "provider": "cn_bank_remit_sim", "mul
     [
         ("en", "Lifeline will not use another person's quota for your costs."),
         ("pt", "O Lifeline não vai usar a cota de outra pessoa para os seus custos."),
-        ("zh", "Lifeline 不会用其他人的额度来支付你的费用。"),
+        ("zh", "Lifeline 不会用其他人的额度来支付您的费用。"),
     ],
 )
 def test_a_split_quota_writes_a_structuring_note_and_the_loop_refuses_in_the_students_language(lang, opening):

@@ -312,7 +312,7 @@ def test_an_update_the_plan_can_hold_writes_no_skipped_note():
     [
         ("en", "After a restart Lifeline could not apply an earlier change to your plan's backup_instrument"),
         ("pt", "Depois de um reinício o Lifeline não conseguiu aplicar uma mudança anterior em backup_instrument"),
-        ("zh", "重启后，Lifeline 无法应用之前对你计划中 backup_instrument 的修改"),
+        ("zh", "重启后，Lifeline 无法应用之前对您计划中 backup_instrument 的修改"),
     ],
 )
 def test_the_verify_ledger_reply_mentions_a_skipped_update(lang, sentence):
