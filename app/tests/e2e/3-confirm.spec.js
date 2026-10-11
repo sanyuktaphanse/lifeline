@@ -9,7 +9,9 @@ async function waitingTransfer(page, backend, open) {
   await open();
   await page.locator("#chat-text").fill("Send 1,200 SGD rent to landlord_sp in Brazil");
   await page.locator("#chat-send").click();
-  return page.locator(".confirm-card").last();
+  const card = page.locator(".confirm-card").last();
+  await expect(card).toBeVisible();
+  return card;
 }
 
 test("DOCUMENTED SHAPE: the card shows the warning, the action and every route with the selected one marked", async ({ page, backend, open }) => {

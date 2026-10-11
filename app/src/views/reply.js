@@ -2,14 +2,24 @@
 // All server text is set as text, never as HTML.
 import { el, label } from "../dom.js";
 import { confirmationCard } from "./confirmation.js";
+import { splitReply } from "../reply-text.js";
 
+// The blocked request sentences go first and the "This turn:" sentence last, each on its own line, because
+// code wrote them from the ledger and the app can rely on them even when the model's words are wrong.
 export function renderReply(ctx, reply, { onConfirm } = {}) {
-  const parts = [el("div", { class: "bubble reply-body" }, reply.text)];
+  const { blocked, body, turn } = splitReply(reply.text, reply.lang);
+  const parts = blocked.map((sentence) =>
+    el("div", { class: "reply-blocked" }, label(ctx, "span", "blocked_label", null, { class: "blocked-label" }), el("span", { class: "blocked-text" }, sentence)),
+  );
+  if (body) parts.push(el("div", { class: "bubble reply-body" }, body));
   if (reply.receipt) parts.push(receiptCard(ctx, reply.receipt));
   if (reply.freeze) parts.push(resultCard(ctx, "freeze_title", reply.freeze, "freeze"));
   if (reply.cancel) parts.push(resultCard(ctx, "cancel_title", reply.cancel, "cancel"));
   if (reply.confirmation && onConfirm) parts.push(confirmationCard(ctx, reply.confirmation, onConfirm));
   if (reply.decision && reply.decision.allowed === false) parts.push(refusalCard(ctx, reply.decision));
+  if (turn) {
+    parts.push(el("div", { class: "reply-turn" }, label(ctx, "span", "turn_label", null, { class: "turn-label" }), el("span", { class: "turn-text" }, turn)));
+  }
   return el("div", { class: "reply" }, parts);
 }
 
