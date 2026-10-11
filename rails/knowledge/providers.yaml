@@ -7,7 +7,7 @@
   source_type: operator
   date_checked: 2026-10-08
   checked_by: "CC"
-  second_check_by: "PD"
+  second_check_by: ""
   used_by: [X27, precheck.document_request]
   values:
     provider: Wise
@@ -22,6 +22,6 @@
   source_type: operator
   date_checked: 2026-10-08
   checked_by: "CC"
-  second_check_by: "PD"
+  second_check_by: ""
   used_by: [X27, precheck.document_request]
   note: "Claude Code opened the page on 8 October 2026. It is the Singapore blog post Impersonation scams explained, dated 3 February 2026 on the page. The page lists asking for a password and asking for login details over a phone call among the things Wise will never do; the statement keeps only the sentences about links, pressure and checking a request."

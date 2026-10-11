@@ -7,7 +7,7 @@
   source_type: regulator
   date_checked: 2026-10-08
   checked_by: "SP"
-  second_check_by: "PD"
+  second_check_by: ""
   used_by: [T18, X15, upi_paynow_sim]
   values:
     purposes: [maintenance_of_relatives_abroad, gift]
@@ -21,7 +21,7 @@
   source_type: regulator
   date_checked: 2026-10-08
   checked_by: "SP"
-  second_check_by: "PD"
+  second_check_by: ""
   used_by: [T18, T19, upi_paynow_sim]
   values:
     daily_cap: 60000

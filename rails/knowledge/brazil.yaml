@@ -7,7 +7,7 @@
   source_type: regulator
   date_checked: 2026-10-09
   checked_by: "CC"
-  second_check_by: "PD"
+  second_check_by: ""
   used_by: [T29, sim_pix]
   values:
     typical_duration_hours: 0
@@ -21,7 +21,7 @@
   source_type: regulator
   date_checked: 2026-10-08
   checked_by: "SP"
-  second_check_by: "PD"
+  second_check_by: ""
   used_by: [T29, sim_pix]
   values:
     key_types: [cell phone number, e-mail, CPF, CNPJ, random key]
