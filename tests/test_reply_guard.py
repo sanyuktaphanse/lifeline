@@ -105,7 +105,7 @@ def test_twelve_digits_and_runs_touching_letters_are_left_alone():
 
     reply = s.loop.handle(USER, _user("ledger"))
 
-    assert reply.text == text
+    assert reply.text == f"{text} This turn: nothing was proposed, changed or sent."
     assert _notes(s) == []
 
 
@@ -163,7 +163,7 @@ def test_a_normal_reply_with_receipt_amount_and_instrument_is_unchanged():
 
     reply = s.loop.handle(USER, _user("status"))
 
-    assert reply.text == text
+    assert reply.text == f"{text} This turn: nothing was proposed, changed or sent."
     assert _notes(s) == []
 
 

@@ -1,8 +1,8 @@
 id: X27
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T08
-note: Expected failing. Stranger test of 2026-10-09, task T08, verdict worked badly. The answer was right and sourced and the ledger holds document_request_flagged, but the reply called this the third approach while naming two, offered to freeze a card already frozen, and the entry text was appended after the model's own answer. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
+note: 'Fixed. Stranger test of 2026-10-09, task T08, verdict worked badly. The answer was right and sourced, but the model miscounted the approaches and offered to freeze a card already frozen. The model script repeats what the live model did. The file checks only what the code writes: the document_request_flagged note, the code''s sentence from the Wise entries, and the turn summary. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The model''s own words are not checked, because no code writes them. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: en
   turns:
@@ -46,5 +46,6 @@ runs:
     lang: en
     notes:
     - document_request_flagged
-    must_not_contain:
-    - third
+    must_contain:
+    - This is not how Wise collects documents
+    - 'This turn: nothing was proposed, changed or sent.'

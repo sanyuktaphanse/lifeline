@@ -18,7 +18,7 @@ The rails were already further along than the master plan's calendar said: lane 
 
 Wise uses `customerTransactionId` to stop duplicate transfers, which fits our idempotency key exactly: the same key and the same request always give Wise the same id, so a retry cannot pay twice.
 
-The agent prefers routes that are not simulated. Because the fixture bank wire says it is not simulated, the agent picks it over the honest sandbox Wise route on Singapore to Brazil. That is a lane A decision, so it is open item 168.
+The agent prefers routes that are not simulated. Because the fixture bank wire says it is not simulated, the agent picks it over the honest sandbox Wise route on Singapore to Brazil. That is a lane A decision, so it is open item 178.
 
 ## What is next
 

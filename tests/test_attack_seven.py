@@ -20,6 +20,7 @@ from tests.test_agent import (
     RENT,
     STANDING_ARGS,
     STANDING_ID,
+    STANDING_REQUEST,
     USER,
     _call,
     _create_standing,
@@ -143,7 +144,7 @@ def test_a_cancelled_standing_run_is_not_paid_from_chat_over_http(monkeypatch, t
             tick_seconds=None,
         )
     )
-    proposed = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp in Brazil every month"})
+    proposed = client.post("/chat", json={"user_id": USER, "text": f"{STANDING_REQUEST}, 300 notice hours"})
     client.post("/confirm", json={"user_id": USER, "confirmation_token": proposed.json()["confirmation"]["confirmation_token"]})
     client.post("/chat", json={"user_id": USER, "text": CANCEL_REQUEST})
 
@@ -697,7 +698,7 @@ def test_a_standing_run_on_a_tampered_ledger_is_held(tmp_path, monkeypatch):
 
     monkeypatch.setenv("COUNCIL", "")
     client = _app(tmp_path, [_call("create_standing_mandate", STANDING_ARGS)])
-    proposed = client.post("/chat", json={"user_id": USER, "text": "Pay 1,200 SGD rent to landlord_sp in Brazil every month"})
+    proposed = client.post("/chat", json={"user_id": USER, "text": STANDING_REQUEST})
     client.post("/confirm", json={"user_id": USER, "confirmation_token": proposed.json()["confirmation"]["confirmation_token"]})
     lines = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()
     last = json.loads(lines[-1])

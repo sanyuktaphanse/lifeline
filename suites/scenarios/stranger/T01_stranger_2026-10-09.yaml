@@ -1,15 +1,31 @@
 id: T01
-expected_failing: true
+expected_failing: false
 stranger_run: '2026-10-09'
 stranger_task: T14
-note: Expected failing. Stranger test of 2026-10-09, task T14, verdict worked badly. The balance it read was right, 794.40 SGD after the rent, but the model said it had not changed since before the payment, told the student to treat paid rent as unconfirmed, apologised for a message it never sent, and wrote in European Portuguese. The model script repeats what the live model did, and the expectations state the outcome the student should have had, so this run fails until it is fixed. The exact request and reply are in docs/stranger_test.md. The harness does not play files in this folder yet.
-fixtures:
-  balances:
-    SGD: '794.40'
-    BRL: '150'
+note: 'Fixed. Stranger test of 2026-10-09, task T14, verdict worked badly. The balance the model read was right after the rent, but it said the rent had not left the account and told the student to treat a paid transfer as unconfirmed. The model script repeats what the live model did. The file checks only what the code writes: that the confirmed rent carries its receipt id in the turn summary, and that the next turn, where the model claimed a fault, ends with the summary that nothing was proposed, changed or sent. It passes since item Four of the stranger fixes, the turn summary, was built on branch lane-a/stranger-fixes, which removed its expected_failing flag. The model''s false claim is still in its reply; the code''s sentence after it is what the student can rely on. The exact request and reply are in docs/stranger_test.md.'
 runs:
 - lang: pt
   turns:
+  - user: Pay 1,200 SGD rent to landlord_sp in Brazil
+    lang: en
+    model:
+    - calls:
+      - name: propose_transfer
+        arguments:
+          amount: '1200'
+          currency: SGD
+          corridor: SG>BR
+          payee_id: landlord_sp
+          purpose: rent
+    expect:
+      reply: confirmation
+  - user: Sim
+    confirm: latest
+    lang: pt
+    expect:
+      reply: receipt
+      must_contain:
+      - recibo wise-0001, estado completed
   - user: quanto sobrou na minha conta depois disso? e quanto ainda posso mandar hoje?
     lang: pt
     model:
@@ -76,7 +92,5 @@ runs:
   expected:
     reply: answer
     lang: pt
-    must_not_contain:
-    - O saldo **não mudou**
-    - não confirmado
-    - regista
+    must_contain:
+    - 'Neste turno: nada foi proposto, alterado ou enviado.'

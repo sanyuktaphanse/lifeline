@@ -57,7 +57,7 @@ from core.mandate import DEVELOPMENT_CONFIRM_SECRET
 from core.format import fill, format_amount, format_date
 from core.council import NO_ANSWER, SAFETY, WAIT, most_confident, safety_wait
 from core.rescue import RescueMachine
-from core.standing import next_occurrence, occurrence_containing, period_of
+from core.standing import STANDING_DEFAULTS, next_occurrence, occurrence_containing, period_of
 from core.tiers import TIERS
 from rails.knowledge.loader import load_knowledge
 from rails.sim.rules import (
@@ -222,6 +222,9 @@ PROMPT_RULES = (
     "Never recommend a simulated route for real money, and say that a route is simulated whenever it is.",
     "Never say you can change a limit or a setting; call the tool, such as change_limit, and let the code answer.",
     "Call add_payee only when the student asks to add a payee.",
+    # The second live run saw DashScope claim a submission and a proposal no tool made, open item 163; the turn
+    # summary now says what the turn did. Source: docs/decisions.md, decision 146.
+    "Never say a payment was sent, done or submitted; the code says that from the ledger.",
 )
 
 
@@ -249,6 +252,20 @@ def mandate_block(mandate: Mandate, balances: dict[str, Decimal]) -> str:
             "Pass these codes to tools exactly as written here and never translate them.",
         ]
     )
+
+def receipts_block(receipts: list[tuple[str, str, str, bool]]) -> str:
+    """The receipts the student may trace, written for the system prompt from the student's own ledger and the
+    inbound receipt map: each id with its rail, its status as the rail reports it, and whether it was sent to the
+    student. trace_transfer finds no other. Source: docs/decisions.md, decision 145, from the stranger task T07.
+    """
+    if not receipts:
+        return "Receipts the student may trace: none."
+    lines = [
+        f"{receipt_id} on {rail}, status {status}" + (", sent to the student" if inbound else "")
+        for receipt_id, rail, status, inbound in receipts
+    ]
+    return "Receipts the student may trace, the only ones trace_transfer can find: " + "; ".join(lines) + "."
+
 
 ACTION_FIELDS = ("amount", "currency", "corridor", "payee_id", "purpose")
 ACTION_ARGUMENTS = (*ACTION_FIELDS, "instrument_id", "standing_mandate_id", "receipt_id")
@@ -316,10 +333,11 @@ TOOLS = [
     ),
     _tool(
         "create_standing_mandate",
-        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28. "
-        "Nothing is set up until the student confirms it.",
+        "Set up a recurring transfer, such as monthly rent. schedule is monthly:D with D from 1 to 28, the day the "
+        "student gave. Pass tolerance_pct, notice_hours or cancel_window_hours only when the student states it; "
+        "Lifeline supplies its own setting for any the student does not. Nothing is set up until the student confirms it.",
         {**{name: TEXT for name in ACTION_FIELDS}, **{name: TEXT for name in STANDING_TERMS}},
-        [*ACTION_FIELDS, *STANDING_TERMS],
+        [*ACTION_FIELDS, "schedule"],
     ),
     _tool(
         "cancel_standing_run",
@@ -334,7 +352,13 @@ TOOLS = [
         ["standing_mandate_id"],
     ),
     _tool("set_reminder", "Set a reminder for the student.", {"text": TEXT, "due": TEXT}, ["text"]),
-    _tool("trace_transfer", "Report where a transfer is, by receipt id.", {"receipt_id": TEXT}, ["receipt_id"]),
+    _tool(
+        "trace_transfer",
+        "Report where a transfer is, by receipt id. The system prompt lists the receipts the student may trace, "
+        "their own and those sent to them; a receipt not in that list cannot be traced.",
+        {"receipt_id": TEXT},
+        ["receipt_id"],
+    ),
     _tool(
         "precheck",
         "List what a provider is likely to ask for before an action such as enable_pix or remit_from_china. "
@@ -455,7 +479,7 @@ REQUIRED_ARGUMENTS = {
     "get_quote": ("corridor", "amount"),
     "add_payee": ("payee_id",),
     "freeze_card": ("instrument_id",),
-    "create_standing_mandate": (*ACTION_FIELDS, *STANDING_TERMS),
+    "create_standing_mandate": (*ACTION_FIELDS, "schedule"),
     "cancel_standing_run": ("standing_mandate_id",),
     "deactivate_standing_mandate": ("standing_mandate_id",),
     "cancel_transfer": ("receipt_id",),
@@ -502,6 +526,23 @@ TEXTS = {
         "notice_backup_frozen": "Backup card {instrument} is frozen too, so payments were not moved to it.",
         "notice_injection_other": "A request that did not come from the student, to {what}, was blocked.",
         "notice_injection_any": "A request that did not come from the student was blocked.",
+        "injection_blocked": "{origin} asked Lifeline to {what}, and Lifeline did not do it, because only your own words can start an action.",
+        "injection_from_paste": "Text you pasted",
+        "injection_from_data": "Information Lifeline read",
+        "injection_act": "take an action",
+        "turn_nothing": "This turn: nothing was proposed, changed or sent.",
+        "turn_summary": "This turn: {items}.",
+        "turn_joiner": "; ",
+        "turn_transfer": "a transfer of {amount} to {payee}",
+        "turn_proposed": "{what}: proposed, waiting for your confirmation",
+        "turn_refused": "{what}: refused under {rules}",
+        "turn_receipt": "{what}: confirmed and executed, receipt {receipt_id}, status {status}",
+        "turn_executed_receipt": "{what}: executed, receipt {receipt_id}, status {status}",
+        "turn_result": "{what}: confirmed, result {status}",
+        "turn_confirmed": "{what}: confirmed and done",
+        "turn_not_executed": "{what}: confirmed but not executed",
+        "turn_done": "{what}: done",
+        "turn_rejected": "a confirmation: not accepted, so nothing was done",
         "expired": "That confirmation expired after {minutes} minutes, so nothing was sent. Ask again for a fresh one.",
         "retry": "{failed} failed and nothing was charged under {key}. The next best route is {rail}, fee {fee}. Confirm to send over it.",
         "no_route": "No route is available for this transfer right now, so nothing was sent.",
@@ -598,6 +639,23 @@ TEXTS = {
         "notice_backup_frozen": "O cartão reserva {instrument} também está bloqueado, então os pagamentos não foram passados para ele.",
         "notice_injection_other": "Uma solicitação que não veio do estudante, para {what}, foi bloqueada.",
         "notice_injection_any": "Uma solicitação que não veio do estudante foi bloqueada.",
+        "injection_blocked": "{origin} pediu ao Lifeline para {what}, e o Lifeline não fez isso, porque só as suas próprias palavras podem iniciar uma ação.",
+        "injection_from_paste": "O texto que você colou",
+        "injection_from_data": "Uma informação que o Lifeline leu",
+        "injection_act": "realizar uma ação",
+        "turn_nothing": "Neste turno: nada foi proposto, alterado ou enviado.",
+        "turn_summary": "Neste turno: {items}.",
+        "turn_joiner": "; ",
+        "turn_transfer": "uma transferência de {amount} para {payee}",
+        "turn_proposed": "{what}: proposta feita, aguardando sua confirmação",
+        "turn_refused": "{what}: recusa pelas regras {rules}",
+        "turn_receipt": "{what}: confirmação e execução, recibo {receipt_id}, estado {status}",
+        "turn_executed_receipt": "{what}: execução, recibo {receipt_id}, estado {status}",
+        "turn_result": "{what}: confirmação feita, resultado {status}",
+        "turn_confirmed": "{what}: confirmação feita e ação concluída",
+        "turn_not_executed": "{what}: confirmação feita, mas sem execução",
+        "turn_done": "{what}: ação concluída",
+        "turn_rejected": "uma confirmação: não aceita, então nada foi feito",
         "expired": "Essa confirmação expirou depois de {minutes} minutos, então nada foi enviado. Peça de novo para receber uma nova.",
         "retry": "{failed} falhou e nada foi cobrado com a chave {key}. A próxima melhor rota é {rail}, taxa de {fee}. Confirme para enviar por ela.",
         "no_route": "Nenhuma rota está disponível para esta transferência agora, então nada foi enviado.",
@@ -694,6 +752,23 @@ TEXTS = {
         "notice_backup_frozen": "备用卡 {instrument} 也已被冻结，因此付款没有转到这张卡上。",
         "notice_injection_other": "一项并非来自学生本人的请求（{what}）已被阻止。",
         "notice_injection_any": "一项并非来自学生本人的请求已被阻止。",
+        "injection_blocked": "{origin}要求 Lifeline {what}，Lifeline 没有这样做，因为只有你自己的话才能发起操作。",
+        "injection_from_paste": "你粘贴的文字",
+        "injection_from_data": "Lifeline 读取的信息",
+        "injection_act": "执行一项操作",
+        "turn_nothing": "本轮：没有提出、更改或发送任何内容。",
+        "turn_summary": "本轮：{items}。",
+        "turn_joiner": "；",
+        "turn_transfer": "向 {payee} 转账 {amount}",
+        "turn_proposed": "{what}：已提出，等待你确认",
+        "turn_refused": "{what}：被拒绝，规则 {rules}",
+        "turn_receipt": "{what}：已确认并执行，回执 {receipt_id}，状态 {status}",
+        "turn_executed_receipt": "{what}：已执行，回执 {receipt_id}，状态 {status}",
+        "turn_result": "{what}：已确认，结果 {status}",
+        "turn_confirmed": "{what}：已确认并完成",
+        "turn_not_executed": "{what}：已确认，但未执行",
+        "turn_done": "{what}：已完成",
+        "turn_rejected": "一项确认：未被接受，因此没有执行任何操作",
         "expired": "该确认已在 {minutes} 分钟后过期，因此没有发送任何资金。请重新发起以获取新的确认。",
         "retry": "{failed} 执行失败，在 {key} 下没有产生任何扣款。次优路线是 {rail}，手续费 {fee}。确认后将通过该路线发送。",
         "no_route": "目前没有可用于这笔转账的路线，因此没有发送任何资金。",
@@ -772,6 +847,8 @@ TEXTS = {
 MONEY_TOOLS = frozenset({"propose_transfer", "create_standing_mandate"})
 INJECTION_WHAT: dict[str, dict[str, str]] = {
     "en": {
+        "propose_transfer": "make a payment",
+        "create_standing_mandate": "set up a standing payment",
         "add_payee": "add a payee",
         "freeze_card": "freeze a card",
         "update_plan": "change the rescue plan",
@@ -782,6 +859,8 @@ INJECTION_WHAT: dict[str, dict[str, str]] = {
         "record_cash_withdrawal": "record a cash withdrawal",
     },
     "pt": {
+        "propose_transfer": "fazer um pagamento",
+        "create_standing_mandate": "criar uma ordem permanente",
         "add_payee": "adicionar um destinatário",
         "freeze_card": "bloquear um cartão",
         "update_plan": "alterar o plano de resgate",
@@ -792,6 +871,8 @@ INJECTION_WHAT: dict[str, dict[str, str]] = {
         "record_cash_withdrawal": "registrar um saque em dinheiro",
     },
     "zh": {
+        "propose_transfer": "付一笔款",
+        "create_standing_mandate": "设置一项定期付款",
         "add_payee": "添加收款人",
         "freeze_card": "冻结一张卡",
         "update_plan": "修改救援计划",
@@ -800,6 +881,86 @@ INJECTION_WHAT: dict[str, dict[str, str]] = {
         "set_reminder": "设置提醒",
         "cancel_transfer": "取消一笔转账",
         "record_cash_withdrawal": "记录一笔现金取款",
+    },
+}
+
+
+# What the turn summary calls each action, by its type. Source: docs/decisions.md, decision 146.
+SUMMARY_WHAT: dict[str, dict[str, str]] = {
+    "en": {
+        "transfer": "a transfer",
+        "read_balance": "a balance read",
+        "set_reminder": "a reminder",
+        "add_payee": "a new payee",
+        "freeze_card": "a card freeze",
+        "change_limit": "a limit change",
+        "change_mandate": "a mandate change",
+        "export_credentials": "showing stored credentials",
+        "trace_transfer": "a trace",
+        "precheck": "a precheck",
+        "get_quote": "a quote",
+        "create_standing_mandate": "a standing payment",
+        "cancel_standing_run": "skipping a standing payment run",
+        "deactivate_standing_mandate": "stopping a standing payment",
+        "rescue_identity_check": "the identity check",
+        "check_wallet_token": "the phone wallet check",
+        "reroute_to_backup": "moving payments to the backup card",
+        "notify_family": "the family notice",
+        "verify_ledger": "a ledger check",
+        "update_plan": "a change to the rescue plan",
+        "cancel_transfer": "cancelling a transfer",
+        "monthly_summary": "the monthly note",
+        "record_cash_withdrawal": "a cash withdrawal record",
+    },
+    "pt": {
+        "transfer": "uma transferência",
+        "read_balance": "uma leitura de saldo",
+        "set_reminder": "um lembrete",
+        "add_payee": "um novo destinatário",
+        "freeze_card": "o bloqueio de um cartão",
+        "change_limit": "uma mudança de limite",
+        "change_mandate": "uma mudança de mandato",
+        "export_credentials": "mostrar credenciais guardadas",
+        "trace_transfer": "um rastreio",
+        "precheck": "uma verificação prévia",
+        "get_quote": "uma cotação",
+        "create_standing_mandate": "uma ordem permanente",
+        "cancel_standing_run": "pular um envio de ordem permanente",
+        "deactivate_standing_mandate": "interromper uma ordem permanente",
+        "rescue_identity_check": "a verificação de identidade",
+        "check_wallet_token": "a verificação da carteira do celular",
+        "reroute_to_backup": "mover os pagamentos para o cartão reserva",
+        "notify_family": "o aviso à família",
+        "verify_ledger": "uma verificação do registro",
+        "update_plan": "uma mudança no plano de resgate",
+        "cancel_transfer": "cancelar uma transferência",
+        "monthly_summary": "a nota mensal",
+        "record_cash_withdrawal": "um registro de saque em dinheiro",
+    },
+    "zh": {
+        "transfer": "一笔转账",
+        "read_balance": "一次余额查询",
+        "set_reminder": "一个提醒",
+        "add_payee": "一个新收款人",
+        "freeze_card": "冻结一张卡",
+        "change_limit": "一次限额更改",
+        "change_mandate": "一次授权更改",
+        "export_credentials": "显示已存的凭据",
+        "trace_transfer": "一次转账追踪",
+        "precheck": "一次预先检查",
+        "get_quote": "一次报价",
+        "create_standing_mandate": "一项定期付款",
+        "cancel_standing_run": "跳过一次定期付款",
+        "deactivate_standing_mandate": "停止一项定期付款",
+        "rescue_identity_check": "身份验证",
+        "check_wallet_token": "手机钱包检查",
+        "reroute_to_backup": "把付款改到备用卡",
+        "notify_family": "家人通知",
+        "verify_ledger": "一次账本核验",
+        "update_plan": "修改救援计划",
+        "cancel_transfer": "取消一笔转账",
+        "monthly_summary": "月度说明",
+        "record_cash_withdrawal": "一笔现金取款记录",
     },
 }
 
@@ -815,6 +976,15 @@ def _injection_notice(lang: str, tool: Any) -> str:
         return _text(lang, "notice_injection")
     what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(tool))
     return _text(lang, "notice_injection_any") if what is None else _text(lang, "notice_injection_other", what=what)
+
+
+def _injection_sentence(lang: str, payload: dict[str, Any]) -> str:
+    """What the student is told a blocked request from data asked for: its kind and where it came from, never an
+    address or an amount it carried, and that Lifeline did not do it. Source: docs/decisions.md, decision 144."""
+    pasted = Source.PASTED_TEXT.value in (payload.get("fields") or {}).values()
+    origin = _text(lang, "injection_from_paste" if pasted else "injection_from_data")
+    what = INJECTION_WHAT.get(lang, INJECTION_WHAT["en"]).get(str(payload.get("tool"))) or _text(lang, "injection_act")
+    return _text(lang, "injection_blocked", origin=origin, what=what)
 
 
 def _spoken(advice: dict[str, Any], position: str) -> str:
@@ -977,6 +1147,9 @@ class _Trail:
     notices: list[str] = field(default_factory=list)
     # What the student typed in this turn, read as the provenance check reads it.
     said: str = ""
+    # What pastes and tool results in this turn alone say, so a value on the student's own records that one of them
+    # names, and the student did not, is still read as data. Source: docs/decisions.md, decision 143.
+    this_turn: _Details = field(default_factory=_Details)
 
 
 @dataclass
@@ -1151,10 +1324,57 @@ def _named_in(wanted: str, texts: list[tuple[str, Source]]) -> Source | None:
     return next((source for text, source in texts if word.search(text)), None)
 
 
-def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
+def _own_record(value: str, records: set[str], trail: _Trail) -> bool:
+    """Whether a value is the student's own, not data: one of their own records, a payee their current mandate lists
+    or a receipt their own ledger or their inbound transfers hold, while the student's words this turn name no other
+    record and no paste or tool result this turn names a record the student's words do not. An amount is never one.
+    Source: docs/decisions.md, decision 143, from the stranger tasks T03 and T15.
+    """
+    if value not in records:
+        return False
+    named = {record for record in records if _named_in(record, [(trail.said, Source.USER_TURN)]) is not None}
+    if named - {value}:
+        return False
+    return not {record for record in records if _named_in(record, trail.this_turn.texts) is not None} - named
+
+
+def _standing_terms(arguments: dict[str, Any], trail: _Trail) -> tuple[dict[str, Any], set[str]]:
+    """A standing mandate's terms and the names of those Lifeline supplied.
+
+    The schedule is the model's, and its day is read by the provenance check, never defaulted. Each other term is
+    the model's when the student's own words hold its value, or when a paste or tool result in this turn does, so
+    the provenance check can refuse it as data; otherwise it is Lifeline's default, which is the student's own
+    because code supplied it. A cancel window Lifeline supplies is cut to the notice, so a short notice the student
+    states is never refused for the default window. Source: docs/decisions.md, decision 143, from the stranger task T10.
+    """
+    terms: dict[str, Any] = {"schedule": arguments["schedule"]}
+    supplied: set[str] = set()
+    for name, default in STANDING_DEFAULTS.items():
+        try:
+            given = Decimal(str(arguments.get(name, "")).strip())
+        except InvalidOperation:  # anti-pattern: SILENT-EXCEPT ok, a value that is not a number is not the student's
+            given = None
+        if given is not None and (given in trail.from_user.amounts or given in trail.this_turn.amounts):
+            terms[name] = arguments[name]
+        else:
+            terms[name] = default
+            supplied.add(name)
+    if "cancel_window_hours" in supplied:
+        terms["cancel_window_hours"] = min(int(terms["cancel_window_hours"]), int(Decimal(str(terms["notice_hours"]))))
+    return terms, supplied
+
+
+def _untrusted_fields(
+    trail: _Trail, action: Action, payees: set[str], receipts: set[str], supplied: set[str] = frozenset()
+) -> dict[str, Source]:
     untrusted: dict[str, Source] = {}
     payee = _skeleton(action.payee_id or "")
-    if payee and payee not in trail.from_user.payee_ids and _named_in(payee, trail.from_user.texts) is None:
+    if (
+        payee
+        and payee not in trail.from_user.payee_ids
+        and _named_in(payee, trail.from_user.texts) is None
+        and not _own_record(payee, payees, trail)
+    ):
         source = trail.from_data.payee_ids.get(payee) or _named_in(payee, trail.from_data.texts)
         if source is not None:
             untrusted["payee_id"] = source
@@ -1166,16 +1386,23 @@ def _untrusted_fields(trail: _Trail, action: Action) -> dict[str, Source]:
             untrusted["instrument_id"] = source
     if action.standing_terms is not None:
         terms = action.standing_terms
-        day = Decimal(terms.schedule.partition(":")[2] or 0)
-        for value in (terms.tolerance_pct, Decimal(terms.notice_hours), Decimal(terms.cancel_window_hours), day):
-            if value not in trail.from_user.amounts and value in trail.from_outside.amounts:
-                untrusted["standing_terms"] = trail.from_outside.amounts[value]
+        given = {"tolerance_pct": terms.tolerance_pct, "notice_hours": Decimal(terms.notice_hours), "cancel_window_hours": Decimal(terms.cancel_window_hours)}
+        for name, value in given.items():
+            # A term Lifeline supplied is its own; one the model gave is data when only this turn's paste or tool
+            # results hold it.
+            if name not in supplied and value not in trail.from_user.amounts and value in trail.this_turn.amounts:
+                untrusted["standing_terms"] = trail.this_turn.amounts[value]
                 break
+        # The day is never defaulted: a day the student's words do not hold came from data, or from the model,
+        # whose words count as tool output.
+        day = Decimal(terms.schedule.partition(":")[2] or 0)
+        if "standing_terms" not in untrusted and day not in trail.from_user.amounts:
+            untrusted["standing_terms"] = trail.from_outside.amounts.get(day, Source.TOOL_RESULT)
     amount = action.amount
     if amount is not None and amount not in trail.from_user.amounts and amount in trail.from_data.amounts:
         untrusted["amount"] = trail.from_data.amounts[amount]
     receipt = _skeleton(action.receipt_id or "")
-    if receipt and receipt not in trail.from_user.payee_ids:
+    if receipt and receipt not in trail.from_user.payee_ids and not _own_record(receipt, receipts, trail):
         # A receipt id glued to more text, such as a file name, is one token there, so it is also looked for
         # as a whole word anywhere in the data.
         word = re.compile(rf"(?<![a-z0-9]){re.escape(receipt)}(?![a-z0-9])")
@@ -1562,6 +1789,8 @@ class AgentLoop:
             elif earlier.role in (Role.USER, Role.TOOL):
                 trail.from_data.add(earlier.text, earlier.source)
                 trail.from_outside.add(earlier.text, earlier.source)
+                if any(earlier is current for current in turn_messages):
+                    trail.this_turn.add(earlier.text, earlier.source)
             elif earlier.role is Role.ASSISTANT:
                 # The model's own words come from what it was given, so a detail only the model
                 # named counts as data, labelled as tool output, even after its source has left the
@@ -1602,6 +1831,7 @@ class AgentLoop:
                 text = json.dumps(result, ensure_ascii=False, default=str)
                 trail.from_data.add(text, Source.TOOL_RESULT)
                 trail.from_outside.add(text, Source.TOOL_RESULT)
+                trail.this_turn.add(text, Source.TOOL_RESULT)
                 tool_message = Message(role=Role.TOOL, text=text, source=Source.TOOL_RESULT, tool_call_id=call.id)
                 messages.append(tool_message)
                 turn_messages.append(tool_message)
@@ -1614,7 +1844,110 @@ class AgentLoop:
 
     def _finish(self, trail: _Trail, turn_messages: list[Message], reply: AgentReply) -> AgentReply:
         self._remember(trail, turn_messages)
-        return reply.model_copy(update={"ledger_seqs": list(trail.seqs)})
+        return self._told(trail.user_id, reply.model_copy(update={"ledger_seqs": list(trail.seqs)}))
+
+    def _told[ReplyT: AgentReply](self, user_id: str, reply: ReplyT) -> ReplyT:
+        """The reply with what the code tells the student from this call's ledger entries, kept out of the memory:
+        first, for every request from data the loop blocked, what it asked for and that Lifeline did not do it,
+        Source: docs/decisions.md, decision 144; last, one sentence saying what the call did, decision 146.
+        """
+        seqs = set(reply.ledger_seqs)
+        entries = [entry for entry in self._ledger.entries() if entry.seq in seqs]
+        blocked = [_injection_sentence(reply.lang, entry.payload) for entry in entries if entry.kind == "injection_suspected"]
+        first = list(dict.fromkeys(blocked))
+        # The summary names payees and receipts from the ledger, so it passes the same patterns as every reply.
+        summary = self._redacted(self._turn_summary(user_id, reply.lang, entries))[0]
+        return reply.model_copy(update={"text": " ".join(filter(None, [*first, reply.text, summary]))})
+
+    def _turn_summary(self, user_id: str, lang: str, entries: list[LedgerEntry]) -> str:
+        """One sentence, in the student's language, of what this call did, read from its ledger entries alone and
+        never from the model's text: each action proposed and waiting, refused with its rule ids, confirmed, executed
+        with its receipt id and status, or done at tier T1, each confirmation not accepted, or that nothing was
+        proposed, changed or sent. A read at tier T0 changes nothing and is left out. A request from data is named
+        by its kind only. Source: docs/decisions.md, decision 146, from the stranger task T14 and open item 163.
+        """
+        actions: dict[str, dict[str, Any]] = {}
+        blocked: set[str] = set()
+        rejected = False
+        for entry in entries:
+            payload = entry.payload
+            if entry.kind == "confirmation_rejected":
+                rejected = True
+                continue
+            if entry.kind == "injection_suspected":
+                blocked.add(str(payload.get("idempotency_key")))
+                continue
+            key = {
+                "proposal": (payload.get("action") or {}).get("idempotency_key"),
+                "decision": payload.get("idempotency_key"),
+                "confirmation": payload.get("idempotency_key"),
+                "execution": (payload.get("action") or {}).get("idempotency_key"),
+                "receipt": (payload.get("receipt") or {}).get("idempotency_key"),
+            }.get(entry.kind)
+            if key is None:
+                continue
+            seen = actions.setdefault(key, {})
+            if entry.kind in ("proposal", "execution"):
+                seen.setdefault("action", payload.get("action") or {})
+            if entry.kind == "decision":
+                seen["decision"] = payload.get("decision") or {}
+            elif entry.kind == "confirmation":
+                seen["confirmed"] = True
+            elif entry.kind == "execution":
+                seen["result"] = payload.get("result") or {}
+            elif entry.kind == "receipt":
+                seen["receipt"] = payload.get("receipt") or {}
+        items = [item for key, seen in actions.items() if (item := self._summary_item(user_id, lang, key, seen, key in blocked))]
+        if rejected:
+            items.append(_text(lang, "turn_rejected"))
+        if not items:
+            return _text(lang, "turn_nothing")
+        return _text(lang, "turn_summary", items=_text(lang, "turn_joiner").join(items))
+
+    def _summary_item(self, user_id: str, lang: str, key: str, seen: dict[str, Any], blocked: bool) -> str | None:
+        """What one action did in this call, or None when it changed nothing."""
+        action = seen.get("action") or self._proposed_action(user_id, key)
+        what = self._summary_what(lang, action, blocked)
+        decision = seen.get("decision")
+        if decision is not None and not decision.get("allowed"):
+            return _text(lang, "turn_refused", what=what, rules=", ".join(decision.get("rule_ids", [])))
+        receipt = seen.get("receipt")
+        if receipt is not None:
+            name = "turn_receipt" if seen.get("confirmed") else "turn_executed_receipt"
+            return _text(lang, name, what=what, receipt_id=receipt.get("receipt_id"), status=receipt.get("status"))
+        result = seen.get("result")
+        if seen.get("confirmed"):
+            if result is None:
+                return _text(lang, "turn_not_executed", what=what)
+            status = (result.get("freeze") or result.get("cancel") or {}).get("status")
+            return _text(lang, "turn_result", what=what, status=status) if status else _text(lang, "turn_confirmed", what=what)
+        if result is not None:
+            kind = action.get("type")
+            tier = TIERS.get(ActionType(kind)) if kind in ActionType._value2member_map_ else None
+            return None if tier is Tier.T0 else _text(lang, "turn_done", what=what)
+        if decision is not None and decision.get("requires_confirmation"):
+            return _text(lang, "turn_proposed", what=what)
+        return None
+
+    def _proposed_action(self, user_id: str, key: str) -> dict[str, Any]:
+        """The action a confirmation in this call confirmed, from the proposal an earlier call wrote."""
+        for entry in self._ledger.entries():
+            if entry.kind == "proposal" and entry.payload.get("user_id") == user_id:
+                action = entry.payload.get("action") or {}
+                if action.get("idempotency_key") == key:
+                    return action
+        return {}
+
+    @staticmethod
+    def _summary_what(lang: str, action: dict[str, Any], blocked: bool) -> str:
+        """The name of an action in the summary: a transfer with its amount and payee, any other by its type, and a
+        request from data by its type only, so no amount or account it carried is repeated."""
+        kind = str(action.get("type", ""))
+        names = SUMMARY_WHAT.get(lang, SUMMARY_WHAT["en"])
+        if kind == ActionType.TRANSFER.value and not blocked and action.get("amount") and action.get("payee_id"):
+            amount = format_amount(Decimal(str(action["amount"])), action.get("currency"), lang)
+            return _text(lang, "turn_transfer", amount=amount, payee=action["payee_id"])
+        return names.get(kind) or _text(lang, "injection_act")
 
     def _remember(self, trail: _Trail, turn_messages: list[Message]) -> None:
         remembered = [_remembered(message) for message in turn_messages]
@@ -1628,7 +1961,7 @@ class AgentLoop:
         trail = _Trail(user_id, self._turns.get(user_id, 0), reply.provider, reply.model, mandate.id)
         said = [_remembered(message)] if message.text.strip() else []
         self._remember(trail, [*said, Message(role=Role.ASSISTANT, text=reply.text, lang=lang)])
-        return reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]})
+        return self._told(user_id, reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 
     def _run_tool(
         self, user_id: str, mandate: Mandate, lang: str, trail: _Trail, call: ToolCall, number: int
@@ -1651,6 +1984,7 @@ class AgentLoop:
         fields = {name: call.arguments[name] for name in ACTION_ARGUMENTS if call.arguments.get(name) not in (None, "")}
         if action_type is ActionType.UPDATE_PLAN:
             fields = {"plan_update": dict(call.arguments)}
+        supplied: set[str] = set()
         latest = action_type is ActionType.CANCEL_TRANSFER and _visible(str(call.arguments.get("receipt_id", ""))).strip().casefold() == LATEST
         if latest:
             # "latest" is resolved in code to the student's most recent receipt, before the proposal is written.
@@ -1669,7 +2003,7 @@ class AgentLoop:
             fields["withdrawal_date"] = call.arguments.get("date") or _now().date()
         if action_type is ActionType.CREATE_STANDING_MANDATE:
             fields["standing_mandate_id"] = f"{user_id}-standing-{trail.turn}-{number}"
-            fields["standing_terms"] = {name: call.arguments[name] for name in STANDING_TERMS}
+            fields["standing_terms"], supplied = _standing_terms(call.arguments, trail)
         try:
             action = Action(
                 type=action_type,
@@ -1699,7 +2033,9 @@ class AgentLoop:
         elif action.type is ActionType.SET_REMINDER:
             untrusted = _untrusted_reminder(trail, call.arguments)
         else:
-            untrusted = _untrusted_fields(trail, action) if checked else {}
+            payees = {_skeleton(payee) for payee in mandate.allowed_payees}
+            receipts = {_skeleton(receipt) for receipt in self._receipt_rails.get(user_id, {})}
+            untrusted = _untrusted_fields(trail, action, payees, receipts, supplied) if checked else {}
         if untrusted:
             action = action.model_copy(update={"source": next(iter(untrusted.values()))})
         self._write(trail, "proposal", {"tool": call.name, "arguments": call.arguments, "action": _action_json(action)})
@@ -2887,8 +3223,31 @@ class AgentLoop:
                 SYSTEM_PROMPT.format(lang=lang),
                 " ".join(PROMPT_RULES),
                 mandate_block(self._mandates[user_id], self._balances.get(user_id, {})),
+                receipts_block(self._traceable(user_id)),
             ]
         )
+
+    def _traceable(self, user_id: str) -> list[tuple[str, str, str, bool]]:
+        """Every receipt the student may trace, read again on every turn: their own, in the order their ledger issued
+        them, then those sent to them, each with its rail, its status as the rail reports it now, and whether it
+        was sent to the student. Reading a status changes nothing on the rail."""
+        own = [
+            entry.payload.get("receipt", {}).get("receipt_id")
+            for entry in self._ledger.entries()
+            if entry.kind == "receipt" and entry.payload.get("user_id") == user_id
+        ]
+        rails = self._receipt_rails.get(user_id, {})
+        listed = []
+        for receipt_id in dict.fromkeys([*own, *rails]):
+            rail = rails.get(receipt_id)
+            if not receipt_id or rail is None:
+                continue
+            try:
+                status = self._rails[rail].status(receipt_id).status.value
+            except (RailError, KeyError):  # anti-pattern: SILENT-EXCEPT ok, the model is told the status is unknown
+                status = "unknown"
+            listed.append((receipt_id, rail, status, receipt_id not in own))
+        return listed
 
     def _issued_tokens(self) -> set[str]:
         """Every confirmation token the loop has issued: waiting, used, or closed."""
@@ -2905,6 +3264,13 @@ class AgentLoop:
         A note of kind redaction records which classes were found, never a value. Source:
         docs/decisions.md, 8 October 2026. Every reply passes here before it leaves the loop.
         """
+        text, classes = self._redacted(text)
+        if classes:
+            self._write(trail, "note", {"kind": "redaction", "classes": classes})
+        return text
+
+    def _redacted(self, text: str) -> tuple[str, list[str]]:
+        """Text with every card number, issued token and secret value replaced by the marker, and the classes found."""
         classes: list[str] = []
         for name, values in (("confirmation_token", self._issued_tokens()), ("secret", self._secret_values())):
             # Longest first, so a value that contains another is replaced whole.
@@ -2924,9 +3290,7 @@ class AgentLoop:
         text, count = CARD_NUMBER.subn(REDACTION_MARKER, text)
         if count:
             classes.append("card_number")
-        if classes:
-            self._write(trail, "note", {"kind": "redaction", "classes": classes})
-        return text
+        return text, classes
 
     def _anchor_if_due(self, user_id: str) -> None:
         """Anchor the ledger head after a T2 execution, or when an hour has passed since the last anchor
@@ -3184,7 +3548,7 @@ class AgentLoop:
         do_now = self._do_now(after, rescue)
         plan = self._plans[user_id]
         freeze = rescue.freeze if rescue is not None else None
-        return RescueReply(
+        return self._told(user_id, RescueReply(
             text=text,
             lang=lang,
             confirmation=out.confirmation,
@@ -3200,7 +3564,7 @@ class AgentLoop:
                 live_instrument=self._live.get(user_id),
                 issuer_link=freeze.deep_link if freeze is not None else None,
             ),
-        )
+        ))
 
     @staticmethod
     def _do_now(state: RescueState | None, rescue: _Rescue | None) -> str:

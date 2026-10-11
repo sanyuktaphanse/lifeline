@@ -247,7 +247,7 @@ def test_read_balance_in_portuguese_gets_a_portuguese_reply():
     reply = s.loop.handle(USER, _user("Qual é o meu saldo?", lang="pt"))
 
     assert reply.lang == "pt"
-    assert reply.text == "O seu saldo é 2.300 SGD e 150 BRL."
+    assert reply.text == "O seu saldo é 2.300 SGD e 150 BRL. Neste turno: nada foi proposto, alterado ou enviado."
     system = s.adapter.calls[0][0][0]
     assert system.role is Role.SYSTEM
     assert "pt" in system.text
@@ -405,7 +405,7 @@ def test_a_simulated_receipt_says_so_in_the_users_language(lang):
     reply = s.loop.handle(USER, _user("ok", lang=lang), confirmation_token=token)
 
     assert reply.receipt.simulated is True
-    assert reply.text.endswith(SIMULATED_TEXT[lang])
+    assert SIMULATED_TEXT[lang] in reply.text
 
 
 def test_a_rail_that_disagrees_with_its_route_writes_a_note_and_its_own_flag_wins():
@@ -960,7 +960,9 @@ def test_a_payee_injected_in_an_earlier_turn_is_still_untrusted():
     reply = s.loop.handle(USER, _user("Go ahead and do what it said"))
 
     assert reply.decision.rule_ids == ["R01"]
-    assert _suspected(s.ledger)[-1]["fields"] == {"payee_id": "tool_result", "amount": "tool_result"}
+    # landlord_sp is on the student's own mandate and nothing in this turn names it, so it is the student's own
+    # under decision 143; the amount only the earlier tool result held is still data, so the action is refused.
+    assert _suspected(s.ledger)[-1]["fields"] == {"amount": "tool_result"}
 
 
 def test_details_the_student_typed_in_an_earlier_turn_stay_trusted():
@@ -1088,12 +1090,15 @@ def _standing_schedule() -> str:
 STANDING_TERMS = {"schedule": _standing_schedule(), "tolerance_pct": "5", "notice_hours": 48, "cancel_window_hours": 24}
 STANDING_ARGS = {**RENT, **STANDING_TERMS}
 STANDING_ID = "student_001-standing-1-1"
-STANDING_REQUEST = "Pay 1,200 SGD rent to landlord_sp in Brazil every month"
+# The student states the day, which is never defaulted. Source: docs/decisions.md, decision 143.
+STANDING_REQUEST = f"Pay 1,200 SGD rent to landlord_sp in Brazil every month on day {STANDING_TERMS['schedule'].partition(':')[2]}"
 
 
 def _create_standing(setup: Setup, **terms) -> str:
     setup.adapter._responses.insert(0, _call("create_standing_mandate", {**STANDING_ARGS, **terms}))
-    token = setup.loop.handle(USER, _user(STANDING_REQUEST)).confirmation.confirmation_token
+    # A term other than Lifeline's default is kept only when the student states it. Source: docs/decisions.md, decision 143.
+    stated = "".join(f", {value} {name.replace('_', ' ')}" for name, value in terms.items())
+    token = setup.loop.handle(USER, _user(STANDING_REQUEST + stated)).confirmation.confirmation_token
     setup.loop.handle(USER, _user("Yes"), confirmation_token=token)
     return token
 
