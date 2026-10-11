@@ -5,7 +5,8 @@ import pytest
 from contracts.interfaces import Translator
 from contracts.schemas import Role, Source
 from core.fake_adapter import FakeModelAdapter
-from rails.translator import PAYMENT_FLAG, ModelTranslator, payment_signals
+from core.agent import TEXTS
+from rails.translator import PAYMENT_FLAG, PAYMENT_FLAG_KEY, ModelTranslator, payment_signals
 
 LANDLORD_PT = "Oi! O aluguel de outubro vence dia 5. Obrigado, João."
 SCAM_PT = "Urgente: pague 2000 reais hoje para a chave Pix 11987654321 ou o contrato será cancelado."
@@ -81,3 +82,26 @@ def test_an_empty_model_answer_still_returns_the_flag_and_says_no_explanation_ca
 
     assert text.startswith(PAYMENT_FLAG)
     assert "no explanation" in text
+
+
+@pytest.mark.parametrize("lang", ["en", "pt", "zh"])
+def test_the_flag_is_written_in_the_language_the_student_reads(lang):
+    text = ModelTranslator(FakeModelAdapter(["An explanation."])).explain(SCAM_PT, "pt", lang)
+
+    assert text.startswith(TEXTS[lang][PAYMENT_FLAG_KEY])
+    assert TEXTS["en"][PAYMENT_FLAG_KEY] == PAYMENT_FLAG
+
+
+def test_a_language_lifeline_does_not_write_gets_the_english_flag():
+    text = ModelTranslator(FakeModelAdapter(["An explanation."])).explain(SCAM_PT, "pt", "hi")
+
+    assert text.startswith(PAYMENT_FLAG)
+
+
+def test_the_thresholds_are_marked_as_lifelines_own_choice():
+    import inspect
+
+    import rails.translator
+
+    source = inspect.getsource(rails.translator)
+    assert "Lifeline's own choice" in source

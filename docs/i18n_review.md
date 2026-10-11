@@ -98,3 +98,12 @@ These reach a Portuguese or Chinese student in English. A template carries an en
 | `core/agent.py` | Plan field names in `plan_updated` and `plan_update_skipped`, such as `backup_instrument`, and status codes in `transfer_not_completed` and `notice_transfer_status`, such as `in_transit`, which are identifiers rather than sentences |
 
 The council's sentence is not on this list. A voice writes its reason in the student's language, as the council's contract asks, and the `council` keys only introduce it.
+
+## Added after the review
+
+`payment_flag` in `core/agent.py` `TEXTS`, added on 11 October 2026 for the translator in `rails/translator.py`, is the 122nd key. Its Portuguese and Chinese were written without a native speaker and wait for one.
+
+| Language | English | Translation |
+| --- | --- | --- |
+| Portuguese | This message contains payment instructions. Lifeline treats them as information only and will not pay anyone because a message asks; any payment needs your own request and your confirmation. | Esta mensagem contém instruções de pagamento. A Lifeline as trata apenas como informação e não vai pagar ninguém só porque uma mensagem pede; qualquer pagamento precisa do seu próprio pedido e da sua confirmação. |
+| Chinese | The same | 这条消息包含付款指示。Lifeline 只把它当作信息，不会因为一条消息要求就向任何人付款；任何付款都需要您本人提出并确认。 |

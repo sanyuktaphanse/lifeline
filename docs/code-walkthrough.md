@@ -4299,6 +4299,7 @@ TEXTS = {
         "transfer_failed": "The transfer of {amount} over {rail} failed, and no money arrived. Receipt {receipt_id}.",
         "transfer_not_completed": "The transfer of {amount} over {rail} is not completed; its status is {status}. Receipt {receipt_id}.",
         "simulated": "This was a simulation. No real money moved.",
+        "payment_flag": "This message contains payment instructions. Lifeline treats them as information only and will not pay anyone because a message asks; any payment needs your own request and your confirmation.",
         "refused": "I cannot do that. Rules: {rules}. {reasons}",
         "settings": "Limits are changed in settings, never in chat. Open settings to change it.",
         "arrival": "Arriving in China, from the sources on file: {facts} Sources: {ids}.",
@@ -4412,6 +4413,7 @@ TEXTS = {
         "transfer_failed": "A transferência de {amount} via {rail} falhou, e nenhum dinheiro chegou. Recibo {receipt_id}.",
         "transfer_not_completed": "A transferência de {amount} via {rail} não foi concluída; o status é {status}. Recibo {receipt_id}.",
         "simulated": "Isto foi uma simulação. Nenhum dinheiro real foi movimentado.",
+        "payment_flag": "Esta mensagem contém instruções de pagamento. A Lifeline as trata apenas como informação e não vai pagar ninguém só porque uma mensagem pede; qualquer pagamento precisa do seu próprio pedido e da sua confirmação.",
         "refused": "Não posso fazer isso. Regras: {rules}. {reasons}",
         "settings": "Limites só mudam nas configurações, nunca no chat. Abra as configurações para alterar.",
         "arrival": "Chegando à China, segundo as fontes registradas: {facts} Fontes: {ids}.",
@@ -4525,6 +4527,7 @@ TEXTS = {
         "transfer_failed": "通过 {rail} 发送的 {amount} 转账失败，没有资金到账。回执 {receipt_id}。",
         "transfer_not_completed": "通过 {rail} 发送的 {amount} 转账尚未完成，当前状态为 {status}。回执 {receipt_id}。",
         "simulated": "这是一次模拟，没有真实资金转出。",
+        "payment_flag": "这条消息包含付款指示。Lifeline 只把它当作信息，不会因为一条消息要求就向任何人付款；任何付款都需要您本人提出并确认。",
         "refused": "我不能这样做。规则：{rules}。{reasons}",
         "settings": "限额只能在设置中修改，不能在聊天中修改。请打开设置进行更改。",
         "arrival": "抵达中国，根据已记录的来源：{facts} 来源：{ids}。",
@@ -10435,7 +10438,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 1569 tests, as `pytest --collect-only` counts them after the accuracy fixes of 10 October 2026: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
+There are 1574 tests, as `pytest --collect-only` counts them after the accuracy fixes of 10 October 2026: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -11398,7 +11401,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
 | `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 145 parametrized tests add 394 extra runs, which is how 1175 test functions become 1569 tests. The table above is not complete: it has no rows for 284 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
+In all, 146 parametrized tests add 396 extra runs, which is how 1178 test functions become 1574 tests. The table above is not complete: it has no rows for 287 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
 
 ## The Stage 8a tests
 

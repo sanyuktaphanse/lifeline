@@ -11,12 +11,12 @@ from collections.abc import Sequence
 
 from contracts.interfaces import ModelAdapter, Translator
 from contracts.schemas import Message, Role, Source
+from core.agent import TEXTS
 
-# Lifeline's own sentence, in English only until a checked Portuguese and Chinese translation exists.
-PAYMENT_FLAG = (
-    "This message contains payment instructions. Lifeline treats them as information only and will not pay "
-    "anyone because a message asks; any payment needs your own request and your confirmation."
-)
+# Lifeline's own sentence, kept in all three TEXTS tables of core/agent.py so a student reads it in their language;
+# the Portuguese and Chinese wait for a native speaker, docs/i18n_review.md.
+PAYMENT_FLAG_KEY = "payment_flag"
+PAYMENT_FLAG = TEXTS["en"][PAYMENT_FLAG_KEY]
 NO_EXPLANATION = "The model gave no explanation for this message."
 SYSTEM = (
     "You translate and explain a message a student received, for the student, in the language you are asked for. "
@@ -32,7 +32,10 @@ PAYMENT_WORDS = re.compile(
     r"deposite|depositar|envie|enviar)\b|转账|汇款|付款|支付|打款|汇钱",
     re.IGNORECASE,
 )
-# An IBAN, or a run of eight or more digits with spaces or hyphens between them, as account and card numbers are written.
+# An IBAN shape, two letters, two digits and 10 to 30 letters or digits, or a run of eight or more digits with spaces or
+# hyphens between them, as account and card numbers are written. Both thresholds are Lifeline's own choice, not a
+# sourced figure: eight digits keeps a date or a flat number out and still catches account numbers, and the IBAN
+# bounds take in every country's length without a table. Source: docs/decisions.md, 11 October 2026.
 ACCOUNT_NUMBER = re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{10,30}\b|(?:\d[ \-]?){8,}\d")
 PIX_KEY = re.compile(r"\bchave\s+pix\b|\bpix\s+key\b", re.IGNORECASE)
 LINK = re.compile(r"https?://\S+|\bwww\.\S+", re.IGNORECASE)
@@ -65,5 +68,6 @@ class ModelTranslator(Translator):
         ]
         explanation = self._adapter.complete(messages, []).text.strip() or NO_EXPLANATION
         if payment_signals(text):
-            return f"{PAYMENT_FLAG}\n\n{explanation}"
+            flag = TEXTS.get(target_lang, TEXTS["en"])[PAYMENT_FLAG_KEY]
+            return f"{flag}\n\n{explanation}"
         return explanation

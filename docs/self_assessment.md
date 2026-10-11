@@ -274,7 +274,7 @@ python -c "from core.harness import evaluate; r=[e for e in evaluate() if e.suit
 ```
 
 1. Clone the repository and install, in a virtual environment named `.venv`. Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. The repository is private on 10 October 2026, so a judge needs the access the submission grants, or the submitted archive in place of the clone.
-2. After the accuracy fixes of 10 October, `pytest` collects 1569 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
+2. After the accuracy fixes of 10 October, `pytest` collects 1574 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
 3. `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`, whose By suite table shows the attacks: 28 entries, 27 passed, 1 not automated.
 4. The last command plays the attack scenarios alone and prints `28 attacks, 27 passed, not passed: ['X25 not automated']`.
 5. The attempts behind the security review are in the section Attacks attempted and held of `docs/technical-reference.md`, and the stranger test is `docs/stranger_test.md`.
