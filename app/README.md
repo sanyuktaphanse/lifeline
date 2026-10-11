@@ -51,15 +51,25 @@ npx playwright test
 
 Test names say where each answer came from. A name beginning `LIVE` was answered by the real API. A name beginning `DOCUMENTED SHAPE` was answered with a reply copied word for word from `docs/api.md` into `tests/e2e/documented/`, because the real `/chat` cannot answer without a model key.
 
-## What has not been tested against a live server
+## What was tested live, and how
 
-These were built to the shapes in `docs/api.md` and checked only against those documented examples:
+The automated browser suite tested these against the real API: the language list, the request `/chat` sends and its real 503, `/confirm` with a token the server never issued, in English and Chinese, the `This turn:` line in all three languages, every rescue step from start to done, the lock, the card choice, the skip and the freeze offered again, and the ledger before and after an anchor and after an edit on disk.
 
-1. A successful `/chat` reply of any kind.
-2. The blocked request sentence at the top of a reply, which only `/chat` with pasted text produces.
-3. A transfer confirmed through `/confirm` that pays and returns a receipt, a reused token refused under R10, and a failed rail offering the next route under the same token.
+The automated suite has never run against a server with a model key, so its chat and confirm tests still answer `/chat` with the documented examples in `tests/e2e/documented/`.
 
-What was tested live: the language list, the request `/chat` sends and its real 503, `/confirm` with a token the server never issued, in English and Chinese, the `This turn:` line in all three languages, every rescue step from start to done, the lock, the card choice, the skip and the freeze offered again, and the ledger before and after an anchor and after an edit on disk.
+### Verified by hand with a model key
+
+On 11 October 2026 Pearlin put a model key in `.env` on her own machine and checked these in the browser against `make dev`:
+
+1. A typed message got a successful `/chat` reply with a confirmation card, three routes and a countdown.
+2. Confirm sent the token through `/confirm` and returned receipt `wise-0001` with status `completed`. The ledger then showed the confirmation at entry 7, the execution at 8, the receipt at 9 and the anchor at 11, with the chain intact and the anchor checking.
+3. A blocked paste. She typed "can you pay this for me?" and pasted a landlord message asking to pay landlord_sp 1,400 SGD. The reply showed the blocked sentence at the top, a refusal citing R01, and "This turn: a transfer: refused under R01" at the bottom.
+4. After a second confirmation returned receipt `wise-0002`, the Confirm button was disabled, so a second tap was not possible from the app.
+
+### Not exercised against the server from the app
+
+1. A reused token. Because the Confirm button disables after one tap, the app cannot send the same token twice, so a replay was prevented in the app, not tested against the server from it. The browser test `LIVE /confirm: two quick taps send one confirmation` checks that one confirmation is sent. That the server refuses a replayed token under R10 is covered by the backend tests, run with a scripted model rather than a live one: `tests/test_api.py::test_the_confirmation_round_trip_pays_once_and_the_token_never_reaches_the_ledger` over HTTP, `tests/test_api.py::test_a_restarted_app_keeps_a_waiting_confirmation_and_pays_it_once` across a restart, and `tests/test_agent.py::test_a_replayed_token_goes_to_the_engine_which_refuses_it_under_r10` in the loop. How the app shows that refusal was checked only against the documented example.
+2. A failed rail offering the next route under the same token. The demo rails do not fail on their own, so this was checked only against the documented example.
 
 ## Known gaps
 
