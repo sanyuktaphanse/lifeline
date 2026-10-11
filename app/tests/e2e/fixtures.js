@@ -1,7 +1,7 @@
 // Gives each test its own fresh copy of the real API and opens the app pointed at it.
 import { test as base, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -84,3 +84,8 @@ export const test = base.extend({
 });
 
 export { expect };
+
+// A reply copied word for word from docs/api.md, for the cases the live server cannot produce without a key.
+export function documented(name) {
+  return JSON.parse(readFileSync(join(APP, "tests", "e2e", "documented", `${name}.json`), "utf-8"));
+}

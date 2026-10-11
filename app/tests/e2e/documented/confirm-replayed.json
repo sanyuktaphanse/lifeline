@@ -1,0 +1,28 @@
+{
+  "text": "I cannot do that. Rules: R10. Idempotency key student_001:t1:propose_transfer:1 was already executed. This turn: a transfer of 1200 SGD to landlord_sp: refused under R10.",
+  "lang": "en",
+  "confirmation": null,
+  "decision": {
+    "allowed": false,
+    "reasons": [
+      "Idempotency key student_001:t1:propose_transfer:1 was already executed."
+    ],
+    "rule_ids": [
+      "R10"
+    ],
+    "tier": "T2",
+    "requires_confirmation": false,
+    "warning_key": null,
+    "confirmation_token": null
+  },
+  "receipt": null,
+  "freeze": null,
+  "cancel": null,
+  "ledger_seqs": [
+    9,
+    10,
+    11
+  ],
+  "provider": null,
+  "model": null
+}

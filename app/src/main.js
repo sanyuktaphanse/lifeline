@@ -3,6 +3,7 @@ import { makeApi } from "./api.js";
 import { el, relabel } from "./dom.js";
 import { t } from "./i18n.js";
 import { applyLanguage, languagesFromHealth } from "./languages.js";
+import { chatView } from "./views/chat.js";
 
 const VIEWS = {};
 
@@ -57,4 +58,5 @@ document.getElementById("lang").addEventListener("change", (event) => choose(eve
 for (const name of ["chat", "rescue", "ledger"]) {
   document.getElementById(`tab-${name}`).addEventListener("click", () => showTab(name));
 }
+chatView(ctx, document.getElementById("view-chat"));
 loadLanguages();
