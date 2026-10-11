@@ -11,5 +11,7 @@
     13
   ],
   "provider": null,
-  "model": null
+  "model": null,
+  "blocked": [],
+  "turn_summary": "This turn: a confirmation: not accepted, so nothing was done."
 }

@@ -24,5 +24,7 @@
     11
   ],
   "provider": null,
-  "model": null
+  "model": null,
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 1200 SGD to landlord_sp: refused under R10."
 }

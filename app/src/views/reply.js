@@ -2,12 +2,12 @@
 // All server text is set as text, never as HTML.
 import { el, label } from "../dom.js";
 import { confirmationCard } from "./confirmation.js";
-import { splitReply } from "../reply-text.js";
+import { partsOf } from "../reply-text.js";
 
 // The blocked request sentences go first and the "This turn:" sentence last, each on its own line, because
 // code wrote them from the ledger and the app can rely on them even when the model's words are wrong.
 export function renderReply(ctx, reply, { onConfirm } = {}) {
-  const { blocked, body, turn } = splitReply(reply.text, reply.lang);
+  const { blocked, body, turn } = partsOf(reply);
   const parts = blocked.map((sentence) =>
     el("div", { class: "reply-blocked" }, label(ctx, "span", "blocked_label", null, { class: "blocked-label" }), el("span", { class: "blocked-text" }, sentence)),
   );
