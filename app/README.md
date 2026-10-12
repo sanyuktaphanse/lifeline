@@ -32,6 +32,8 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 5. The lost card rescue, driven only by `rescue.do_now`, for all seven values. Its fields take typed words only: pasting and dropping are refused. An empty identity answer is never sent, because the server would count it as a wrong one, and the answer is cleared as soon as it is sent.
 6. The ledger: every entry, newest first, with the result of verify above it: whether the chain is intact and the first broken entry, the anchor status, the integrity hold, and whether demo keys are signing.
 
+A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
+
 The app never uses browser storage, and it never puts text from the server into the page as HTML.
 
 ## Tests

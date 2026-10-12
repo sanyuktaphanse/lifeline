@@ -9,11 +9,15 @@
 </head>
 <body>
   <header class="topbar">
-    <h1 class="brand">Lifeline</h1>
-    <label class="lang-picker">
-      <span id="lang-label" data-i18n="language_label">Language</span>
-      <select id="lang" aria-labelledby="lang-label" disabled></select>
-    </label>
+    <div class="topbar-row">
+      <h1 class="brand">Lifeline</h1>
+      <label class="lang-picker">
+        <span id="lang-label" data-i18n="language_label">Language</span>
+        <select id="lang" aria-labelledby="lang-label" disabled></select>
+      </label>
+    </div>
+    <!-- Source: docs/api.md, "Running it": the router and the rails are fakes or simulations, so no real money moves. -->
+    <p id="demo-banner" class="demo-banner" role="note" data-i18n="demo_banner">Demo only. No real money moves on any route.</p>
   </header>
   <div id="health-error" class="banner banner-error" role="alert" hidden></div>
   <nav class="tabs" role="tablist">

@@ -50,8 +50,13 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 .topbar {
   position: sticky; inset-block-start: 0; z-index: 2;
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 10px 16px; background: var(--surface); border-block-end: 1px solid var(--line);
+  background: var(--surface); border-block-end: 1px solid var(--line);
+}
+.topbar-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; }
+/* The demo banner sits inside the sticky header, so it stays on screen on every tab and while scrolling. */
+.demo-banner {
+  margin: 0; padding: 6px 16px; text-align: center; font-size: 0.85rem; font-weight: 600;
+  background: var(--warn-bg); border-block-start: 1px solid var(--warn-line); color: var(--text);
 }
 .brand { margin: 0; font-size: 1.2rem; }
 .lang-picker { display: flex; align-items: center; gap: 8px; font-size: 0.9rem; color: var(--muted); }
