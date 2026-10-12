@@ -34,6 +34,8 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 
 A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
 
+The model's words in a reply are read as basic markdown: bold with two asterisks, italic with one, bullet and numbered lists, paragraphs and line breaks. Underscores are never markup, so ids such as landlord_sp stay whole. The two sentences code writes, and everything else the server sends, are shown as plain text.
+
 The app never uses browser storage, and it never puts text from the server into the page as HTML.
 
 ## Tests

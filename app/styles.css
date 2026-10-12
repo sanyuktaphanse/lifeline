@@ -99,6 +99,10 @@ main > section { display: flex; flex-direction: column; gap: 12px; }
 .msg-you .bubble { background: var(--accent); color: var(--accent-text); }
 .msg-who { font-size: 0.8rem; color: var(--muted); }
 .bubble { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* A reply's model words are drawn as paragraphs and lists, so they do not keep the bubble's raw line breaks. */
+.reply-body { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
+.reply-body p, .reply-body ul, .reply-body ol { margin: 0; }
+.reply-body ul, .reply-body ol { padding-inline-start: 1.4em; }
 .pasted { border: 1px dashed var(--warn-line); background: var(--warn-bg); color: var(--text); border-radius: var(--radius); padding: 8px 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; }
 .badge { display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
 
