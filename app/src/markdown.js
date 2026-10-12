@@ -1,5 +1,5 @@
 // A small markdown reader for the model's words in a reply: **bold**, *italic*, bullet lists and numbered lists,
-// paragraphs and line breaks. Nothing else is markup. It returns plain data, and renderMarkdown builds elements
+// pipe tables, paragraphs and line breaks. Nothing else is markup. It returns plain data, and renderMarkdown builds elements
 // from it with text nodes only, so nothing from the server is ever read as HTML.
 //
 // Underscores are never markup, because Lifeline's ids are full of them: landlord_sp, pasted_text, self_sg.
@@ -10,13 +10,23 @@ import { el } from "./dom.js";
 const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*(\d{1,9})[.)]\s+(.*)$/;
 const ASCII_WORD = /[A-Za-z0-9]/;
+const SEPARATOR_CELL = /^:?-+:?$/;
 const SPACE = /\s/;
 
 export function parseMarkdown(text) {
   if (typeof text !== "string" || text === "") return [];
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   let current = null;
-  for (const line of text.replace(/\r\n?/g, "\n").split("\n")) {
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const table = tableAt(lines, i);
+    if (table) {
+      blocks.push(table.block);
+      current = null;
+      i = table.last;
+      continue;
+    }
     const bullet = BULLET.exec(line);
     const numbered = bullet ? null : NUMBERED.exec(line);
     if (line.trim() === "") {
@@ -37,6 +47,44 @@ export function parseMarkdown(text) {
     }
   }
   return blocks;
+}
+
+// A pipe table, as GitHub reads one: a header row and a separator row of dashes, with a colon at the left, right or
+// both ends setting a column's alignment, both with the same number of cells and both containing a pipe. Body rows
+// follow until a blank line or a line with no pipe; each is filled or cut to the header's width. A \| is a pipe
+// inside a cell. Without the separator row nothing is a table, so a pipe in a sentence stays text.
+function tableAt(lines, i) {
+  const header = lines[i];
+  const separator = lines[i + 1];
+  if (separator === undefined || !hasPipe(header) || !hasPipe(separator)) return null;
+  const head = cellsOf(header);
+  const marks = cellsOf(separator);
+  if (marks.length !== head.length || !marks.every((mark) => SEPARATOR_CELL.test(mark))) return null;
+  const align = marks.map((mark) => {
+    const left = mark.startsWith(":");
+    const right = mark.endsWith(":");
+    return left && right ? "center" : right ? "right" : left ? "left" : null;
+  });
+  const rows = [];
+  let last = i + 1;
+  while (last + 1 < lines.length && lines[last + 1].trim() !== "" && hasPipe(lines[last + 1])) {
+    last += 1;
+    const cells = cellsOf(lines[last]).slice(0, head.length);
+    while (cells.length < head.length) cells.push("");
+    rows.push(cells.map(parseInline));
+  }
+  return { block: { type: "table", align, head: head.map(parseInline), rows }, last };
+}
+
+function hasPipe(line) {
+  return /(^|[^\\])\|/.test(line);
+}
+
+function cellsOf(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  return row.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, "|").trim());
 }
 
 function parseInline(s) {
@@ -89,8 +137,25 @@ function inlineNodes(parts) {
   return parts.map((part) => (part.type === "text" ? part.text : el(part.type, {}, inlineNodes(part.children))));
 }
 
+const ALIGN_CLASS = { left: "align-left", center: "align-center", right: "align-right" };
+
+function tableNode(block) {
+  const cellNode = (tag, parts, column) => el(tag, { class: ALIGN_CLASS[block.align[column]] ?? null }, inlineNodes(parts));
+  return el(
+    "div",
+    { class: "table-wrap" },
+    el(
+      "table",
+      {},
+      el("thead", {}, el("tr", {}, block.head.map((parts, column) => cellNode("th", parts, column)))),
+      el("tbody", {}, block.rows.map((row) => el("tr", {}, row.map((parts, column) => cellNode("td", parts, column))))),
+    ),
+  );
+}
+
 export function renderMarkdown(text) {
   return parseMarkdown(text).map((block) => {
+    if (block.type === "table") return tableNode(block);
     if (block.type === "p") {
       return el("p", {}, block.lines.flatMap((line, index) => (index === 0 ? inlineNodes(line) : [el("br"), ...inlineNodes(line)])));
     }

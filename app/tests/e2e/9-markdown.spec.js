@@ -50,3 +50,33 @@ test("LIVE: a real reply with no markdown still shows its words unchanged", asyn
   const body = page.locator("#rescue-thread .reply-body").last();
   await expect(body).toHaveText("Lifeline started a rescue. First answer the question you set before you left: What are the last four characters of your student pass number?");
 });
+
+test("DOCUMENTED SHAPE, TEXT EDITED: a balance table renders as a table, with no pipes or dashes left", async ({ page, backend, open }) => {
+  const answer = await ask(page, backend, open, withModelText(
+    "Here are your balances:\n\n| Currency | Balance |\n|:---|---:|\n| SGD | **2300** |\n| BRL | 150 |\n\nBoth are demo values.",
+  ));
+  const body = answer.locator(".reply-body");
+  const table = body.locator("table");
+  await expect(table).toHaveCount(1);
+  await expect(table.locator("thead th")).toHaveText(["Currency", "Balance"]);
+  await expect(table.locator("tbody tr")).toHaveCount(2);
+  await expect(table.locator("tbody tr").first().locator("td")).toHaveText(["SGD", "2300"]);
+  await expect(table.locator("tbody tr").first().locator("td strong")).toHaveText("2300");
+  await expect(table.locator("tbody td").nth(1)).toHaveCSS("text-align", "right");
+  await expect(body).not.toContainText("|");
+  await expect(body).not.toContainText("---");
+  await expect(body.locator("p").first()).toHaveText("Here are your balances:");
+  await expect(body.locator("p").last()).toHaveText("Both are demo values.");
+});
+
+test("DOCUMENTED SHAPE, TEXT EDITED: a wide table scrolls inside the reply, not the page", async ({ page, backend, open }) => {
+  const header = Array.from({ length: 12 }, (_, i) => `Column ${i + 1}`);
+  const row = Array.from({ length: 12 }, () => "1200.00 SGD");
+  const markdown = `| ${header.join(" | ")} |\n|${header.map(() => "---").join("|")}|\n| ${row.join(" | ")} |`;
+  const answer = await ask(page, backend, open, withModelText(markdown));
+  await expect(answer.locator(".reply-body table")).toBeVisible();
+  const pageScrolls = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth);
+  expect(pageScrolls).toBe(false);
+  const wrapScrolls = await answer.locator(".table-wrap").evaluate((node) => node.scrollWidth > node.clientWidth);
+  expect(wrapScrolls).toBe(true);
+});

@@ -82,3 +82,81 @@ test("bold works next to Chinese characters with no spaces around it", () => {
 test("Windows line endings are read like plain newlines", () => {
   assert.deepEqual(parseMarkdown("- a\r\n- b"), [{ type: "ul", items: [[t("a")], [t("b")]] }]);
 });
+
+const cell = (...parts) => parts;
+
+test("a pipe table with a separator row becomes a table with a header and body rows", () => {
+  const blocks = parseMarkdown("| Currency | Balance |\n| --- | --- |\n| SGD | 2300 |\n| BRL | 150 |");
+  assert.deepEqual(blocks, [
+    {
+      type: "table",
+      align: [null, null],
+      head: [cell(t("Currency")), cell(t("Balance"))],
+      rows: [
+        [cell(t("SGD")), cell(t("2300"))],
+        [cell(t("BRL")), cell(t("150"))],
+      ],
+    },
+  ]);
+});
+
+test("colons in the separator row set each column's alignment", () => {
+  const [table] = parseMarkdown("| a | b | c | d |\n|:---|:---:|---:|---|\n| 1 | 2 | 3 | 4 |");
+  assert.deepEqual(table.align, ["left", "center", "right", null]);
+});
+
+test("the outer pipes are optional", () => {
+  const [table] = parseMarkdown("Currency | Balance\n--- | ---:\nSGD | 2300");
+  assert.equal(table.type, "table");
+  assert.deepEqual(table.head, [cell(t("Currency")), cell(t("Balance"))]);
+  assert.deepEqual(table.rows, [[cell(t("SGD")), cell(t("2300"))]]);
+});
+
+test("cells hold bold and italic, and underscores in ids stay whole", () => {
+  const [table] = parseMarkdown("| Payee | Amount |\n|---|---|\n| landlord_sp | **1200 SGD** |\n| self_sg | *300 SGD* |");
+  assert.deepEqual(table.rows, [
+    [cell(t("landlord_sp")), cell(strong(t("1200 SGD")))],
+    [cell(t("self_sg")), cell(em(t("300 SGD")))],
+  ]);
+});
+
+test("an escaped pipe stays inside its cell", () => {
+  const [table] = parseMarkdown("| Note |\n|---|\n| a \\| b |");
+  assert.deepEqual(table.rows, [[cell(t("a | b"))]]);
+});
+
+test("a short row is filled with empty cells and a long row is cut to the header's width", () => {
+  const [table] = parseMarkdown("| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 | 4 |");
+  assert.deepEqual(table.rows, [
+    [cell(t("1")), cell(), cell()],
+    [cell(t("1")), cell(t("2")), cell(t("3"))],
+  ]);
+});
+
+test("an empty cell is empty", () => {
+  const [table] = parseMarkdown("| a | b |\n|---|---|\n|  | 2 |");
+  assert.deepEqual(table.rows, [[cell(), cell(t("2"))]]);
+});
+
+test("a table ends at a blank line or at a line with no pipe, and text around it stays paragraphs", () => {
+  assert.deepEqual(parseMarkdown("Your balances:\n| Currency | Balance |\n|---|---|\n| SGD | 2300 |\nThat is all.").map((block) => block.type), ["p", "table", "p"]);
+  assert.deepEqual(parseMarkdown("| a |\n|---|\n| 1 |\n\n| b |\n|---|\n| 2 |").map((block) => block.type), ["table", "table"]);
+});
+
+test("a table with only a header and a separator has no body rows", () => {
+  const [table] = parseMarkdown("| a | b |\n|---|---|");
+  assert.deepEqual(table.rows, []);
+});
+
+test("without a separator row, lines with pipes stay text", () => {
+  assert.deepEqual(parseMarkdown("Pay a | b today"), [p([t("Pay a | b today")])]);
+  assert.deepEqual(parseMarkdown("| a | b |\n| 1 | 2 |"), [p([t("| a | b |")], [t("| 1 | 2 |")])]);
+});
+
+test("a separator whose column count differs from the header is not a table", () => {
+  assert.equal(parseMarkdown("| a | b |\n|---|\n| 1 | 2 |")[0].type, "p");
+});
+
+test("a line of dashes alone is not a table and not a list", () => {
+  assert.deepEqual(parseMarkdown("Total\n---"), [p([t("Total")], [t("---")])]);
+});
