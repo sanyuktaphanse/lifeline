@@ -69,12 +69,16 @@ async function home() {
   const next = h("p", { class: "muted" }, "Loading…");
   const recent = h("ul", { class: "list" }, h("li", {}, h("span", { class: "muted" }, "Loading…")));
   const badge = h("span", { class: "badge" }, "🔒 Checking your history…");
+  const count = h("span", { class: "count", hidden: true });
+  const comingUp = h("section", { class: "card" }, h("h2", {}, "📅  Coming up"), next);
   view.append(
-    h("h1", {}, "Hi there 👋"),
+    h("div", { class: "greet" },
+      h("div", {}, h("h1", {}, "Hi there 👋"), h("p", {}, "How can Lifeline help today?")),
+      h("button", { class: "bell", "aria-label": "Reminders", onclick: () => comingUp.scrollIntoView({ behavior: "smooth", block: "center" }) }, "🔔", count)),
     h("button", { class: "card sos-card", onclick: () => go("sos") },
       h("span", { class: "big", "aria-hidden": "true" }, "🛟"),
       h("div", {}, h("h2", {}, "Lost your card?"), h("p", {}, "Freeze it and get emergency money, step by step."))),
-    h("section", { class: "card" }, h("h2", {}, "📅  Coming up"), next),
+    comingUp,
     h("section", {}, h("div", { class: "grid2" }, QUICK.map((q) =>
       h("button", { class: "action", onclick: () => go("chat", q) }, h("span", { class: "emoji", "aria-hidden": "true" }, q.emoji), q.label)))),
     h("div", { style: "height:14px" }),
@@ -85,6 +89,7 @@ async function home() {
     const r = await call("GET", `/reminders/${USER}`);
     const items = [...(r.due || []), ...(r.upcoming || [])];
     next.textContent = items.length ? `${items[0].text} · ${when(items[0].due)}` : "Nothing scheduled. Ask Lifeline to remind you before rent is due.";
+    if ((r.due || []).length) { count.textContent = String(r.due.length); count.hidden = false; count.setAttribute("aria-label", `${r.due.length} due`); }
   } catch (e) { next.textContent = errorText(e); }
   try {
     const [entries, verify] = await Promise.all([call("GET", `/ledger/${USER}`), call("GET", `/ledger/${USER}/verify`)]);
@@ -133,7 +138,9 @@ function chat(seed) {
     push(h("div", { class: "bubble me" }, text));
     if (pasted) push(h("div", { class: "bubble quoted" }, h("span", { class: "label" }, "Message you received"), pasted));
     msg.value = ""; pasteBox.value = ""; attached.hidden = true; send.disabled = true;
-    const typing = h("div", { class: "typing" }, "Lifeline is thinking…"); list.append(typing);
+    const typing = h("div", { class: "thinking" }, h("span", { class: "mini", "aria-hidden": "true" }), "Lifeline is thinking…");
+    typing.firstChild.innerHTML = `<svg viewBox="0 0 48 24"><path class="trace" d="${PULSE}"/></svg>`;
+    list.append(typing);
     try {
       const body = { user_id: USER, text };
       if (pasted) body.pasted_text = pasted;
@@ -265,19 +272,20 @@ function typed(el) { el.addEventListener("paste", (ev) => ev.preventDefault()); 
 // Ledger entries in plain words. Only what the entries say; anything else stays in the technical view.
 function friendly(entries) {
   const out = [];
+  const tag = (o, group) => (o.group = group, o);
   for (const e of entries) {
     const p = e.payload || {};
     if (e.kind === "receipt" && p.receipt) {
       const rc = p.receipt;
-      out.push({ emoji: rc.status === "completed" ? "✅" : "⏳", what: `${money(rc.amount, rc.currency)} via ${rc.rail}`, sub: `${rc.status.replace("_", " ")}${rc.simulated ? " · simulated" : ""}`, ts: e.ts });
+      out.push(tag({ emoji: rc.status === "completed" ? "✅" : "⏳", what: `${money(rc.amount, rc.currency)} via ${rc.rail}`, sub: `${rc.status.replace("_", " ")}${rc.simulated ? " · simulated" : ""}`, ts: e.ts }, "pay"));
     } else if (e.kind === "decision" && p.decision && p.decision.allowed === false) {
-      out.push({ emoji: "⛔", what: `Blocked: ${(p.action?.type || "a request").replace("_", " ")}`, sub: `rules ${(p.decision.rule_ids || []).join(", ")}`, ts: e.ts });
+      out.push(tag({ emoji: "⛔", what: `Blocked: ${(p.action?.type || "a request").replace("_", " ")}`, sub: `rules ${(p.decision.rule_ids || []).join(", ")}`, ts: e.ts }, "blocked"));
     } else if (e.kind === "note" && p.kind === "family_notice") {
-      out.push({ emoji: "👪", what: "Family notice written", sub: "for the app to deliver", ts: e.ts });
+      out.push(tag({ emoji: "👪", what: "Family notice written", sub: "for the app to deliver", ts: e.ts }, "rescue"));
     } else if (e.kind === "note" && /^rescue_/.test(p.kind || "")) {
-      out.push({ emoji: "🛟", what: `Rescue: ${p.kind.replace("rescue_", "").replace(/_/g, " ")}`, sub: "", ts: e.ts });
+      out.push(tag({ emoji: "🛟", what: `Rescue: ${p.kind.replace("rescue_", "").replace(/_/g, " ")}`, sub: "", ts: e.ts }, "rescue"));
     } else if (e.kind === "execution" && p.result?.freeze) {
-      out.push({ emoji: "🧊", what: "Card freeze", sub: p.result.freeze.status.replace("_", " "), ts: e.ts });
+      out.push(tag({ emoji: "🧊", what: "Card freeze", sub: p.result.freeze.status.replace("_", " "), ts: e.ts }, "rescue"));
     }
   }
   return out.reverse();
@@ -292,12 +300,20 @@ async function activity() {
   const list = h("ul", { class: "list" }, h("li", {}, h("span", { class: "muted" }, "Loading…")));
   const badge = h("span", { class: "badge" }, "🔒 Checking…");
   const tech = h("div", { hidden: true });
-  view.append(h("h1", {}, "Activity"), h("p", {}, badge), h("section", { class: "card" }, list),
+  const FILTERS = [["all", "All"], ["pay", "Payments"], ["blocked", "Blocked"], ["rescue", "Rescue"]];
+  let items = [];
+  const filters = h("div", { class: "filters", role: "group", "aria-label": "Show" });
+  function draw(which) {
+    filters.replaceChildren(...FILTERS.map(([k, label]) => h("button", { "aria-pressed": k === which ? "true" : "false", onclick: () => draw(k) }, label)));
+    const shown = which === "all" ? items : items.filter((i) => i.group === which);
+    list.replaceChildren(...(shown.length ? shown.map(row) : [h("li", {}, h("span", { class: "muted" }, which === "all" ? "Nothing yet. Payments, blocks and rescues show here." : "Nothing here yet."))]));
+  }
+  view.append(h("h1", {}, "Activity"), h("p", {}, badge), filters, h("section", { class: "card" }, list),
     h("button", { class: "link", onclick: () => { tech.hidden = !tech.hidden; } }, "Advanced: technical ledger"), tech);
   try {
     const [entries, verify] = await Promise.all([call("GET", `/ledger/${USER}`), call("GET", `/ledger/${USER}/verify`)]);
-    const items = friendly(entries);
-    list.replaceChildren(...(items.length ? items.map(row) : [h("li", {}, h("span", { class: "muted" }, "Nothing yet. Payments, blocks and rescues show here."))]));
+    items = friendly(entries);
+    draw("all");
     setBadge(badge, verify);
     tech.replaceChildren(h("section", { class: "card" }, h("p", { class: "muted small" }, `${entries.length} entries, each chained to the one before by its hash.`),
       h("ul", { class: "list" }, entries.slice().reverse().map((e) => h("li", {}, h("span", { class: "tech" }, `#${e.seq} ${e.kind}${e.payload?.kind ? ": " + e.payload.kind : ""} · ${e.hash.slice(0, 10)}…`))))));
@@ -375,7 +391,8 @@ function hello() {
     h("section", { class: "card" }, h("h2", {}, "Your safety net"),
       h("ul", { class: "list" }, plan.map(([e, what, sub]) => h("li", {}, h("span", { class: "emoji", "aria-hidden": "true" }, e), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
     h("p", { class: "muted small", style: "text-align:center" }, "Setting up your own plan is coming soon."),
-    h("button", { class: "btn", onclick: () => go("home") }, "Get started"),
+    h("div", { class: "go-pill" }, h("button", { class: "btn", onclick: () => go("home") }, "Get started"),
+      h("span", { class: "arrows", "aria-hidden": "true" }, h("span", {}, "›"), h("span", {}, "›"), h("span", {}, "›"))),
   );
 }
 
