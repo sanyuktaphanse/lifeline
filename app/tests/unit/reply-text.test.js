@@ -30,8 +30,8 @@ test("Portuguese and Chinese markers are found", () => {
   assert.equal(pt.blocked.length, 1);
   assert.equal(pt.body, "Não posso.");
   assert.equal(pt.turn, "Neste turno: uma transferência: recusada sob R01.");
-  const zh = splitReply("你粘贴的文字要求 Lifeline 付一笔款，Lifeline 没有这样做，因为只有你自己的话才能发起操作。 我不能这样做。 本轮：没有提出、更改或发送任何内容。", "zh");
-  assert.deepEqual(zh.blocked, ["你粘贴的文字要求 Lifeline 付一笔款，Lifeline 没有这样做，因为只有你自己的话才能发起操作。"]);
+  const zh = splitReply("您粘贴的文字要求 Lifeline 付一笔款，Lifeline 没有这样做，因为只有您自己的话才能发起操作。 我不能这样做。 本轮：没有提出、更改或发送任何内容。", "zh");
+  assert.deepEqual(zh.blocked, ["您粘贴的文字要求 Lifeline 付一笔款，Lifeline 没有这样做，因为只有您自己的话才能发起操作。"]);
   assert.equal(zh.body, "我不能这样做。");
   assert.equal(zh.turn, "本轮：没有提出、更改或发送任何内容。");
 });

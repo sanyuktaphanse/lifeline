@@ -12,14 +12,14 @@ export const TURN_MARKERS = { en: "This turn:", pt: "Neste turno:", zh: "本轮�
 export const BLOCKED_ORIGINS = {
   en: ["Text you pasted", "Information Lifeline read"],
   pt: ["O texto que você colou", "Uma informação que o Lifeline leu"],
-  zh: ["你粘贴的文字", "Lifeline 读取的信息"],
+  zh: ["您粘贴的文字", "Lifeline 读取的信息"],
 };
 
 // Source: core/agent.py, the end of the "injection_blocked" text, which ends the sentence.
 export const BLOCKED_ENDINGS = {
   en: "because only your own words can start an action.",
   pt: "porque só as suas próprias palavras podem iniciar uma ação.",
-  zh: "因为只有你自己的话才能发起操作。",
+  zh: "因为只有您自己的话才能发起操作。",
 };
 
 function markersFor(lang) {
