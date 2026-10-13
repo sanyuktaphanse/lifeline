@@ -46,12 +46,12 @@ const WARNINGS = {
 // ---------- navigation ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { welcome, home, chat, sos, activity, help };
+const screens = { welcome, hello, home, chat, sos, activity, help, lost };
 function go(name, arg) {
   tabs.forEach((b) => (b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
   view.replaceChildren();
   view.classList.remove("chatting");
-  document.body.classList.toggle("signin", name === "welcome");
+  document.body.classList.toggle("signin", name === "welcome" || name === "hello" || name === "lost");
   screens[name](arg);
   view.scrollTop = 0;
   view.focus({ preventScroll: true });
@@ -342,19 +342,55 @@ function welcome() {
   const soon = (cls, icon, label) => h("div", { class: `sso ${cls}`, role: "button", "aria-disabled": "true", title: "Sign in is not built yet" }, h("span", { "aria-hidden": "true" }, icon), h("span", { class: "lbl" }, label), h("span", { class: "soon" }, "Coming soon"));
   view.append(
     h("div", { class: "hero" },
-      h("div", { class: "logo", "aria-hidden": "true" }),
-      h("h1", {}, "Lifeline"), h("p", {}, "Your money's safety net when you study abroad.")),
+      h("div", { class: "orb", role: "img", "aria-label": "The Lifeline heartbeat" }),
+      h("h1", {}, "Your money's ", h("em", {}, "lifeline"), " abroad"), h("p", {}, "Move money safely. Stay safe from scams. Get help when a card is lost.")),
     slide, dots,
     h("div", { class: "signin-stack" },
       soon("faceid", "🙂", "Continue with Face ID"),
       soon("apple", "", "Continue with Apple"),
       soon("google", "G", "Continue with Google"),
       h("div", { class: "divider" }, "or"),
-      h("button", { class: "btn", onclick: () => go("home") }, "Try the demo"),
+      h("button", { class: "btn", onclick: () => go("hello") }, "Try the demo"),
       h("p", { class: "fine" }, "Sign in isn't built yet, so the demo runs as one demo student. No real money moves.")),
   );
-  // The pulse line, a fixed drawing written here, never server text.
-  view.querySelector(".logo").innerHTML = '<svg viewBox="0 0 48 24" width="52" height="26"><path d="M1 12h12l4-9 6 18 5-14 3 5h16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  // The heartbeat, a fixed drawing written here, never server text.
+  view.querySelector(".orb").innerHTML = `<svg viewBox="0 0 48 24" aria-hidden="true"><path class="trace" d="${PULSE}"/></svg>`;
 }
 
-go("welcome");
+// The Lifeline logo's line, as on a heart monitor.
+const PULSE = "M1 12h12l4-9 6 18 5-14 3 5h16";
+
+// After Try the demo: who you are in this demo and what your safety net holds. Every line is the demo plan in
+// fixtures/demo_user.yaml as docs/api.md, "Rescue", states it; nothing here is asked of the student or stored.
+function hello() {
+  const plan = [
+    ["💳", "Main card", "Wise debit card"],
+    ["🛟", "Backup card", "Revolut card, from a different provider"],
+    ["🔐", "Safety question", "Set before you left, checked if a card is lost"],
+    ["💸", "Emergency money", "300 SGD to your own Singapore account, after you confirm"],
+  ];
+  view.append(
+    h("div", { class: "hello" }, h("span", { class: "wave", "aria-hidden": "true" }, "👋"),
+      h("h1", {}, "Welcome to Lifeline"), h("p", {}, "This demo runs as one student in Singapore. Here's the safety net already set up.")),
+    h("section", { class: "card" }, h("h2", {}, "Your safety net"),
+      h("ul", { class: "list" }, plan.map(([e, what, sub]) => h("li", {}, h("span", { class: "emoji", "aria-hidden": "true" }, e), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
+    h("p", { class: "muted small", style: "text-align:center" }, "Setting up your own plan is coming soon."),
+    h("button", { class: "btn", onclick: () => go("home") }, "Get started"),
+  );
+}
+
+// 404: the line goes flat.
+function lost() {
+  const flat = "M0 60h70l10-30 14 60 12-44 8 14h46l10-30 14 60 12-44 8 14h40l8-16 10 30 8-14h12 L520 60";
+  const box = h("div", { class: "monitor", "aria-hidden": "true" });
+  box.innerHTML = `<svg viewBox="0 0 520 120" preserveAspectRatio="none"><path class="trace" d="${flat}"/><circle class="dot" cx="508" cy="60" r="5"/></svg>`;
+  view.append(h("div", { class: "lost" }, box,
+    h("p", { class: "code" }, "ERROR 404"),
+    h("h1", {}, "This page flatlined."),
+    h("p", {}, "We checked for a pulse, but the page you're looking for isn't here. Your money is fine."),
+    h("button", { class: "btn", onclick: () => go("home") }, "Back to Home")));
+}
+
+// A known screen in the address, such as #chat, opens it; anything else is the 404.
+const start = location.hash.slice(1);
+go(start === "" ? "welcome" : start in screens ? start : "lost");
