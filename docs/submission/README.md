@@ -15,7 +15,7 @@ No money moves anywhere: every rail is a fixture or a simulation, and the Wise s
 
 ## How to check this yourself
 
-These are the five commands of the self assessment's How to check this yourself. Python 3.12 or later is required.
+These are the five commands of the self assessment's How to check this yourself. Python 3.12 or later is required; use `python3.13 -m venv .venv` in the second command if that is what you have.
 
 ```bash
 git clone https://github.com/sanyuktaphanse/lifeline.git

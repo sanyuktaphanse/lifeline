@@ -9,8 +9,8 @@ Each line says what is checked, how it is checked, and the result of the run of 
 | Item | How it is verified | 13 October 2026 |
 | --- | --- | --- |
 | 1. A fresh clone holds no `.env` | `git clone` into the system temporary folder, then `ls -a` | Verified: no `.env`, only `.env.example` |
-| 2. `python3.12 -m venv .venv`, as the README says | Run in the clone | Not verified: `command not found: python3.12`, because this machine has no Python 3.12. The rest was run with Python 3.13.9, which the README says works |
-| 3. `pip install -r requirements.txt` | Run in the activated `.venv` | Verified with Python 3.13.9 |
+| 2. `python3.12 -m venv .venv`, or `python3.13 -m venv .venv` if that is what you have, as the README says | Run in the clone | Verified with `python3.13 -m venv .venv`, Python 3.13.9, because this machine has no Python 3.12 |
+| 3. `pip install -r requirements.txt` | Run in the activated `.venv` | Verified |
 | 4. `pytest` | Run in the clone; the count must match the README | Verified: 1575 passed, 3 skipped, 4 expected failures, 1582 collected, as the README says |
 | 5. `make evidence` | Run in the clone; the printed line must match the README | Verified: `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged`, and `evidence/report.md` written |
 | 6. `make dev`, then `GET /health`, then stop | Run in the clone, `curl http://127.0.0.1:8000/health` | Not verified as written: `make dev` stopped with `[Errno 48] Address already in use`, because an API started from the main working folder on 11 October holds port 8000. The Makefile's same command on port 8001 answered `{"status":"ok",...}` with the three languages, and was stopped |

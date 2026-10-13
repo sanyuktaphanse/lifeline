@@ -6,7 +6,7 @@ This README describes `main` at commit `06b3c30`, 13 October 2026, with the rele
 
 ## Quick start
 
-Lifeline needs Python 3.12. [docs/deployment.md](docs/deployment.md) covers a clean machine, every setting in `.env`, the Wise sandbox, the FISCO BCOS anchor and running in China.
+Lifeline needs Python 3.12 or later. The first command is `python3.12 -m venv .venv`, or `python3.13 -m venv .venv` if that is what you have. [docs/deployment.md](docs/deployment.md) covers a clean machine, every setting in `.env`, the Wise sandbox, the FISCO BCOS anchor and running in China.
 
 ```bash
 python3.12 -m venv .venv

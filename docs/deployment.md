@@ -4,7 +4,7 @@ How to run Lifeline's backend on a clean machine, what each setting in `.env` do
 
 ## 1. What you need
 
-1. Python 3.12. CI runs 3.12 (`.github/workflows/ci.yml`). On Python 3.9, the version macOS ships, `pip install` fails because several pinned packages need Python 3.10 or later, and on 3.10 or 3.11 the code's 3.12 generic syntax fails at collection. If your machine has no Python 3.12, `uv` installs one inside your user folder without an administrator password: `uv venv --python 3.12 .venv`.
+1. Python 3.12 or later. CI runs 3.12 (`.github/workflows/ci.yml`). On Python 3.9, the version macOS ships, `pip install` fails because several pinned packages need Python 3.10 or later, and on 3.10 or 3.11 the code's 3.12 generic syntax fails at collection. If your machine has no Python 3.12, `uv` installs one inside your user folder without an administrator password: `uv venv --python 3.12 .venv`.
 2. Git, and access to the repository.
 3. Optional: Docker, only for the FISCO BCOS anchor in section 6.
 
@@ -12,7 +12,7 @@ The app the student uses, lane C's, is in `app/`, and `app/README.md` says how t
 
 ## 2. Install and test
 
-From the repository root:
+From the repository root, with `python3.13` in place of `python3.12` in the first command if that is what you have:
 
 ```bash
 python3.12 -m venv .venv
