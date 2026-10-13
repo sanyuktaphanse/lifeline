@@ -2,7 +2,7 @@
 
 Lifeline is a cross border finance agent for students studying abroad, built for the 2026 Shenzhen FinTechathon. It has two jobs. It helps the student move money across borders, and it protects the student from scams, fraud, and costly mistakes. Every action that moves money passes a plain Python mandate engine first. Lifeline is instructed never to give investment advice; one sentence of the system prompt carries that rule, and no code checks the model's words, as open item 170 of the technical reference records.
 
-This README describes `main` at commit `fcae759`, 10 October 2026, with the accuracy fixes of the same day. The repository is https://github.com/sanyuktaphanse/lifeline. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every dependency.
+This README describes `main` at commit `fcae759`, 10 October 2026, with the accuracy fixes of the same day. The repository is https://github.com/sanyuktaphanse/lifeline. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
 
 ## Quick start
 
@@ -50,15 +50,16 @@ The API is for developer machines only. It binds to `127.0.0.1` and has no sign 
 
 For readers and judges:
 
-1. [docs/technical_documentation.md](docs/technical_documentation.md) is the technical documentation for submission: the architecture, the core algorithms, the security design and the measured results, with the evidence report as its last appendix; `tests/test_technical_documentation.py` rebuilds its numbers from their sources.
-2. [docs/self_assessment.md](docs/self_assessment.md) is the security and compliance self assessment: twelve areas, each with what is claimed, the tests that prove it and what is not claimed, then the known limitations; `tests/test_self_assessment.py` rebuilds its numbers from their sources.
-3. [docs/technical-reference.md](docs/technical-reference.md) explains what is built and why, and ends with the open items.
-4. [docs/code-walkthrough.md](docs/code-walkthrough.md) walks through every file of code.
-5. [docs/api.md](docs/api.md) describes the HTTP API.
-6. [docs/decisions.md](docs/decisions.md) records the product decisions, newest last.
-7. [docs/stranger_test.md](docs/stranger_test.md) records twenty live tasks run as a stranger would.
-8. [docs/knowledge_audit.md](docs/knowledge_audit.md) audits the knowledge base against its sources, and [rails/knowledge/README.md](rails/knowledge/README.md) sets its rules.
-9. [chain/README.md](chain/README.md) says how to run the local FISCO BCOS network.
+1. [docs/submission/README.md](docs/submission/README.md) is the submission index: each of the six items the rules ask for, and where it is.
+2. [docs/technical_documentation.md](docs/technical_documentation.md) is the technical documentation for submission: the architecture, the core algorithms, the security design and the measured results, with the evidence report as its last appendix; `tests/test_technical_documentation.py` rebuilds its numbers from their sources.
+3. [docs/self_assessment.md](docs/self_assessment.md) is the security and compliance self assessment: twelve areas, each with what is claimed, the tests that prove it and what is not claimed, then the known limitations; `tests/test_self_assessment.py` rebuilds its numbers from their sources.
+4. [docs/technical-reference.md](docs/technical-reference.md) explains what is built and why, and ends with the open items.
+5. [docs/code-walkthrough.md](docs/code-walkthrough.md) walks through every file of code.
+6. [docs/api.md](docs/api.md) describes the HTTP API.
+7. [docs/decisions.md](docs/decisions.md) records the product decisions, newest last.
+8. [docs/stranger_test.md](docs/stranger_test.md) records twenty live tasks run as a stranger would.
+9. [docs/knowledge_audit.md](docs/knowledge_audit.md) audits the knowledge base against its sources, and [rails/knowledge/README.md](rails/knowledge/README.md) sets its rules.
+10. [chain/README.md](chain/README.md) says how to run the local FISCO BCOS network.
 
 Team working files: [docs/build_program.md](docs/build_program.md), the lane A build program; [docs/i18n_review.md](docs/i18n_review.md), wording that waits for a native speaker; [docs/journal.md](docs/journal.md), which stops at 15 September; and [docs/hackathon/](docs/hackathon/), the competition's rules, schedule and forms.
 
