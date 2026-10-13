@@ -528,7 +528,7 @@ def test_every_figure_names_its_entries_and_seqs_of_lists_all_of_them():
                 "Rotas usadas: 1 via wise.", "a menos que a transferência bancária cotada no mesmo turno",
                 "Fora do comum: pedidos recusados 0", "Previsto para"]),
         ("zh", ["已付汇率成本：SG>BR 上 0 SGD。", "税费：没有记录任何税费数字", "使用的路线：wise 1 笔。",
-                "比同一轮对话中报价的银行电汇少花", "异常情况：被拒绝的请求 0 次", "即将发生："]),
+                "比同一轮对话中报价的银行电汇少花", "异常情况：被拒绝的请求 0 次", "）安排："]),
     ],
 )
 def test_the_new_sections_are_written_in_the_students_language(lang, pieces):

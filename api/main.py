@@ -53,6 +53,7 @@ from rails.sim.cn_bank_remit import CnBankRemitSimRail
 from rails.sim.pix import PixSimRail
 from rails.sim.upi_paynow import UpiPayNowSimRail
 from rails.fake_router import FakeRouter
+from rails.wise_sandbox import WiseSandboxClient, WiseSandboxConfig, WiseSandboxRail, WiseSandboxRouter
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_FIXTURE = ROOT / "fixtures" / "demo_user.yaml"
@@ -199,6 +200,12 @@ def demo_rails(
     return rails
 
 
+def wise_sandbox_client(env: Mapping[str, str] | None = None) -> WiseSandboxClient | None:
+    """The Wise sandbox client when WISE_SANDBOX_TOKEN is set, or None, which keeps the fixture Wise rail."""
+    config = WiseSandboxConfig.from_env(environment(env))
+    return WiseSandboxClient(config) if config is not None else None
+
+
 def sim_rails_on(env: Mapping[str, str] | None = None) -> bool:
     """Whether the API registers the simulated rails beyond Pix: on unless SIM_RAILS turns them off."""
     return environment(env).get("SIM_RAILS", "").strip().casefold() not in SIM_RAILS_OFF
@@ -311,6 +318,7 @@ def create_app(
     sim_rails: bool | None = None,
     anchor: Anchor | None = None,
     parent_fixture_path: Path | None = DEMO_PARENT,
+    wise_sandbox: WiseSandboxClient | None = None,
 ) -> FastAPI:
     require_production_secrets()
     fixture = _load_fixture(fixture_path)
@@ -328,6 +336,12 @@ def create_app(
             fixture.get("documents_on_file"),
             bool(fixture.get("quota_position_known")),
         )
+        # Rails a caller passes in are kept as given; the demo's own rails take the sandbox when one is set.
+        wise_sandbox = wise_sandbox if wise_sandbox is not None else wise_sandbox_client()
+    router: FakeRouter | WiseSandboxRouter = FakeRouter()
+    if wise_sandbox is not None:
+        rails["wise"] = WiseSandboxRail(wise_sandbox, wise_sandbox.config.recipients)
+        router = WiseSandboxRouter(router, wise_sandbox)
     # A fixture's inbound receipts on a rail this process does not build are left out, not an error.
     fixture = {**fixture, "inbound_receipts": {
         key: transfers for key, transfers in (fixture.get("inbound_receipts") or {}).items() if key in rails
@@ -341,7 +355,7 @@ def create_app(
         adapter=adapter if adapter is not None else ProviderModelAdapter(),
         engine=DeterministicMandateEngine(),
         ledger=ledger,
-        router=FakeRouter(),
+        router=router,
         rails=rails,
         mandates={person["user_id"]: _demo_mandate(person, ledger) for person in people},
         balances={

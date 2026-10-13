@@ -6,6 +6,8 @@ This README describes `main` at commit `fcae759`, 10 October 2026, with the accu
 
 ## Quick start
 
+Lifeline needs Python 3.12. [docs/deployment.md](docs/deployment.md) covers a clean machine, every setting in `.env`, the Wise sandbox, the FISCO BCOS anchor and running in China.
+
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
@@ -17,7 +19,7 @@ make dev
 
 Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. CI runs 3.12, and 3.13 works too. Name the virtual environment `.venv` in the repository folder, because the Makefile runs `.venv/bin/python` when it exists and plain `python` otherwise.
 
-`pytest` collects 1514 tests: 1507 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
+`pytest` collects 1582 tests: 1575 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
 
 `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`.
 
@@ -41,8 +43,8 @@ The API is for developer machines only. It binds to `127.0.0.1` and has no sign 
 ## Not in this repository yet
 
 1. The frontend. Lane C builds it against the API.
-2. A real rail. The Wise sandbox rail is in review as pull request 39; no money moves anywhere today.
-3. A deployment guide.
+2. A real rail. `rails/wise_sandbox.py` calls Wise's sandbox, which moves no money, only when `WISE_SANDBOX_TOKEN` is set; no money moves anywhere today.
+3. A Wise sandbox operation log. `make evidence-wise` writes one, and needs a sandbox token that is not set up yet.
 
 ## Documents
 

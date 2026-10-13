@@ -72,7 +72,7 @@ TEXTS = {
         "refused_by_rail": "recusou",
     },
     "zh": {
-        "note": "Lifeline 的 {month} 月度记录，来自你的账本。转账：{transfers}。已付汇率成本：{spread}。{taxes}使用的路线：{routes}。与银行电汇相比：{savings}。已执行的定期付款：{standing}。失败、退回或取消：{problems}。异常情况：{unusual}。{next_month} 即将发生：{coming}。",
+        "note": "Lifeline 的 {month} 月度记录，来自您的账本。转账：{transfers}。已付汇率成本：{spread}。{taxes}使用的路线：{routes}。与银行电汇相比：{savings}。已执行的定期付款：{standing}。失败、退回或取消：{problems}。异常情况：{unusual}。下月（{next_month}）安排：{coming}。",
         "group": "在 {corridor} 上发出 {count} 笔，共 {total}，手续费 {fees}",
         "spread": "{corridor} 上 {spread}",
         "no_taxes": "税费：没有记录任何税费数字，因为没有任何路线或记录包含税费。",
@@ -90,7 +90,7 @@ TEXTS = {
         "cancelled": "已取消",
         "failed": "失败",
         "returned": "已退回",
-        "refused_by_rail": "拒绝",
+        "refused_by_rail": "已拒绝",
     },
 }
 
