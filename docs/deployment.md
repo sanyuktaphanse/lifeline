@@ -8,7 +8,7 @@ How to run Lifeline's backend on a clean machine, what each setting in `.env` do
 2. Git, and access to the repository.
 3. Optional: Docker, only for the FISCO BCOS anchor in section 6.
 
-The app the student uses, lane C, is not in this repository yet; this guide covers the backend the app talks to.
+The app the student uses, lane C's, is in `app/`, and `app/README.md` says how to start it; this guide covers the backend the app talks to.
 
 ## 2. Install and test
 
@@ -20,7 +20,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 10 October 2026 it gave 1428 passed, 3 skipped and 4 expected failures on `main`.
+The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 13 October 2026 it gave 1575 passed, 3 skipped and 4 expected failures on `main`.
 
 ```bash
 make evidence

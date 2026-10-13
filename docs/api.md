@@ -1,6 +1,6 @@
 # Lifeline API
 
-This document describes the HTTP API in `api/main.py`, which the frontend of lane C, not in this repository, builds against. It describes `main` at commit `c824610`, 10 October 2026, and every route and response shape below was checked that day against a running app with a scripted model. The examples were recorded through FastAPI's test client. Times, hashes, tokens and ledger sequence numbers differ from run to run, and `provider` and `model` name whichever model answered: the examples recorded against the real provider show `anthropic` and `claude-opus-5`, and a scripted run shows `fake`.
+This document describes the HTTP API in `api/main.py`, which the frontend of lane C in `app/` builds against. It describes `main` at commit `c824610`, 10 October 2026, and every route and response shape below was checked that day against a running app with a scripted model. The examples were recorded through FastAPI's test client. Times, hashes, tokens and ledger sequence numbers differ from run to run, and `provider` and `model` name whichever model answered: the examples recorded against the real provider show `anthropic` and `claude-opus-5`, and a scripted run shows `fake`.
 
 ## Running it
 

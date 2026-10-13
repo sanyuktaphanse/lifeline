@@ -27,7 +27,7 @@ Python 3.12 or later is required: `core/agent.py` uses the generic function synt
 
 None of these needs a key or a `.env` file. Only `/chat` and the live evidence runs call a model; for those, copy `.env.example` to `.env` and fill in the provider keys. The code loads only the `.env` beside the repository root, found from its own path, and never a parent folder's, so a clone made inside this folder reads its own `.env` or none, never this folder's keys.
 
-The API is for developer machines only. It binds to `127.0.0.1` and has no sign in. With `LIFELINE_ENV=production` it refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set. A deployment guide is a lane B deliverable and is not written yet.
+The API is for developer machines only. It binds to `127.0.0.1` and has no sign in. With `LIFELINE_ENV=production` it refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set. [docs/deployment.md](docs/deployment.md) is the deployment guide.
 
 ## What is built
 
@@ -39,12 +39,12 @@ The API is for developer machines only. It binds to `127.0.0.1` and has no sign 
 6. Standing mandates under rules R12 and R13, reminders, and a monthly note built from the ledger alone.
 7. Fake and simulated rails: Wise, a bank wire and Revolut as fakes, and Pix, UPI to PayNow and a China bank remittance as simulations, each reading its limits from the sourced knowledge base of 18 entries in `rails/knowledge/`.
 8. The HTTP API in `api/main.py` and the evidence harness in `core/harness.py`.
+9. The app in `app/`, lane C's frontend in plain HTML, CSS and JavaScript, which talks only to the API; [app/README.md](app/README.md) says how to start and test it.
 
 ## Not in this repository yet
 
-1. The frontend. Lane C builds it against the API.
-2. A real rail. `rails/wise_sandbox.py` calls Wise's sandbox, which moves no money, only when `WISE_SANDBOX_TOKEN` is set; no money moves anywhere today.
-3. A Wise sandbox operation log. `make evidence-wise` writes one, and needs a sandbox token that is not set up yet.
+1. A real rail. `rails/wise_sandbox.py` calls Wise's sandbox, which moves no money, only when `WISE_SANDBOX_TOKEN` is set; no money moves anywhere today.
+2. A Wise sandbox operation log. `make evidence-wise` writes one, and needs a sandbox token that is not set up yet.
 
 ## Documents
 
@@ -71,7 +71,7 @@ Team working files: [docs/build_program.md](docs/build_program.md), the lane A b
 | `api/` | Lane A |
 | `chain/` | Lane A |
 | `rails/` | Lane B |
-| The frontend, not in this repository | Lane C |
+| `app/` | Lane C |
 | `suites/` | Shared |
 
 ## Rules
