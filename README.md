@@ -2,7 +2,7 @@
 
 Lifeline is a cross border finance agent for students studying abroad, built for the 2026 Shenzhen FinTechathon. It has two jobs. It helps the student move money across borders, and it protects the student from scams, fraud, and costly mistakes. Every action that moves money passes a plain Python mandate engine first. Lifeline is instructed never to give investment advice; one sentence of the system prompt carries that rule, and no code checks the model's words, as open item 170 of the technical reference records.
 
-This README describes `main` at commit `fcae759`, 10 October 2026, with the accuracy fixes of the same day. The repository is https://github.com/sanyuktaphanse/lifeline. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
+This README describes `main` at commit `06b3c30`, 13 October 2026, with the release pull request that adds `docs/submission/README.md`. The repository is https://github.com/sanyuktaphanse/lifeline, which is private on 13 October 2026, so a judge needs the access the submission grants. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
 
 ## Quick start
 
@@ -81,11 +81,11 @@ Read [CLAUDE.md](CLAUDE.md) before contributing. It holds the scope, the layout,
 
 ## Evidence
 
-At `fcae759` the report counts 66 suite entries. Of the 38 tasks, 31 pass and 7 are not automated; of the 28 attacks, 27 pass and 1 is not automated; none fails. Their runs count 79 in English, 24 in Portuguese and 26 in Chinese, a run that switches language counted under each. `evidence/` is ignored by git, so the report is not in the repository; run `make evidence`, or open the `evidence-report` artifact of the latest CI run on `main` under the repository's Actions tab.
+At `06b3c30` the report counts 66 suite entries. Of the 38 tasks, 31 pass and 7 are not automated; of the 28 attacks, 27 pass and 1 is not automated; none fails. Their runs count 79 in English, 24 in Portuguese and 26 in Chinese, a run that switches language counted under each. `evidence/` is ignored by git, so the report is not in the repository; run `make evidence`, or open the `evidence-report` artifact of the latest CI run on `main` under the repository's Actions tab.
 
 The stranger runs replay, with a scripted model, the seventeen tasks of [docs/stranger_test.md](docs/stranger_test.md) that did not work in the live stranger test of 9 October, which judged 3 of 20 tasks worked, 12 worked badly and 5 failed. Each replay checks only what the code writes. After the fixes of pull request 43, 16 pass and 1 is still expected failing; a live model has not been judged again since.
 
-`make evidence` plays every suite entry that has a scenario in `suites/scenarios/`, and every file in `suites/scenarios/stranger/`, against a scripted model and writes `evidence/report.md`. It makes no provider call and needs no key, and CI runs it on every pull request and every push to `main`.
+`make evidence` plays every suite entry that has a scenario in `suites/scenarios/`, and every file in `suites/scenarios/stranger/`, against a scripted model and writes `evidence/report.md`. It makes no provider call and needs no key, and CI runs it after the tests pass, on every pull request and every push to `main`.
 
 `make evidence-primary`, `make evidence-fallback` and `make evidence-swap` play the scenarios marked `live: true` against a real provider instead and write `evidence/report-<provider>.md`, and the swap also writes `evidence/report-swap.md` comparing the two. Each refuses to start without the provider's key. Set `LIVE_SCENARIO_LIMIT` to a number to keep a run cheap; empty or `all` means every scenario marked live, with `suites/live/hindi.yaml` beside them.
 

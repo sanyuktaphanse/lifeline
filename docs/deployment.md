@@ -1,10 +1,10 @@
 # Deployment guide
 
-How to run Lifeline's backend on a clean machine, what each setting in `.env` does, and how to run it without reaching hosts that may be blocked in China. Lane B owns this guide. Every command below was run on 10 October 2026 on a Mac with Apple silicon.
+How to run Lifeline's backend on a clean machine, what each setting in `.env` does, and how to run it without reaching hosts that may be blocked in China. Lane B owns this guide. Every command below was run on a Mac with Apple silicon, the test run on 13 October 2026, except `make evidence-wise`, which waits for a sandbox token.
 
 ## 1. What you need
 
-1. Python 3.12. CI runs 3.12 (`.github/workflows/ci.yml`). The code uses syntax that Python 3.9, the version macOS ships, cannot read, so `pip install` fails there. If your machine has no Python 3.12, `uv` installs one inside your user folder without an administrator password: `uv venv --python 3.12 .venv`.
+1. Python 3.12. CI runs 3.12 (`.github/workflows/ci.yml`). On Python 3.9, the version macOS ships, `pip install` fails because several pinned packages need Python 3.10 or later, and on 3.10 or 3.11 the code's 3.12 generic syntax fails at collection. If your machine has no Python 3.12, `uv` installs one inside your user folder without an administrator password: `uv venv --python 3.12 .venv`.
 2. Git, and access to the repository.
 3. Optional: Docker, only for the FISCO BCOS anchor in section 6.
 
