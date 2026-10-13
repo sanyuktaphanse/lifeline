@@ -62,8 +62,10 @@ The ledger head is anchored in `data/anchors.jsonl`, beside the ledger, and on s
 | `confirmation` | An action waits for the student's yes | The warning for `confirmation.warning_key`, the action, and for a transfer the routes with `selected_route` marked, then a confirm button. When `confirmation.council` is present, what the council advised: `chosen`, `runner_up`, `reason`, `disagreement` and `triggers` |
 | `decision` with `allowed` false | The mandate engine refused | `decision.rule_ids` and `decision.reasons` |
 | none of these | An answer | `text` only |
+| `blocked` not empty | The call blocked a request from pasted text or from data Lifeline read | Each sentence in `blocked`, in order, on its own line before the model's words |
+| `turn_summary` | Every reply from `/chat`, `/confirm` and the rescue | The sentence in `turn_summary`, on its own line after the model's words |
 
-Two sentences in `text` are always written by code from the ledger entries of the call, never by the model, and the model never sees them in its memory. When the call blocked a request that came from pasted text or from data Lifeline read, `text` begins with one sentence saying what that request asked for, by kind such as a payment or a payee, never its account or amount, and that Lifeline did not do it. Every `text` from `/chat`, `/confirm` and the rescue ends with one sentence of what the call did, beginning `This turn:` in English, `Neste turno:` in Portuguese and `本轮：` in Chinese: each action proposed and waiting, refused with its rule ids, confirmed and executed with its receipt id and status, or done, or that nothing was proposed, changed or sent. The app can rely on that last sentence even when the model's words before it are wrong.
+Two sentences in `text` are always written by code from the ledger entries of the call, never by the model, and the model never sees them in its memory. When the call blocked a request that came from pasted text or from data Lifeline read, `text` begins with one sentence saying what that request asked for, by kind such as a payment or a payee, never its account or amount, and that Lifeline did not do it. Every `text` from `/chat`, `/confirm` and the rescue ends with one sentence of what the call did, beginning `This turn:` in English, `Neste turno:` in Portuguese and `本轮：` in Chinese: each action proposed and waiting, refused with its rule ids, confirmed and executed with its receipt id and status, or done, or that nothing was proposed, changed or sent. The app can rely on that last sentence even when the model's words before it are wrong. The reply also carries the two as fields, so the app should read them there and not look for them by their wording: `blocked`, a list of each blocked request sentence in the order they begin `text`, empty when nothing was blocked, and `turn_summary`, the sentence that ends `text`, null only on a reply the loop did not build. The fields come from the same values the code joins into `text`, never from reading `text`, so a model that writes the same words itself changes neither field; `text` still carries both sentences for a reader.
 
 The system prompt also carries a block written in code from the student's current mandate, the allowed payee ids, corridor codes and purpose codes exactly as the mandate lists them, the two limits and the balances, with six rules, among them to propose every payment the student asks for and let the engine decide, and never to say a payment was sent unless a tool sent it. It tells the model which receipts the student may trace, their own and those sent to them, so a parent's transfer such as `cn_bank_remit_sim-in-0001` can be traced in chat as through `POST /trace`. A standing mandate's tolerance, notice and cancel window are Lifeline's settings, 5 percent, 48 hours and 24 hours, unless the student states others in their own words; the confirmation states all three, and the day of the month must be in the student's words.
 
@@ -244,7 +246,9 @@ Response `200`, a transfer waiting for confirmation:
     3
   ],
   "provider": "anthropic",
-  "model": "claude-opus-5"
+  "model": "claude-opus-5",
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 1200 SGD to landlord_sp: proposed, waiting for your confirmation."
 }
 ```
 
@@ -297,7 +301,9 @@ Response `200`, refused because the payee and amount came only from the paste. T
     4
   ],
   "provider": "anthropic",
-  "model": "claude-opus-5"
+  "model": "claude-opus-5",
+  "blocked": ["Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action."],
+  "turn_summary": "This turn: a transfer: refused under R01."
 }
 ```
 
@@ -361,7 +367,9 @@ Response `200`, the payment made:
     7
   ],
   "provider": "anthropic",
-  "model": "claude-opus-5"
+  "model": "claude-opus-5",
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 1200 SGD to landlord_sp: confirmed and executed, receipt wise-0001, status completed."
 }
 ```
 
@@ -396,7 +404,9 @@ Response `200` when the token was already used to pay. The action it paid is reb
     11
   ],
   "provider": null,
-  "model": null
+  "model": null,
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 1200 SGD to landlord_sp: refused under R10."
 }
 ```
 
@@ -416,7 +426,9 @@ Response `200` when the token was never issued, has expired, was refused when it
     13
   ],
   "provider": null,
-  "model": null
+  "model": null,
+  "blocked": [],
+  "turn_summary": "This turn: a confirmation: not accepted, so nothing was done."
 }
 ```
 
@@ -566,7 +578,9 @@ Response `200` when the rail failed and nothing was charged. The reply offers th
     6
   ],
   "provider": "anthropic",
-  "model": "claude-opus-5"
+  "model": "claude-opus-5",
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 1200 SGD to landlord_sp: confirmed but not executed."
 }
 ```
 
@@ -1224,7 +1238,9 @@ Response `200`:
     3
   ],
   "provider": null,
-  "model": null,
+  "model": null,,
+  "blocked": [],
+  "turn_summary": "This turn: nothing was proposed, changed or sent.",
   "rescue": {
     "state_before": null,
     "state_after": "S1",
@@ -1274,7 +1290,9 @@ Response `200`:
     7
   ],
   "provider": null,
-  "model": null,
+  "model": null,,
+  "blocked": [],
+  "turn_summary": "This turn: nothing was proposed, changed or sent.",
   "rescue": {
     "state_before": "S1",
     "state_after": "S1",
@@ -1352,7 +1370,9 @@ Response `200`:
     14
   ],
   "provider": null,
-  "model": null,
+  "model": null,,
+  "blocked": [],
+  "turn_summary": "This turn: the identity check: done; a card freeze: proposed, waiting for your confirmation.",
   "rescue": {
     "state_before": "S1",
     "state_after": "S2",
@@ -1483,7 +1503,9 @@ Response `200`:
     28
   ],
   "provider": null,
-  "model": null,
+  "model": null,,
+  "blocked": [],
+  "turn_summary": "This turn: a card freeze: confirmed, result done; moving payments to the backup card: done; a transfer of 300 SGD to self_sg: proposed, waiting for your confirmation.",
   "rescue": {
     "state_before": "S2",
     "state_after": "S5",
@@ -1553,7 +1575,9 @@ Response `200`:
     42
   ],
   "provider": null,
-  "model": null,
+  "model": null,,
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 300 SGD to self_sg: confirmed and executed, receipt wise-0001, status completed; the family notice: done.",
   "rescue": {
     "state_before": "S5",
     "state_after": "done",
@@ -1648,7 +1672,9 @@ Response `200`, with the token and the times replaced by placeholders:
   "cancel": null,
   "ledger_seqs": [1, 2, 3],
   "provider": "fake",
-  "model": "fake-model"
+  "model": "fake-model",
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 40000 INR to student_001: proposed, waiting for your confirmation."
 }
 ```
 
