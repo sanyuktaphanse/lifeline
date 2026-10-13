@@ -520,6 +520,10 @@ class AgentReply(BaseModel):
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
+    # The two sentences the code writes into text from the ledger, as fields, so a reader need not find them by
+    # their wording. Source: docs/decisions.md, decisions 144 and 146.
+    blocked: list[str] = Field(default_factory=list)
+    turn_summary: str | None = None
 
 
 class StandingEvent(BaseModel):
@@ -5299,7 +5303,8 @@ A conversation turn takes the next turn number and starts a trail. The student's
         first = list(dict.fromkeys(blocked))
         # The summary names payees and receipts from the ledger, so it passes the same patterns as every reply.
         summary = self._redacted(self._turn_summary(user_id, reply.lang, entries))[0]
-        return reply.model_copy(update={"text": " ".join(filter(None, [*first, reply.text, summary]))})
+        text = " ".join(filter(None, [*first, reply.text, summary]))
+        return reply.model_copy(update={"text": text, "blocked": first, "turn_summary": summary})
 
     def _turn_summary(self, user_id: str, lang: str, entries: list[LedgerEntry]) -> str:
         """One sentence, in the student's language, of what this call did, read from its ledger entries alone and
@@ -5406,7 +5411,7 @@ A conversation turn takes the next turn number and starts a trail. The student's
         return self._told(user_id, reply.model_copy(update={"ledger_seqs": [*reply.ledger_seqs, *trail.seqs]}))
 ```
 
-`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. Last, `_told` adds the sentence `_turn_summary` writes, decision 146. It walks the call's entries once and groups them by idempotency key, the key read from wherever each kind holds it, then asks `_summary_item` what each action did: refused with its rule ids, executed with a receipt, confirmed with or without a result, done at T1, or proposed and waiting; a read at T0 and an allowed step that did nothing give `None` and are left out, which the walrus operator, `:=`, filters in the same comprehension that builds the list. A confirmation call holds no proposal, so `_proposed_action` finds the action in the proposal an earlier call wrote. `_summary_what` names a transfer by its amount and payee and any other action by `SUMMARY_WHAT`, and names a request from data by its kind only. The sentence passes `_redacted`, the reply guard's patterns, and joins the reply after the text the memory stored; no test puts a guarded pattern in the summary, open item 177.
+`_finish` remembers the turn and returns the reply with its `ledger_seqs` brought up to date, so the conversation entry is listed with the others. It then passes the reply through `_told`, which reads the ledger entries the call wrote and, for every `injection_suspected` among them, puts the sentence `_injection_sentence` builds before the reply's text: where the blocked request came from, what it asked for by kind, and that Lifeline did not do it. `_told` runs after `_remember`, so the sentence never enters the model's memory, and `dict.fromkeys` keeps one copy of a sentence said twice while keeping the order. The rescue reply and the confirmation reply pass through `_told` too. `def _told[ReplyT: AgentReply]` is a generic method: the type parameter says it returns the same kind of reply it was given, an `AgentReply` or a `RescueReply`. Last, `_told` adds the sentence `_turn_summary` writes, decision 146. It walks the call's entries once and groups them by idempotency key, the key read from wherever each kind holds it, then asks `_summary_item` what each action did: refused with its rule ids, executed with a receipt, confirmed with or without a result, done at T1, or proposed and waiting; a read at T0 and an allowed step that did nothing give `None` and are left out, which the walrus operator, `:=`, filters in the same comprehension that builds the list. A confirmation call holds no proposal, so `_proposed_action` finds the action in the proposal an earlier call wrote. `_summary_what` names a transfer by its amount and payee and any other action by `SUMMARY_WHAT`, and names a request from data by its kind only. The sentence passes `_redacted`, the reply guard's patterns, and joins the reply after the text the memory stored; no test puts a guarded pattern in the summary, open item 177. The same values are set on the reply as `blocked`, the list `first`, and `turn_summary`, the sentence `summary`, so a reader takes them from the fields and never searches `text` for their wording.
 
 ```python
 def _injection_sentence(lang: str, payload: dict[str, Any]) -> str:
@@ -10438,7 +10443,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 1574 tests, as `pytest --collect-only` counts them after the accuracy fixes of 10 October 2026: 1499 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
+There are 1582 tests, as `pytest --collect-only` counts them after the reply fields of 11 October 2026: 1507 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -11401,7 +11406,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
 | `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 146 parametrized tests add 396 extra runs, which is how 1178 test functions become 1574 tests. The table above is not complete: it has no rows for 287 functions, among them every test in `test_stranger_fixes.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
+In all, 147 parametrized tests add 398 extra runs, which is how 1184 test functions become 1582 tests. The table above is not complete: it has no rows for 292 functions, among them every test in `test_stranger_fixes.py`, `test_reply_fields.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
 
 ## The Stage 8a tests
 
