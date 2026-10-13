@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#F6F1FB">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Lifeline">
+  <title>Lifeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="blobs" aria-hidden="true"><span class="b1"></span><span class="b2"></span><span class="b3"></span></div>
+  <div class="phone">
+    <header class="top">
+      <div class="brand">
+        <svg viewBox="0 0 48 24" width="34" height="17" aria-hidden="true"><path d="M1 12h12l4-9 6 18 5-14 3 5h16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Lifeline</span>
+      </div>
+      <span class="demo-pill" title="This demo runs as one demo student. No real money moves on any route.">Demo · no real money</span>
+    </header>
+    <main id="view" tabindex="-1"></main>
+    <nav class="tabs" aria-label="Main">
+      <button data-tab="home" aria-label="Home"><span class="ic" aria-hidden="true">⌂</span><span>Home</span></button>
+      <button data-tab="chat" aria-label="Chat"><span class="ic" aria-hidden="true">💬</span><span>Chat</span></button>
+      <button data-tab="sos" class="sos" aria-label="Lost card"><span class="ic" aria-hidden="true">🛟</span><span>Lost card</span></button>
+      <button data-tab="activity" aria-label="Activity"><span class="ic" aria-hidden="true">🧾</span><span>Activity</span></button>
+      <button data-tab="help" aria-label="Help"><span class="ic" aria-hidden="true">?</span><span>Help</span></button>
+    </nav>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
