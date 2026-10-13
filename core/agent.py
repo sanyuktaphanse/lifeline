@@ -114,7 +114,9 @@ ANCHOR_KIND = "anchor"
 REDACTION_MARKER = "[redacted]"
 # Source: .env.example. The secrets the engine, the anchor and the model adapter read from the
 # environment; their values, and the development fallbacks used when they are unset, never reach a reply.
-SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY")
+# The API's passphrase, set in .env; api/main.py checks it, and the reply guard redacts it like any secret.
+PASSPHRASE_VAR = "LIFELINE_APP_PASSPHRASE"
+SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY", PASSPHRASE_VAR)
 DEVELOPMENT_SECRETS = (DEVELOPMENT_CONFIRM_SECRET, DEVELOPMENT_ANCHOR_SECRET)
 # Source: this module. A secret shorter than this is not looked for, so an empty or one letter value
 # cannot blank out ordinary words.

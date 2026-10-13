@@ -25,3 +25,12 @@ def no_wise_sandbox_from_env(monkeypatch):
     from .env but never overrides one that is set.
     """
     monkeypatch.setenv("WISE_SANDBOX_TOKEN", "")
+
+
+@pytest.fixture(autouse=True)
+def no_app_passphrase_from_env(monkeypatch):
+    """Keep every test off the API passphrase, whatever .env holds; a test that wants one sets it.
+
+    An empty value is set rather than the variable removed, for the same reason as above.
+    """
+    monkeypatch.setenv("LIFELINE_APP_PASSPHRASE", "")

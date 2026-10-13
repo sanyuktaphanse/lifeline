@@ -364,7 +364,8 @@ def test_health_serves_the_language_meta_so_the_app_never_hardcodes_it():
     response = _client().get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "languages": LANGUAGE_META}
+    # passphrase_required is false because the tests run with no passphrase set (tests/conftest.py).
+    assert response.json() == {"status": "ok", "languages": LANGUAGE_META, "passphrase_required": False}
 
 
 # Five. A language Lifeline cannot write in.

@@ -839,8 +839,11 @@ def test_both_secrets_set_in_production_start_the_api(tmp_path, monkeypatch):
     monkeypatch.setenv("LIFELINE_ENV", "production")
     for name in SECRETS:
         monkeypatch.setenv(name, "a-production-test-value")
+    # Production also needs the passphrase. Source: docs/decisions.md, 13 October 2026.
+    monkeypatch.setenv("LIFELINE_APP_PASSPHRASE", "a-production-test-passphrase")
 
-    assert _verify(_app(tmp_path))["development_secrets"] == []
+    verify = _app(tmp_path).get(f"/ledger/{USER}/verify", headers={"X-Lifeline-Passphrase": "a-production-test-passphrase"})
+    assert verify.json()["development_secrets"] == []
 
 
 def test_an_empty_confirm_secret_in_production_signs_no_token(monkeypatch):

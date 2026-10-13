@@ -270,3 +270,11 @@ This file records product decisions for Lifeline, newest last, with the date eac
 1. Sanyukta reviewed the eleven Portuguese items `docs/i18n_review.md` left for a native speaker, and the translator's warning, in Brazilian Portuguese. She is not a native speaker, so they are recorded as reviewed by SP, and the native speaker limitation stays until a native speaker signs. Every decision is listed there, under "Portuguese, reviewed by SP on 11 October 2026".
 2. Lifeline is masculine in Portuguese, "O Lifeline", in every sentence.
 3. The test expectations that quote these sentences changed with them, word for word.
+
+## 13 October 2026, the passphrase lock
+
+1. One setting, `LIFELINE_APP_PASSPHRASE`, read from `.env` when the API starts, locks the API for the one demo student. It is one shared passphrase, not accounts or sign in: it says that the caller knows the passphrase, not who the caller is.
+2. When it is set, every endpoint except `GET /health` and FastAPI's own pages, `/docs`, `/redoc` and `/openapi.json`, needs the header `X-Lifeline-Passphrase` equal to it, compared in constant time with `hmac.compare_digest`. A missing or wrong one is answered `401` with one sentence naming the header, before the request's body is validated or anything is written. FastAPI's pages stay open because they show only the API's shape and nothing from the ledger.
+3. When it is empty the API behaves as before, so the tests and the harness run unchanged. `GET /health` reports `passphrase_required`, true or false, so the app knows whether to ask for it.
+4. In production, `LIFELINE_ENV=production`, the API does not start when the passphrase is empty or shorter than 8 characters. The 8 is `MIN_SECRET_CHARS` in `core/agent.py`: the reply guard looks for a secret only from that length on, so a shorter passphrase could not be redacted from a reply.
+5. The reply guard redacts the passphrase like the other secrets, and CORS allows the header from `localhost` and `127.0.0.1`, so the app can send it.

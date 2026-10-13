@@ -19,7 +19,7 @@ make dev
 
 Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. CI runs 3.12, and 3.13 works too. Name the virtual environment `.venv` in the repository folder, because the Makefile runs `.venv/bin/python` when it exists and plain `python` otherwise.
 
-`pytest` collects 1582 tests: 1575 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
+`pytest` collects 1628 tests: 1621 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
 
 `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`.
 
@@ -27,7 +27,7 @@ Python 3.12 or later is required: `core/agent.py` uses the generic function synt
 
 None of these needs a key or a `.env` file. Only `/chat` and the live evidence runs call a model; for those, copy `.env.example` to `.env` and fill in the provider keys. The code loads only the `.env` beside the repository root, found from its own path, and never a parent folder's, so a clone made inside this folder reads its own `.env` or none, never this folder's keys.
 
-The API is for developer machines only. It binds to `127.0.0.1` and has no sign in. With `LIFELINE_ENV=production` it refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set. [docs/deployment.md](docs/deployment.md) is the deployment guide.
+The API is for developer machines only. It binds to `127.0.0.1` and has no accounts or sign in. One passphrase from `.env`, `LIFELINE_APP_PASSPHRASE`, locks it for the one demo student: with it set, every endpoint except `GET /health` needs it in the `X-Lifeline-Passphrase` header, compared in constant time, as [docs/api.md](docs/api.md) says under Passphrase. It is not accounts or sign in. With `LIFELINE_ENV=production` the API refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set and the passphrase has at least 8 characters. [docs/deployment.md](docs/deployment.md) is the deployment guide.
 
 ## What is built
 
