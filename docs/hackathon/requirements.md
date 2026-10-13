@@ -1,17 +1,17 @@
 # Submission requirements
 
-What the organisers ask for, where each item lives in the repository, and who owns it. Owners follow the lanes in the master plan, section 4. The status column was checked against `main` on 10 October 2026; update it as items land.
+What the organisers ask for, where each item lives in the repository, and who owns it. Owners follow the lanes in the master plan, section 4. The status column was checked against `main` on 13 October 2026; update it as items land.
 
 ## Checklist
 
-| Item | Required by the rules | Where it lives | Owner | Status on 10 October |
+| Item | Required by the rules | Where it lives | Owner | Status on 13 October |
 | --- | --- | --- | --- | --- |
 | 1. Technical documentation | System architecture, core algorithm description, security design | `docs/technical_documentation.md`, build program Stage 17; `docs/technical-reference.md` is the internal reference behind it | A, with B for the rails sections | On `main` since 10 October 2026, merged through pull request 46; `tests/test_technical_documentation.py` keeps its numbers current |
-| 2. Presentation deck | For a final presentation of no more than 10 minutes | Not in the repository | A content, C design | Not started in the repository |
-| 3. Demo video | Optional, no more than 5 minutes | Not in the repository | C | Not started in the repository |
-| 4. Source code | README, GitHub link, deployment instructions, test cases | This repository. `README.md` has install steps. Tests are in `tests/`. A deployment guide is a lane B deliverable. | All; README and deployment guide B | Code and tests present; deployment guide missing |
+| 2. Presentation deck | For a final presentation of no more than 10 minutes | Not in the repository | A content, C design | In progress with Joanne; not in the repository |
+| 3. Demo video | Optional, no more than 5 minutes | Not in the repository | C | In progress with Pearlin; not in the repository |
+| 4. Source code | README, GitHub link, deployment instructions, test cases | This repository. `README.md` has install steps. Tests are in `tests/` and `app/tests/`. The deployment guide is `docs/deployment.md`. The licence is `LICENSE`, MIT, and `docs/licences.md` lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads. | All; README and deployment guide B | Code, tests, README and `docs/deployment.md` present |
 | 5. Security self assessment | Permission tier implementation and known risk list | `docs/self_assessment.md`, build program Stage 16, outline in master plan section 17 | A | On `main` since 10 October 2026, merged through pull request 45; `tests/test_self_assessment.py` keeps its numbers current |
-| 6. Execution evidence | Simulated account or sandbox operation logs, and the demo video | `make evidence` writes `evidence/report.md`; CI uploads it on every pull request. Sandbox logs need the Wise sandbox rail. | B evidence pack, A harness | Scripted report runs; no sandbox logs yet |
+| 6. Execution evidence | Simulated account or sandbox operation logs, and the demo video | `make evidence` writes `evidence/report.md`; CI runs it after the tests pass and uploads it, on every pull request and every push to `main`. The stranger runs are in `suites/scenarios/stranger/` and `docs/stranger_test.md`, the chain record in `chain/evidence.md`. `make evidence-wise` writes the Wise sandbox log. | B evidence pack, A harness | The scripted report, the stranger runs and the chain record present; the Wise sandbox log pending a sandbox token |
 
 ## Scoring and what answers it
 
@@ -24,11 +24,11 @@ What the organisers ask for, where each item lives in the repository, and who ow
 
 ## Topic C and what Lifeline answers
 
-Topic C asks for solutions to real financial pain points of international students and cross border users, such as remittances, tuition payments, credit building, and multi currency management. Status on `main`, 10 October 2026:
+Topic C asks for solutions to real financial pain points of international students and cross border users, such as remittances, tuition payments, credit building, and multi currency management. Status on `main`, 13 October 2026:
 
 | Pain point named in the topic | What Lifeline does | Status |
 | --- | --- | --- |
-| Remittances | Quotes and compares routes, pays within the student's mandate after a confirmation, traces a transfer that has not arrived, and runs recurring payments under a standing mandate. Corridors Singapore to Brazil, India to Singapore, Singapore to China and China to Singapore | Built; every rail is simulated or a fixture, Wise sandbox in review |
+| Remittances | Quotes and compares routes, pays within the student's mandate after a confirmation, traces a transfer that has not arrived, and runs recurring payments under a standing mandate. Corridors Singapore to Brazil, India to Singapore, Singapore to China and China to Singapore | Built; every rail is simulated or a fixture, and the Wise sandbox rail runs only with a sandbox token, which is not set up |
 | Tuition payments | Refuses a direct bank remittance from China to NUS, because NUS asks for payment through Flywire or Convera (`sg_nus_fee_payment_003`), and says why | Built as a sourced refusal; Lifeline does not pay tuition itself |
 | Credit building | Nothing | Not built |
 | Multi currency management | Balances per currency, read and moved by each payment, and a monthly note of fees and spread per currency | Built |

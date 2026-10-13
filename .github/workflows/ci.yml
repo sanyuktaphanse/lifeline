@@ -28,3 +28,26 @@ jobs:
           name: evidence-report
           path: evidence/report.md
           if-no-files-found: error
+
+  app:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # app/tests/e2e/fixtures.js starts the API with .venv/bin/python at the repository root.
+      - run: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+      - run: npm ci
+        working-directory: app
+      - run: npm test
+        working-directory: app
+      - run: npx playwright install --with-deps chromium
+        working-directory: app
+      - run: npx playwright test
+        working-directory: app

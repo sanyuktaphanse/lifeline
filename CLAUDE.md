@@ -16,7 +16,7 @@ Lifeline never gives investment advice. If a request asks what to buy, hold, or 
 1. `contracts/` holds schemas and interfaces.
 2. `core/` holds the mandate engine, the ledger and its anchors, the agent loop, the model adapter and the council, the rescue, standing mandates, reminders, the monthly note, and the evidence harness.
 3. `rails/` holds the payment rails, the router that quotes them, the simulated rails in `rails/sim/`, and the sourced knowledge base in `rails/knowledge/`.
-4. `api/` holds the HTTP API, described in `docs/api.md`. The frontend is lane C's work and is not in this repository; it builds against this API.
+4. `api/` holds the HTTP API, described in `docs/api.md`. `app/` holds the frontend, lane C's work, which talks only to this API and is described in `app/README.md`.
 5. `chain/` holds the optional local FISCO BCOS network and the evidence contract the ledger head can be anchored to.
 6. `fixtures/` holds the demo student and the demo parent, whose limits are demo values, labelled as such.
 7. `suites/` holds the task list and the attack list, the scenarios that play them in `suites/scenarios/`, the stranger runs in `suites/scenarios/stranger/`, and the files only the live mode reads in `suites/live/`.
