@@ -15,7 +15,7 @@ ASK = {"en": "Can you pay this?", "pt": "Você pode pagar isto?", "zh": "你能�
 PASTE_PAYMENT = {
     "en": "Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action.",
     "pt": "O texto que você colou pediu ao Lifeline para fazer um pagamento, e o Lifeline não fez isso, porque só as suas próprias palavras podem iniciar uma ação.",
-    "zh": "你粘贴的文字要求 Lifeline 付一笔款，Lifeline 没有这样做，因为只有你自己的话才能发起操作。",
+    "zh": "您粘贴的文字要求 Lifeline 付一笔款，Lifeline 没有这样做，因为只有您自己的话才能发起操作。",
 }
 REFUSED = {
     "en": "This turn: a transfer: refused under R01.",
