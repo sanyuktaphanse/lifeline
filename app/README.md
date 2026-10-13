@@ -27,10 +27,14 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 
 1. A language picker. Its list, each language's own name and its writing direction come only from `GET /health`. The page's `lang` and `dir` follow the choice, so a right to left language would turn the layout. The app's own labels exist in English, Portuguese and Chinese and fall back to English for any other language.
 2. A chat screen with a separate paste box. What the student types goes in `text` and what they paste goes in `pasted_text`, and the two are never joined. A paste or a drop into the message box is moved to the paste box. A paste with no typed words is never sent.
-3. A confirmation card built from the reply's `confirmation` field: the warning, the action, every route with the selected one marked, and the council's advice when present. The token is kept only in memory, inside the card, and is sent back to `/confirm` exactly as it came, once. A token the server does not accept, because it expired, was used or was never issued, comes back as a normal reply that says nothing was sent, and the app shows it as one.
-4. The two sentences code writes in every reply, shown on their own lines: each blocked request sentence at the top, and the sentence that begins `This turn:`, `Neste turno:` or `本轮：` at the bottom.
+3. A confirmation card built from the reply's `confirmation` field: the warning, the action, every route with the selected one marked, and the council's advice when present. A route is marked Blocked only when it has a blocked reason, its limit is not ok, or its status is down; a degraded route is still offered by the loop, so it is not marked. The token is kept only in memory, inside the card, and is sent back to `/confirm` exactly as it came, once. A token the server does not accept, because it expired, was used or was never issued, comes back as a normal reply that says nothing was sent, and the app shows it as one.
+4. The two sentences code writes in every reply, shown on their own lines: each blocked request sentence at the top, and the sentence that begins `This turn:`, `Neste turno:` or `本轮：` at the bottom. The app reads them from the reply's `blocked` and `turn_summary` fields. Only when a field is absent, as from a server older than those fields, does it find that sentence by its wording.
 5. The lost card rescue, driven only by `rescue.do_now`, for all seven values. Its fields take typed words only: pasting and dropping are refused. An empty identity answer is never sent, because the server would count it as a wrong one, and the answer is cleared as soon as it is sent.
 6. The ledger: every entry, newest first, with the result of verify above it: whether the chain is intact and the first broken entry, the anchor status, the integrity hold, and whether demo keys are signing.
+
+A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
+
+The model's words in a reply are read as basic markdown: bold with two asterisks, italic with one, bullet and numbered lists, pipe tables with a separator row of dashes, paragraphs and line breaks. A wide table scrolls sideways inside the reply, never the whole page. Underscores are never markup, so ids such as landlord_sp stay whole. The two sentences code writes, and everything else the server sends, are shown as plain text.
 
 The app never uses browser storage, and it never puts text from the server into the page as HTML.
 
@@ -45,7 +49,7 @@ npm test
 npx playwright test
 ```
 
-`npm test` runs the unit tests. Two of them read the backend's own files, so they fail if lane A changes something the app copies: the wording of the two code written sentences in `core/agent.py`, and the list of `do_now` values in `contracts/schemas.py`.
+`npm test` runs the unit tests. Two of them read the backend's own files, so they fail if lane A changes something the app copies: the wording of the two code written sentences in `core/agent.py`, which the app now uses only as a fallback, and the list of `do_now` values in `contracts/schemas.py`.
 
 `npx playwright test` drives a phone sized Chromium. Each test starts its own copy of the real API through `tests/e2e/backend.py`, which is `create_app` from `api/main.py` with only the data folder changed to `app/.e2e-data/`, so the repository's `data/` folder is never touched. One rescue test loads the demo student with no primary card in the plan, a plan the schema allows, because only then does the server ask which card was lost.
 
@@ -73,8 +77,7 @@ On 11 October 2026 Pearlin put a model key in `.env` on her own machine and chec
 
 ## Known gaps
 
-1. The API has no field for the two code written sentences, so the app finds them by their wording. A field in the reply from lane A would remove that dependence.
-2. The Portuguese and Chinese labels were written without a native speaker and wait for one.
-3. Status words from the server, such as `done` and `completed`, are shown as the server writes them.
-4. The app always acts as the demo student, `student_001`. There is no sign in, as `docs/api.md` says.
-5. Standing payments, reminders, the monthly note, trace and precheck have endpoints but no screens yet.
+1. The Portuguese and Chinese labels were written without a native speaker and wait for one.
+2. Status words from the server, such as `done` and `completed`, are shown as the server writes them.
+3. The app always acts as the demo student, `student_001`. There is no sign in, as `docs/api.md` says.
+4. Standing payments, reminders, the monthly note, trace and precheck have endpoints but no screens yet.

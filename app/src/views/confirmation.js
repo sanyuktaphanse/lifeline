@@ -6,6 +6,7 @@
 // so the card never decides that on its own: after the time runs out it says so and still lets the server answer.
 import { el, errorText, label } from "../dom.js";
 import { STRINGS } from "../i18n.js";
+import { routeBlocked } from "../routes.js";
 
 export function confirmationCard(ctx, confirmation, onConfirm) {
   let token = confirmation.confirmation_token;
@@ -116,7 +117,7 @@ function routeList(ctx, routes, selected) {
           " ",
           route.simulated ? label(ctx, "span", "route_simulated", null, { class: "badge" }) : null,
           " ",
-          route.status !== "up" || route.limit_ok === false ? label(ctx, "span", "route_blocked", null, { class: "badge" }) : null,
+          routeBlocked(route) ? label(ctx, "span", "route_blocked", null, { class: "badge route-blocked" }) : null,
           el(
             "div",
             {},

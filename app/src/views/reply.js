@@ -2,16 +2,18 @@
 // All server text is set as text, never as HTML.
 import { el, label } from "../dom.js";
 import { confirmationCard } from "./confirmation.js";
-import { splitReply } from "../reply-text.js";
+import { partsOf } from "../reply-text.js";
+import { renderMarkdown } from "../markdown.js";
 
 // The blocked request sentences go first and the "This turn:" sentence last, each on its own line, because
 // code wrote them from the ledger and the app can rely on them even when the model's words are wrong.
 export function renderReply(ctx, reply, { onConfirm } = {}) {
-  const { blocked, body, turn } = splitReply(reply.text, reply.lang);
+  const { blocked, body, turn } = partsOf(reply);
   const parts = blocked.map((sentence) =>
     el("div", { class: "reply-blocked" }, label(ctx, "span", "blocked_label", null, { class: "blocked-label" }), el("span", { class: "blocked-text" }, sentence)),
   );
-  if (body) parts.push(el("div", { class: "bubble reply-body" }, body));
+  // Only the model's words are read as markdown; the two sentences code writes stay plain text.
+  if (body) parts.push(el("div", { class: "bubble reply-body" }, renderMarkdown(body)));
   if (reply.receipt) parts.push(receiptCard(ctx, reply.receipt));
   if (reply.freeze) parts.push(resultCard(ctx, "freeze_title", reply.freeze, "freeze"));
   if (reply.cancel) parts.push(resultCard(ctx, "cancel_title", reply.cancel, "cancel"));

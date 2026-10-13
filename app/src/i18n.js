@@ -6,6 +6,7 @@
 
 const en = {
   app_title: "Lifeline",
+  demo_banner: "Demo only. No real money moves on any route.",
   language_label: "Language",
   tab_chat: "Chat",
   tab_rescue: "Lost card",
@@ -120,6 +121,7 @@ const en = {
 
 const pt = {
   app_title: "Lifeline",
+  demo_banner: "Apenas demonstração. Nenhum dinheiro real se move em nenhuma rota.",
   language_label: "Idioma",
   tab_chat: "Conversa",
   tab_rescue: "Cartão perdido",
@@ -234,6 +236,7 @@ const pt = {
 
 const zh = {
   app_title: "Lifeline",
+  demo_banner: "仅为演示。任何路线都不会转移真实资金。",
   language_label: "语言",
   tab_chat: "对话",
   tab_rescue: "卡丢失",

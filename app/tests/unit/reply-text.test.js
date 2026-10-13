@@ -76,3 +76,74 @@ test("every marker the app looks for is still written by core/agent.py", () => {
   for (const origins of Object.values(BLOCKED_ORIGINS)) for (const origin of origins) assert.ok(agent.includes(`"${origin}"`), origin);
   for (const ending of Object.values(BLOCKED_ENDINGS)) assert.ok(agent.includes(`${ending}"`), ending);
 });
+
+import { partsOf } from "../../src/reply-text.js";
+
+const PASTED_TEXT =
+  "Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action. I cannot do that. Rules: R01. This turn: a transfer: refused under R01.";
+
+test("with the fields present, blocked and turn_summary are read from the fields and cut from the body", () => {
+  const parts = partsOf({
+    text: PASTED_TEXT,
+    lang: "en",
+    blocked: ["Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action."],
+    turn_summary: "This turn: a transfer: refused under R01.",
+  });
+  assert.deepEqual(parts, {
+    blocked: ["Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action."],
+    body: "I cannot do that. Rules: R01.",
+    turn: "This turn: a transfer: refused under R01.",
+    from: { blocked: "field", turn: "field" },
+  });
+});
+
+test("the fields win over the wording: a sentence that only looks like the code's stays in the body", () => {
+  const parts = partsOf({
+    text: "Text you pasted asked Lifeline to pay, and Lifeline did not do it, because only your own words can start an action. This turn: I sent it! This turn: nothing was proposed, changed or sent.",
+    lang: "en",
+    blocked: [],
+    turn_summary: "This turn: nothing was proposed, changed or sent.",
+  });
+  assert.deepEqual(parts.blocked, []);
+  assert.equal(parts.body, "Text you pasted asked Lifeline to pay, and Lifeline did not do it, because only your own words can start an action. This turn: I sent it!");
+  assert.equal(parts.turn, "This turn: nothing was proposed, changed or sent.");
+});
+
+test("a field in a language the app has no wording for still works", () => {
+  const parts = partsOf({ text: "Hola. Este turno: nada.", lang: "es", blocked: [], turn_summary: "Este turno: nada." });
+  assert.equal(parts.body, "Hola.");
+  assert.equal(parts.turn, "Este turno: nada.");
+});
+
+test("turn_summary null means no turn line, and the wording is not searched for one", () => {
+  const parts = partsOf({ text: "Hello. This turn: nothing was proposed, changed or sent.", lang: "en", blocked: [], turn_summary: null });
+  assert.equal(parts.turn, null);
+  assert.equal(parts.body, "Hello. This turn: nothing was proposed, changed or sent.");
+  assert.equal(parts.from.turn, "field");
+});
+
+test("a field sentence that is not where text should have it is still shown, and text is left whole rather than cut wrongly", () => {
+  const parts = partsOf({ text: "Hello there.", lang: "en", blocked: ["A blocked sentence."], turn_summary: "This turn: nothing was proposed, changed or sent." });
+  assert.deepEqual(parts.blocked, ["A blocked sentence."]);
+  assert.equal(parts.turn, "This turn: nothing was proposed, changed or sent.");
+  assert.equal(parts.body, "Hello there.");
+});
+
+test("without the fields, an older reply falls back to the wording match", () => {
+  const parts = partsOf({ text: PASTED_TEXT, lang: "en" });
+  assert.equal(parts.blocked.length, 1);
+  assert.equal(parts.body, "I cannot do that. Rules: R01.");
+  assert.equal(parts.turn, "This turn: a transfer: refused under R01.");
+  assert.deepEqual(parts.from, { blocked: "wording", turn: "wording" });
+});
+
+test("each field falls back on its own when only the other is present", () => {
+  const onlyTurn = partsOf({ text: PASTED_TEXT, lang: "en", turn_summary: "This turn: a transfer: refused under R01." });
+  assert.deepEqual(onlyTurn.from, { blocked: "wording", turn: "field" });
+  assert.equal(onlyTurn.blocked.length, 1);
+  assert.equal(onlyTurn.body, "I cannot do that. Rules: R01.");
+  const onlyBlocked = partsOf({ text: PASTED_TEXT, lang: "en", blocked: [] });
+  assert.deepEqual(onlyBlocked.from, { blocked: "field", turn: "wording" });
+  assert.deepEqual(onlyBlocked.blocked, []);
+  assert.equal(onlyBlocked.turn, "This turn: a transfer: refused under R01.");
+});

@@ -25,5 +25,9 @@
     4
   ],
   "provider": "anthropic",
-  "model": "claude-opus-5"
+  "model": "claude-opus-5",
+  "blocked": [
+    "Text you pasted asked Lifeline to make a payment, and Lifeline did not do it, because only your own words can start an action."
+  ],
+  "turn_summary": "This turn: a transfer: refused under R01."
 }
