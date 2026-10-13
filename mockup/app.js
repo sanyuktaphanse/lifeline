@@ -46,11 +46,12 @@ const WARNINGS = {
 // ---------- navigation ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { home, chat, sos, activity, help };
+const screens = { welcome, home, chat, sos, activity, help };
 function go(name, arg) {
   tabs.forEach((b) => (b.dataset.tab === name ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
   view.replaceChildren();
   view.classList.remove("chatting");
+  document.body.classList.toggle("signin", name === "welcome");
   screens[name](arg);
   view.scrollTop = 0;
   view.focus({ preventScroll: true });
@@ -316,4 +317,44 @@ function help() {
   view.append(h("h1", {}, "Help"), h("section", { class: "card" }, faq.map(([q, a]) => h("details", { class: "faq" }, h("summary", {}, q), h("p", {}, a)))));
 }
 
-go("home");
+// ---------- Welcome and sign in ----------
+// Designed in full, but the API has no sign in (docs/api.md, "Security"; self assessment, open item 37), so only
+// "Try the demo" works and every sign in option says Coming soon. Nothing is remembered: a reload shows this again.
+const SLIDES = [
+  { emoji: "🌏", title: "Move money home and away", text: "Pay rent abroad or get money from family, within limits you set." },
+  { emoji: "🛡️", title: "Stay safe from scams", text: "Paste a message you're unsure about. Lifeline reads it, and it can never move your money." },
+  { emoji: "🛟", title: "Lost your card?", text: "Freeze it, switch to your backup and get emergency money, step by step." },
+];
+function welcome() {
+  let at = 0;
+  const slide = h("div", { class: "card slide", "aria-live": "polite" });
+  const dots = h("div", { class: "dots", role: "group", "aria-label": "Intro slides" });
+  function show(i) {
+    at = (i + SLIDES.length) % SLIDES.length;
+    const s = SLIDES[at];
+    slide.replaceChildren(h("span", { class: "emoji", "aria-hidden": "true" }, s.emoji), h("h2", {}, s.title), h("p", { class: "muted" }, s.text));
+    dots.replaceChildren(...SLIDES.map((_, j) => h("button", { "aria-label": `Slide ${j + 1}`, "aria-current": j === at ? "true" : "false", onclick: () => show(j) })));
+  }
+  let startX = null;
+  slide.addEventListener("touchstart", (e) => { startX = e.touches[0].clientX; }, { passive: true });
+  slide.addEventListener("touchend", (e) => { if (startX === null) return; const dx = e.changedTouches[0].clientX - startX; if (Math.abs(dx) > 40) show(at + (dx < 0 ? 1 : -1)); startX = null; });
+  show(0);
+  const soon = (cls, icon, label) => h("div", { class: `sso ${cls}`, role: "button", "aria-disabled": "true", title: "Sign in is not built yet" }, h("span", { "aria-hidden": "true" }, icon), h("span", { class: "lbl" }, label), h("span", { class: "soon" }, "Coming soon"));
+  view.append(
+    h("div", { class: "hero" },
+      h("div", { class: "logo", "aria-hidden": "true" }),
+      h("h1", {}, "Lifeline"), h("p", {}, "Your money's safety net when you study abroad.")),
+    slide, dots,
+    h("div", { class: "signin-stack" },
+      soon("faceid", "🙂", "Continue with Face ID"),
+      soon("apple", "", "Continue with Apple"),
+      soon("google", "G", "Continue with Google"),
+      h("div", { class: "divider" }, "or"),
+      h("button", { class: "btn", onclick: () => go("home") }, "Try the demo"),
+      h("p", { class: "fine" }, "Sign in isn't built yet, so the demo runs as one demo student. No real money moves.")),
+  );
+  // The pulse line, a fixed drawing written here, never server text.
+  view.querySelector(".logo").innerHTML = '<svg viewBox="0 0 48 24" width="52" height="26"><path d="M1 12h12l4-9 6 18 5-14 3 5h16" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+
+go("welcome");

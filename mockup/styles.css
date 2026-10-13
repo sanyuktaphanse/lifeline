@@ -143,3 +143,27 @@ details.faq p { margin: 8px 0 4px; color: var(--ink-soft); font-size: 15px; }
   .bubble, .card { animation: rise 0.25s ease-out; }
   @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 }
+
+/* Welcome and sign in: designed in full; only the demo button works, the rest say Coming soon */
+body.signin .tabs, body.signin .top { display: none; }
+body.signin main { padding: max(28px, env(safe-area-inset-top)) 20px 28px; display: flex; flex-direction: column; min-height: 100dvh; }
+.hero { text-align: center; margin: 18px 0 8px; }
+.hero .logo { width: 84px; height: 84px; margin: 0 auto 10px; border-radius: 26px; display: grid; place-items: center; background: var(--glass-strong); box-shadow: var(--shadow); color: var(--green); }
+.hero h1 { font-size: 30px; margin: 4px 0 6px; }
+.hero p { margin: 0; color: var(--ink-soft); }
+.slides { position: relative; min-height: 132px; margin: 18px 0 8px; }
+.slide { text-align: center; padding: 18px 16px; }
+.slide .emoji { font-size: 34px; display: block; margin-bottom: 6px; }
+.slide h2 { margin: 0 0 4px; }
+.dots { display: flex; justify-content: center; gap: 8px; margin: 0 0 18px; }
+.dots button { width: 28px; height: 28px; border: 0; background: none; padding: 0; display: grid; place-items: center; cursor: pointer; }
+.dots button::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: rgba(120,96,170,0.3); }
+.dots button[aria-current="true"]::after { width: 22px; border-radius: 4px; background: var(--green); }
+.signin-stack { display: flex; flex-direction: column; gap: 10px; margin-top: auto; }
+.sso { display: flex; align-items: center; gap: 10px; padding: 0 12px 0 16px; min-height: 52px; border-radius: 16px; border: 1px solid var(--line); background: var(--glass-strong); font-weight: 600; color: var(--ink); opacity: 0.75; }
+.sso .lbl { flex: 1; text-align: left; }
+.sso .soon { flex: none; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; background: var(--amber-soft); color: var(--amber-ink); }
+.sso.apple { background: #1C1530; color: #FFFFFF; border-color: #1C1530; }
+.divider { display: flex; align-items: center; gap: 10px; color: var(--ink-soft); font-size: 13px; margin: 4px 0; }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.fine { text-align: center; font-size: 12px; color: var(--ink-soft); margin: 10px 4px 0; }
