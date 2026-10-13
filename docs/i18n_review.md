@@ -105,7 +105,7 @@ The council's sentence is not on this list. A voice writes its reason in the stu
 
 | Language | English | Translation |
 | --- | --- | --- |
-| Portuguese | This message contains payment instructions. Lifeline treats them as information only and will not pay anyone because a message asks; any payment needs your own request and your confirmation. | Esta mensagem contém instruções de pagamento. A Lifeline as trata apenas como informação e não vai pagar ninguém só porque uma mensagem pede; qualquer pagamento precisa do seu próprio pedido e da sua confirmação. |
+| Portuguese | This message contains payment instructions. Lifeline treats them as information only and will not pay anyone because a message asks; any payment needs your own request and your confirmation. | Esta mensagem contém instruções de pagamento. O Lifeline só as trata como informação e não paga ninguém porque uma mensagem pede. Um pagamento só acontece com o seu próprio pedido e a sua confirmação. (Reviewed by SP on 11 October 2026; the first draft said "A Lifeline", feminine, where every other sentence says "O Lifeline".) |
 | Chinese | The same | 这条消息包含付款指示。Lifeline 只把它当作信息，不会因为一条消息要求就向任何人付款；任何付款都需要您本人提出并确认。 |
 
 ## Chinese, native speaker decisions of 11 October 2026
@@ -128,3 +128,19 @@ Joanne, a native Chinese speaker, decided every Chinese item above on 11 October
 The recorded replies of the stranger test of 9 October 2026 in `suites/scenarios/stranger/` keep the old wording, because they are a record of what was said that day. The Portuguese items still wait for a native speaker.
 
 Portuguese is Brazilian Portuguese throughout, decided on 11 October 2026. When two wordings say the same thing the shorter one is used, except that a sentence carrying a rule id, a receipt id, an amount or a date keeps every one of them.
+
+## Portuguese, reviewed by SP on 11 October 2026
+
+Sanyukta reviewed the eleven Portuguese items above and the translator's warning on 11 October 2026, in Brazilian Portuguese. She is not a native speaker, so these are reviewed by SP and **no native speaker has signed the Portuguese yet**; the native speaker limitation in `docs/self_assessment.md` stays until one does. Every placeholder is kept exactly. All of these are now in the code.
+
+| Key | Decision |
+| --- | --- |
+| `core.agent.TEXTS` `cash_cap_warning` | The proposed translation: "deste ano civil" for "for this calendar year" |
+| `core.agent.TEXTS` `cash_cap_year`, `cash_cap_year_consequence`, `cash_cap_card_day` | Own wording: "chegou à linha de alerta de {level} por cento definida pelo Lifeline", since "linha de alerta" is the usual term for a threshold and "definida pelo Lifeline" removes the "percent of Lifeline" reading |
+| `core.agent.TEXTS` `cash_none` | The proposed translation: "retirada de dinheiro em espécie" |
+| `core.agent.TEXTS` `notice_transfer_status` | Own wording: "está com o status {status}", matching `transfer_not_completed` |
+| `core.monthly.TEXTS` `note` | One label only: "Execuções de ordens permanentes: {standing}", because it counts executions, not orders |
+| `core.monthly.TEXTS` `saved`, `dearer` | Own wording: "cotada na mesma mensagem", because a student reads "turno" as a work shift |
+| `core.monthly.TEXTS` `standing_due` | Own wording: "uma execução de ordem permanente de {amount} para {payee} prevista para {due}" |
+| `core.monthly.TEXTS` `none` | The proposed translation: "nenhum registro" |
+| `core.agent.TEXTS` `payment_flag` | Own wording, shorter, with "O Lifeline" so the product has one gender in every sentence |

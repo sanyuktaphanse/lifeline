@@ -264,3 +264,9 @@ This file records product decisions for Lifeline, newest last, with the date eac
 3. When two wordings say the same thing, the shorter one is used.
 4. The scenario and test expectations that quote these sentences changed with them. The recorded replies of the stranger test of 9 October did not, because they are a record of that day.
 5. Portuguese is Brazilian Portuguese throughout, the variant the demo student and the Brazil corridor speak; the stranger test caught replies in European Portuguese. The shorter wording wins in Portuguese too, except that a sentence carrying a rule id, a receipt id, an amount or a date keeps every one of them. Decided by Sanyukta and Joanne on 11 October 2026.
+
+## 11 October 2026, the Portuguese review
+
+1. Sanyukta reviewed the eleven Portuguese items `docs/i18n_review.md` left for a native speaker, and the translator's warning, in Brazilian Portuguese. She is not a native speaker, so they are recorded as reviewed by SP, and the native speaker limitation stays until a native speaker signs. Every decision is listed there, under "Portuguese, reviewed by SP on 11 October 2026".
+2. Lifeline is masculine in Portuguese, "O Lifeline", in every sentence.
+3. The test expectations that quote these sentences changed with them, word for word.
