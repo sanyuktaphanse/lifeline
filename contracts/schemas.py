@@ -371,6 +371,10 @@ class AgentReply(BaseModel):
     ledger_seqs: list[Annotated[int, Field(ge=1)]]
     provider: str | None = None
     model: str | None = None
+    # The two sentences the code writes into text from the ledger, as fields, so a reader need not find them by
+    # their wording. Source: docs/decisions.md, decisions 144 and 146.
+    blocked: list[str] = Field(default_factory=list)
+    turn_summary: str | None = None
 
 
 class StandingEvent(BaseModel):
