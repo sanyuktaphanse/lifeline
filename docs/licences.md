@@ -32,6 +32,14 @@ The licence was read from the `license` field of each package's own `package.jso
 | playwright-core, installed by playwright | 1.56.1 | Apache-2.0 |
 | fsevents, installed by playwright on macOS only | 2.3.2 | MIT |
 
+## What the app's tests download
+
+`npx playwright install chromium` downloads a browser for the browser tests. It runs the tests only and is not part of the app.
+
+| Component | Version | Where it comes from | Licence |
+| --- | --- | --- | --- |
+| Chromium headless shell, Playwright build 1194 | 141.0.7390.37, as `app/node_modules/playwright-core/browsers.json` names it | Built from Chromium, chromium.googlesource.com/chromium/src | A BSD style licence, Copyright 2015 The Chromium Authors, `LICENSE` at tag 141.0.7390.37; the components it bundles carry their own licences |
+
 ## What `chain/setup.sh` downloads
 
 The licence was read from each project's own repository at the version used.
@@ -41,5 +49,6 @@ The licence was read from each project's own repository at the version used.
 | FISCO BCOS node binary | v3.16.4 | The release archive `fisco-bcos-linux-<arch>.tar.gz` of github.com/FISCO-BCOS/FISCO-BCOS, downloaded by `chain/nodes_in_container.sh` | Apache License 2.0, `LICENSE` at tag v3.16.4 |
 | `build_chain.sh` | v3.16.4 | `tools/BcosAirBuilder/build_chain.sh` in the same repository, downloaded by `chain/nodes_in_container.sh` | Apache License 2.0, the repository's `LICENSE` at tag v3.16.4 |
 | solc image `ethereum/solc:0.8.11` | 0.8.11 | The Solidity compiler, github.com/argotorg/solidity, formerly github.com/ethereum/solidity, run by `chain/setup.sh` | GNU General Public License v3, `LICENSE.txt` at tag v0.8.11 |
+| `ubuntu:24.04` image | 24.04 | The official Ubuntu image on Docker Hub, named in `chain/docker-compose.yml`; the nodes run inside it | Each package in the image carries its own licence. Docker Hub's licence note for the image points to Canonical's Intellectual property rights policy, which says the system images and Ubuntu packages are used in accordance with the copyright licences in them |
 
-The compiler is run as a tool from its image, and no compiler code is in this repository.
+solc is a build time tool: it compiles the contract into `chain/build/`, which git ignores, and it is not shipped. No compiler code is in this repository.
