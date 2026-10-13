@@ -16,12 +16,12 @@ Open `http://127.0.0.1:3001`, ideally in a phone sized window. Chat needs a mode
 
 1. A welcome and sign in screen with three intro slides. It is designed in full, but the API has no sign in (self assessment, open item 37), so only "Try the demo" works; Face ID, Apple and Google say Coming soon, so the screen never claims a sign in that does not exist.
 2. A bottom tab bar like an iPhone app: Home, Chat, Lost card, Activity, Help.
-2. Home: the next reminder from `GET /reminders`, a large Lost card button, four one tap actions, and recent activity with the ledger's verify result.
-3. Chat: message bubbles, four suggested prompts and more on request, and a 📎 button for a message the student received, sent as `pasted_text` and shown as a quoted bubble. A paste into the message box moves there, as in `app/`.
-4. Lost card: the rescue as one card with a progress bar, driven by `rescue.do_now`. Pasting is off, and the identity answer is sent once and kept nowhere.
-5. Activity: the ledger in plain words, receipts, blocks, freezes and rescue steps, with a "Verified" badge from `GET /ledger/{user_id}/verify`; the technical entries sit behind "Advanced".
-6. Help replaces the Welcome button and the Guide tab.
-7. A light frosted glass look with the Poppins font. With "Reduce transparency" on, cards turn solid.
+3. Home: the next reminder from `GET /reminders`, a large Lost card button, four one tap actions, and recent activity with the ledger's verify result.
+4. Chat: message bubbles, four suggested prompts and more on request, and a 📎 button for a message the student received, sent as `pasted_text` and shown as a quoted bubble. A paste into the message box moves there, as in `app/`.
+5. Lost card: the rescue as one card with a progress bar, driven by `rescue.do_now`. Pasting is off, and the identity answer is sent once and kept nowhere.
+6. Activity: the ledger in plain words, receipts, blocks, freezes and rescue steps, with a "Verified" badge from `GET /ledger/{user_id}/verify`; the technical entries sit behind "Advanced".
+7. Help replaces the Welcome button and the Guide tab.
+8. A light frosted glass look with the Poppins font. With "Reduce transparency" on, cards turn solid.
 
 ## Rules it keeps
 
