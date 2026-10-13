@@ -17,7 +17,7 @@ Each line says what is checked, how it is checked, and the result of the run of 
 | 7. `cd app`, `npm ci` | Run in the clone with Node 22.23.3 | Verified |
 | 8. `npm test` | Run in `app/` | Verified: 70 tests, 70 passed |
 | 9. `npx playwright test` | Run in `app/` after `npx playwright install chromium` | Not verified: 45 passed, 1 failed. `tests/e2e/4-turn-line.spec.js:36`, DOCUMENTED SHAPE: a blocked paste puts its sentence at the top, the turn line at the bottom, fails with `Expected: "reply-blocked"`, `Received: undefined`. It fails the same way on `main` at `06b3c30` |
-| 10. CI runs both jobs, `python` and `app` | The pull request's checks | See the pull request |
+| 10. CI runs both jobs, `python` and `app` | The pull request's checks | Verified on pull request 53: `python` passed, and `app` passed with 70 of 70 unit tests and 46 of 46 Playwright tests on Ubuntu, the test of item 9 included |
 
 ## The six submission items
 
