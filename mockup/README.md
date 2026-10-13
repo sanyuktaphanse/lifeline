@@ -23,6 +23,10 @@ Open `http://127.0.0.1:3001`, ideally in a phone sized window. Chat needs a mode
 7. Help replaces the Welcome button and the Guide tab.
 8. A light frosted glass look with the Poppins font. With "Reduce transparency" on, cards turn solid.
 
+## Hosted preview
+
+When no Lifeline API answers at all, as on a Netlify link, the screens fill with sample data from `sample.js`, and the header pill says "Preview · sample data". Every sample reply carries a Sample tag and nothing moves. With the API running, the sample data is never used.
+
 ## Rules it keeps
 
 Server text is only ever set as text, never as HTML. A confirmation token lives in memory inside its card and is sent back once. Nothing is kept in browser storage. Everything is English for now; the API's replies follow the student's language, the labels do not yet.

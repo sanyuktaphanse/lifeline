@@ -3,7 +3,17 @@
 // lives in memory inside its card and is sent back once; pasted text goes in `pasted_text`, never in `text`; the
 // rescue takes only typed words and the identity answer is never stored. Nothing is kept in browser storage.
 
+import { sample } from "./sample.js";
+
 const API = "http://127.0.0.1:8000";
+// When no API answers at all, as on a hosted preview, the screens fill with labelled sample data instead.
+let usingSample = false;
+function markSample() {
+  if (usingSample) return;
+  usingSample = true;
+  const pill = document.querySelector(".demo-pill");
+  if (pill) { pill.textContent = "Preview · sample data"; pill.title = "No Lifeline server is running here, so these screens show sample data. Nothing moves."; }
+}
 const USER = "student_001"; // fixture: the demo student, fixtures/demo_user.yaml. There is no sign in yet.
 
 // ---------- tiny helpers ----------
@@ -23,6 +33,8 @@ async function call(method, path, body) {
   try {
     res = await fetch(API + path, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
   } catch {
+    const fake = sample(method, path, body);
+    if (fake !== null) { markSample(); return structuredClone(fake); }
     throw { status: 0, detail: "Lifeline's server is not running on this computer. Start it with make dev." };
   }
   let data = null;
@@ -31,7 +43,7 @@ async function call(method, path, body) {
   return data;
 }
 const errorText = (e) => (typeof e?.detail === "string" ? e.detail : e?.detail?.reasons?.join(" ") || "Something went wrong, and nothing was done.");
-const money = (amount, cur) => `${Number(amount).toLocaleString("en-SG", { maximumFractionDigits: 2 })} ${cur ?? ""}`.trim();
+const money = (amount, cur) => { const n = Number(amount); const d = Number.isInteger(n) ? 0 : 2; return `${n.toLocaleString("en-SG", { minimumFractionDigits: d, maximumFractionDigits: 2 })} ${cur ?? ""}`.trim(); };
 const when = (iso) => new Date(iso).toLocaleString("en-SG", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 const PAYEES = { landlord_sp: "your landlord in São Paulo", self_sg: "your own Singapore account" };
 const payee = (id) => PAYEES[id] ?? id;
@@ -167,7 +179,7 @@ function replyNodes(r, push, onReply) {
   for (const s of r.blocked || []) { out.push(h("div", { class: "blocked" }, "⛔ Blocked: ", s)); body = body.replace(s, ""); }
   if (r.turn_summary) body = body.replace(r.turn_summary, "");
   body = body.trim();
-  if (body) out.push(h("div", { class: "bubble bot" }, body));
+  if (body) out.push(h("div", { class: "bubble bot" }, body, r.sample ? h("span", { class: "tag" }, "Sample") : ""));
   if (r.receipt) out.push(receiptCard(r.receipt));
   if (r.freeze) out.push(h("div", { class: "bubble bot" }, `Card freeze: ${r.freeze.status.replace("_", " ")}`, r.freeze.deep_link ? h("a", { href: r.freeze.deep_link, target: "_blank", rel: "noopener" }, " Open your card app") : ""));
   if (r.cancel) out.push(h("div", { class: "bubble bot" }, `Cancel: ${r.cancel.status.replace("_", " ")}${r.cancel.reason ? ". " + r.cancel.reason : ""}`));
