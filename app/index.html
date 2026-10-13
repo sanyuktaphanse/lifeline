@@ -4,13 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lifeline</title>
+  <!-- The logo of src/logo.js, the same path, as the tab icon. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cstyle%3Epath%7Bstroke:%230b6e4f%7D%40media (prefers-color-scheme:dark)%7Bpath%7Bstroke:%233fb68b%7D%7D%3C/style%3E%3Cpath transform='translate(0 12)' d='M2 12H15L18 7L22 19L26 3L29 15L31 12H46' fill='none' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
   <script type="module" src="src/main.js"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="topbar-row">
-      <h1 class="brand">Lifeline</h1>
+      <h1 class="brand" id="brand">Lifeline</h1>
+      <button type="button" class="btn-link" id="open-welcome" data-i18n="open_welcome">Welcome</button>
       <label class="lang-picker">
         <span id="lang-label" data-i18n="language_label">Language</span>
         <select id="lang" aria-labelledby="lang-label" disabled></select>
@@ -20,15 +23,18 @@
     <p id="demo-banner" class="demo-banner" role="note" data-i18n="demo_banner">Demo only. No real money moves on any route.</p>
   </header>
   <div id="health-error" class="banner banner-error" role="alert" hidden></div>
-  <nav class="tabs" role="tablist">
+  <nav class="tabs" role="tablist" hidden>
     <button role="tab" id="tab-chat" aria-controls="view-chat" aria-selected="true" data-i18n="tab_chat">Chat</button>
     <button role="tab" id="tab-rescue" aria-controls="view-rescue" aria-selected="false" data-i18n="tab_rescue">Lost card</button>
     <button role="tab" id="tab-ledger" aria-controls="view-ledger" aria-selected="false" data-i18n="tab_ledger">Ledger</button>
+    <button role="tab" id="tab-guide" aria-controls="view-guide" aria-selected="false" data-i18n="tab_guide">Guide</button>
   </nav>
   <main>
-    <section id="view-chat" role="tabpanel" aria-labelledby="tab-chat"></section>
+    <section id="view-welcome" class="welcome" aria-labelledby="welcome-tagline" hidden></section>
+    <section id="view-chat" role="tabpanel" aria-labelledby="tab-chat" hidden></section>
     <section id="view-rescue" role="tabpanel" aria-labelledby="tab-rescue" hidden></section>
     <section id="view-ledger" role="tabpanel" aria-labelledby="tab-ledger" hidden></section>
+    <section id="view-guide" role="tabpanel" aria-labelledby="tab-guide" hidden></section>
   </main>
 </body>
 </html>

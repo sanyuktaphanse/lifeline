@@ -67,6 +67,13 @@ export function chatView(ctx, root) {
     }
   }
 
+  // Lets the Guide put an example's words in the message box. They are the app's own words, so they go in
+  // the typed box, and the paste box is left as it is.
+  ctx.fillMessage = (words) => {
+    typed.value = words;
+    typed.focus();
+  };
+
   // Lets the confirmation card (step 3) add Lifeline's answer to /confirm into the same thread.
   ctx.addToThread = (node) => {
     thread.append(node);

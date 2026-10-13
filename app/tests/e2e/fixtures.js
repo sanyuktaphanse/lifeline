@@ -87,7 +87,8 @@ export const test = base.extend({
   },
   open: async ({ page, backend }, use) => {
     await use(async () => {
-      await page.goto(`/?api=${encodeURIComponent(backend.url)}`);
+      // welcome=off skips the welcome screen, so a test can use the tabs at once.
+      await page.goto(`/?api=${encodeURIComponent(backend.url)}&welcome=off`);
       await expect(page.locator("#lang option")).not.toHaveCount(0);
     });
   },

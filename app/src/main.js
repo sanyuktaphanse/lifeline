@@ -6,6 +6,9 @@ import { applyLanguage, languagesFromHealth } from "./languages.js";
 import { chatView } from "./views/chat.js";
 import { rescueView } from "./views/rescue.js";
 import { ledgerView } from "./views/ledger.js";
+import { guideView } from "./views/guide.js";
+import { welcomeView } from "./views/welcome.js";
+import { logo } from "./logo.js";
 
 const VIEWS = {};
 
@@ -48,6 +51,8 @@ function choose(code) {
 }
 
 function showTab(name) {
+  document.getElementById("view-welcome").hidden = true;
+  document.querySelector(".tabs").hidden = false;
   for (const tab of document.querySelectorAll('[role="tab"]')) {
     const on = tab.id === `tab-${name}`;
     tab.setAttribute("aria-selected", String(on));
@@ -56,11 +61,28 @@ function showTab(name) {
   VIEWS[name]?.shown?.();
 }
 
+// The welcome takes the place of the tabs until the student continues. ?welcome=off skips it, for the tests.
+function showWelcome() {
+  document.querySelector(".tabs").hidden = true;
+  for (const panel of document.querySelectorAll('[role="tabpanel"]')) panel.hidden = true;
+  document.getElementById("view-welcome").hidden = false;
+  VIEWS.welcome.shown();
+}
+
 document.getElementById("lang").addEventListener("change", (event) => choose(event.target.value));
-for (const name of ["chat", "rescue", "ledger"]) {
+for (const name of ["chat", "rescue", "ledger", "guide"]) {
   document.getElementById(`tab-${name}`).addEventListener("click", () => showTab(name));
 }
+document.getElementById("open-welcome").addEventListener("click", showWelcome);
+document.getElementById("brand").replaceChildren(logo(24));
 chatView(ctx, document.getElementById("view-chat"));
 rescueView(ctx, document.getElementById("view-rescue"));
 VIEWS.ledger = ledgerView(ctx, document.getElementById("view-ledger"));
+VIEWS.guide = guideView(ctx, document.getElementById("view-guide"), (words) => {
+  showTab("chat");
+  ctx.fillMessage(words);
+});
+VIEWS.welcome = welcomeView(ctx, document.getElementById("view-welcome"), () => showTab("chat"));
+if (new URLSearchParams(location.search).get("welcome") === "off") showTab("chat");
+else showWelcome();
 loadLanguages();
