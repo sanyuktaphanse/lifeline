@@ -155,3 +155,52 @@ fieldset.choices legend { font-weight: 600; font-size: 0.9rem; margin-block-end:
 .choice input { width: 20px; height: 20px; }
 #view-ledger h2 { margin: 0; font-size: 1.1rem; align-self: center; }
 .status-list .card { margin: 0; }
+
+/* Logo: the mark takes the accent colour through currentColor, so it follows the light and dark themes. */
+.logo { display: inline-flex; align-items: center; gap: calc(var(--logo-size) * 0.3); color: var(--accent); }
+.logo-mark { flex: none; display: block; }
+.logo-word { color: var(--text); font-weight: 700; font-size: calc(var(--logo-size) * 0.8); letter-spacing: -0.01em; line-height: 1; }
+.brand { display: flex; align-items: center; }
+.topbar-row { flex-wrap: wrap; }
+.btn-link {
+  margin-inline-start: auto; min-height: 40px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: none; color: var(--accent); font-weight: 600; cursor: pointer;
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Welcome */
+.welcome { display: flex; flex-direction: column; gap: 16px; }
+.welcome-logo { display: flex; justify-content: center; padding-block-start: 8px; }
+.welcome-tagline { margin: 0; text-align: center; font-size: 1.1rem; font-weight: 600; }
+.welcome-cards {
+  display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth;
+  scrollbar-width: none; padding-block-end: 2px;
+}
+.welcome-cards::-webkit-scrollbar { display: none; }
+.welcome-card { flex: 0 0 100%; scroll-snap-align: start; min-height: 220px; }
+.welcome-card h2 { margin: 0; font-size: 1.15rem; }
+.welcome-card ul { margin: 0; padding-inline-start: 1.2em; display: flex; flex-direction: column; gap: 8px; }
+.welcome-nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.welcome-dots { display: flex; gap: 4px; }
+.welcome-dot { width: 32px; height: 32px; border: 0; background: none; cursor: pointer; position: relative; }
+.welcome-dot::before {
+  content: ""; position: absolute; inset: 11px; border-radius: 50%; background: var(--line);
+}
+.welcome-dot[aria-current="true"]::before { background: var(--accent); }
+#welcome-next { min-width: 120px; }
+
+/* Guide */
+.guide-section { display: flex; flex-direction: column; gap: 6px; padding-block: 12px; border-block-end: 1px solid var(--line); }
+.guide-section h3 { margin: 0; font-size: 1.05rem; }
+.guide-section p { margin: 0; }
+.examples { display: flex; flex-direction: column; gap: 6px; margin-block-start: 4px; }
+.example {
+  text-align: start; min-height: 44px; padding: 10px 12px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--surface); color: var(--text);
+}
+.example::before { content: "\201C"; color: var(--accent); font-weight: 700; margin-inline-end: 2px; }
+.example::after { content: "\201D"; color: var(--accent); font-weight: 700; margin-inline-start: 2px; }
+.guide-protect { display: flex; flex-direction: column; margin-block-start: 8px; padding: 12px 16px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); }
+.guide-protect h2 { margin: 0; font-size: 1.15rem; }
+.guide-protect .guide-section:last-of-type { border-block-end: 0; }
+.guide-verify { display: flex; flex-direction: column; gap: 8px; padding-block-start: 8px; }
