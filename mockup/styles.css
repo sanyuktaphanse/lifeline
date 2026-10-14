@@ -647,3 +647,9 @@ body.signin #view > .btn { width: 100%; }
 /* Question screens stack from the top instead of spreading over the height */
 body.signin #view[data-screen="plan"], body.signin #view[data-screen="setup"] { justify-content: flex-start; gap: 12px; display: flex; flex-direction: column; }
 #view[data-screen="plan"] .plan-links { margin-top: 2px; }
+
+.info-card { background: var(--purple-soft); border-color: transparent; box-shadow: none; padding: 14px 16px; }
+.info-card h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 15px; color: var(--purple); }
+.info-card h3 .i { width: 17px; height: 17px; }
+.info-card ul { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 6px; font-size: 14.5px; }
+.info-card p { margin: 0; }

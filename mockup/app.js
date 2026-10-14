@@ -166,13 +166,14 @@ function plan(arg = {}) {
     paint(value); return row;
   };
   const card = t("cards");
-  let body, ok = () => true;
+  let body, after = "", ok = () => true;
   if (i === 0) {
-    const help = () => extra.replaceChildren(draft.card === "unsure" ? h("div", { class: "info" }, h("h3", {}, t("unsureTitle")),
-      h("ul", {}, h("li", {}, t("unsureTravel")), trip?.study === "sg" ? h("li", {}, t("unsureLocal")) : "", h("li", {}, t("unsureHome"))), h("p", { class: "muted small" }, t("unsureNote"))) : "");
+    // Always shown, in its own card under the question, so a student who has never heard of these cards can choose.
+    after = h("section", { class: "card info-card" }, h("h3", {}, icon("sparkle"), h("span", {}, t("unsureTitle"))),
+      h("ul", {}, h("li", {}, t("unsureTravel")), trip?.study === "sg" ? h("li", {}, t("unsureLocal")) : "", h("li", {}, t("unsureHome"))), h("p", { class: "muted small" }, t("unsureNote")));
     body = [h("h2", {}, t("qCard")), h("p", { class: "muted small" }, t("qCardWhy")),
-      chips(Object.fromEntries(cardKeys.map((k) => [k, card[k]])), draft.card, (k) => { draft.card = k; help(); ready(); }), extra];
-    help(); ok = () => !!draft.card;
+      chips(Object.fromEntries(cardKeys.map((k) => [k, card[k]])), draft.card, (k) => { draft.card = k; ready(); })];
+    ok = () => !!draft.card;
   } else if (i === 1) {
     const which = h("div", {});
     const paintWhich = () => which.replaceChildren(draft.backup === null ? h("p", { class: "note" }, t("backupNoNote"), draft.card === "wise" && trip?.study === "sg" ? " " + t("wiseWait") : "")
@@ -205,6 +206,7 @@ function plan(arg = {}) {
     h("div", { class: "steps plan-steps", "aria-hidden": "true" }, Array.from({ length: PLAN_STEPS }, (_, n) => h("span", { class: n <= i ? "on" : "" }))),
     h("p", { class: "muted small plan-count" }, t("planStep", { n: i + 1, total: PLAN_STEPS })),
     h("section", { class: "card q-card" }, body),
+    after,
     cont,
     h("div", { class: "plan-links" },
       h("button", { class: "link", onclick: () => (i ? go("plan", { i: i - 1, back }) : go(back || "setup")) }, t("back")),
