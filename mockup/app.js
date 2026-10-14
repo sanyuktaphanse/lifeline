@@ -70,8 +70,8 @@ const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden
 // ---------- navigation and language ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { welcome, setup, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
-const FULL = new Set(["welcome", "setup", "hello", "soon", "lost"]);
+const screens = { welcome, setup, plan, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
+const FULL = new Set(["welcome", "setup", "plan", "hello", "soon", "lost"]);
 let currentScreen = "welcome";
 function go(name, arg) {
   currentScreen = name;
@@ -79,6 +79,7 @@ function go(name, arg) {
   view.replaceChildren();
   view.classList.remove("chatting");
   document.body.classList.toggle("signin", FULL.has(name));
+  view.dataset.screen = name;
   screens[name](arg);
   window.scrollTo(0, 0);
   view.focus({ preventScroll: true });
@@ -127,7 +128,7 @@ function welcome() {
 let trip = null;
 function setup(next = "hello") {
   const pickd = { home: trip?.home ?? null, study: trip?.study ?? null, purpose: trip?.purpose ?? null };
-  const cont = h("button", { class: "btn", onclick: () => { trip = { ...pickd }; go(next); } }, t("cont"));
+  const cont = h("button", { class: "btn", onclick: () => { trip = { ...pickd }; go(next === "hello" ? "plan" : next, next === "hello" ? { i: 0 } : undefined); } }, t("cont"));
   const group = (key, q, why, options) => {
     const row = h("div", { class: "chips wrap pick" });
     const paint = () => { row.replaceChildren(...Object.entries(options).map(([k, label]) => h("button", { class: "chip", "aria-pressed": String(pickd[key] === k), onclick: () => { pickd[key] = k; paint(); ready(); } }, label))); };
@@ -148,6 +149,81 @@ function setup(next = "hello") {
     cont, h("button", { class: "link center", onclick: () => { trip = null; go(next); } }, t("skip")));
   ready();
 }
+// ---------- Plan: the safety net, asked one question at a time ----------
+// Kept only in memory. The safety answer itself is never kept, only that one was given. The backend's rescue still
+// runs the demo student's plan in fixtures/demo_user.yaml, and the question step says so.
+let mine = null;
+const PLAN_STEPS = 5;
+function plan(arg = {}) {
+  const i = arg.i ?? 0, back = arg.back ?? null;
+  const draft = mine ? { ...mine } : { card: null, backup: undefined, question: null, answered: false, contactName: "", channel: null, emergency: null };
+  const cardKeys = trip?.study === "sg" ? ["wise", "revolut", "youtrip", "dbs", "ocbc", "uob", "home", "unsure"] : ["wise", "revolut", "home", "unsure"];
+  const cont = h("button", { class: "btn" }, t("cont"));
+  const extra = h("div", {});
+  const chips = (options, value, onPick) => {
+    const row = h("div", { class: "chips wrap pick" });
+    const paint = (v) => row.replaceChildren(...Object.entries(options).map(([k, label]) => h("button", { class: "chip", "aria-pressed": String(v === k), onclick: () => { onPick(k); paint(k); } }, label)));
+    paint(value); return row;
+  };
+  const card = t("cards");
+  let body, ok = () => true;
+  if (i === 0) {
+    const help = () => extra.replaceChildren(draft.card === "unsure" ? h("div", { class: "info" }, h("h3", {}, t("unsureTitle")),
+      h("ul", {}, h("li", {}, t("unsureTravel")), trip?.study === "sg" ? h("li", {}, t("unsureLocal")) : "", h("li", {}, t("unsureHome"))), h("p", { class: "muted small" }, t("unsureNote"))) : "");
+    body = [h("h2", {}, t("qCard")), h("p", { class: "muted small" }, t("qCardWhy")),
+      chips(Object.fromEntries(cardKeys.map((k) => [k, card[k]])), draft.card, (k) => { draft.card = k; help(); ready(); }), extra];
+    help(); ok = () => !!draft.card;
+  } else if (i === 1) {
+    const which = h("div", {});
+    const paintWhich = () => which.replaceChildren(draft.backup === null ? h("p", { class: "note" }, t("backupNoNote"), draft.card === "wise" && trip?.study === "sg" ? " " + t("wiseWait") : "")
+      : draft.backup !== undefined ? h("div", {}, h("h3", {}, t("qBackupWhich")), chips(Object.fromEntries(cardKeys.filter((k) => k !== draft.card && k !== "unsure").map((k) => [k, card[k]])), draft.backup === "yes" ? null : draft.backup, (k) => { draft.backup = k; ready(); })) : "");
+    body = [h("h2", {}, t("qBackup")), h("p", { class: "muted small" }, t("qBackupWhy")),
+      chips({ yes: t("yes"), no: t("noJustOne") }, draft.backup === undefined ? null : draft.backup === null ? "no" : "yes", (k) => { draft.backup = k === "no" ? null : "yes"; paintWhich(); ready(); }), which];
+    paintWhich(); ok = () => draft.backup === null || (draft.backup !== undefined && draft.backup !== "yes");
+  } else if (i === 2) {
+    const qs = t("questions");
+    const sel = h("select", { class: "field", "aria-label": t("qQuestion"), onchange: (e) => { draft.question = Number(e.target.value); ready(); } },
+      h("option", { value: "", disabled: true, selected: draft.question === null }, "…"), qs.map((q, n) => h("option", { value: String(n), selected: draft.question === n }, q)));
+    const ans = typed(h("input", { class: "field", type: "password", autocomplete: "off", placeholder: t("yourAnswer"), "aria-label": t("yourAnswer"), oninput: (e) => { draft.answered = e.target.value.trim().length > 0; ready(); } }));
+    body = [h("h2", {}, t("qQuestion")), h("p", { class: "muted small" }, t("qQuestionWhy")), sel, ans, h("p", { class: "note" }, t("answerNote"))];
+    ok = () => draft.question !== null && (draft.answered || mine?.answered);
+  } else if (i === 3) {
+    const name = h("input", { class: "field", type: "text", autocomplete: "off", placeholder: t("contactName"), "aria-label": t("contactName"), value: draft.contactName, oninput: (e) => { draft.contactName = e.target.value; ready(); } });
+    body = [h("h2", {}, t("qContact")), h("p", { class: "muted small" }, t("qContactWhy")), name,
+      chips(t("channels"), draft.channel, (k) => { draft.channel = k; ready(); }),
+      h("button", { class: "link", onclick: () => { draft.contactName = ""; draft.channel = null; mine = draft; next(); } }, t("noOne"))];
+    ok = () => draft.contactName.trim() && draft.channel;
+  } else {
+    body = [h("h2", {}, t("qEmergency")), h("p", { class: "muted small" }, t("qEmergencyWhy")),
+      chips({ 100: money(100, "SGD"), 200: money(200, "SGD"), 300: money(300, "SGD"), 0: t("none") }, draft.emergency === null ? null : String(draft.emergency), (k) => { draft.emergency = Number(k); ready(); })];
+    ok = () => draft.emergency !== null;
+  }
+  function ready() { cont.disabled = !ok(); }
+  function next() { mine = draft; i + 1 < PLAN_STEPS ? go("plan", { i: i + 1, back }) : go(back || "hello"); }
+  cont.addEventListener("click", next);
+  view.append(
+    h("div", { class: "steps plan-steps", "aria-hidden": "true" }, Array.from({ length: PLAN_STEPS }, (_, n) => h("span", { class: n <= i ? "on" : "" }))),
+    h("p", { class: "muted small plan-count" }, t("planStep", { n: i + 1, total: PLAN_STEPS })),
+    h("section", { class: "card q-card" }, body),
+    cont,
+    h("div", { class: "plan-links" },
+      h("button", { class: "link", onclick: () => (i ? go("plan", { i: i - 1, back }) : go(back || "setup")) }, t("back")),
+      back ? "" : h("button", { class: "link", onclick: () => { mine = null; go("hello"); } }, t("skip"))));
+  ready();
+}
+// The safety net as the student set it, or the demo student's when they skipped.
+function netItems() {
+  if (!mine) return t("plan").map(([, what, sub], n) => [["card", "buoy", "lock", "cash"][n], what, sub]);
+  const card = t("cards");
+  return [
+    ["card", t("sMain"), mine.card && mine.card !== "unsure" ? card[mine.card] : t("notChosen")],
+    ["buoy", t("sBackup"), mine.backup ? card[mine.backup] : t("noneYet")],
+    ["lock", t("sQuestion"), mine.question !== null ? `${t("questions")[mine.question]} · ${t("answerSet")}` : t("noneYet")],
+    ["family", t("sContact"), mine.contactName ? t("contactVia", { name: mine.contactName, channel: t("channels")[mine.channel] }) : t("noneYet")],
+    ["cash", t("sEmergency"), mine.emergency ? t("upTo", { amount: money(mine.emergency, "SGD") }) : t("off")],
+  ];
+}
+
 // Every country, named in the page language by the browser. Only those with checked rules in rails/knowledge can be
 // picked today: China, Brazil and India as home, Singapore as the place of study. The rest show as coming soon.
 const COUNTRIES = "AF AX AL DZ AS AD AO AI AG AR AM AW AU AT AZ BS BH BD BB BY BE BZ BJ BM BT BO BA BW BR VG BN BG BF BI CV KH CM CA KY CF TD CL CN CO KM CG CD CK CR CI HR CU CW CY CZ DK DJ DM DO EC EG SV GQ ER EE SZ ET FK FO FJ FI FR GF PF GA GM GE DE GH GI GR GL GD GP GU GT GG GN GW GY HT HN HK HU IS IN ID IR IQ IE IM IL IT JM JP JE JO KZ KE KI XK KW KG LA LV LB LS LR LY LI LT LU MO MG MW MY MV ML MT MH MQ MR MU YT MX FM MD MC MN ME MS MA MZ MM NA NR NP NL NC NZ NI NE NG NU KP MK MP NO OM PK PW PS PA PG PY PE PH PL PT PR QA RE RO RU RW WS SM ST SA SN RS SC SL SG SX SK SI SB SO ZA KR SS ES LK SD SR SE CH SY TW TJ TZ TH TL TG TO TT TN TR TM TC TV UG UA AE GB US UY UZ VU VA VE VN WF EH YE ZM ZW".split(" ");
@@ -198,11 +274,11 @@ function routeTips(limit = Infinity) {
 // After Try the demo: the demo plan in fixtures/demo_user.yaml as docs/api.md, "Rescue", states it. Nothing is asked.
 function hello() {
   view.append(
-    h("div", { class: "hello" }, (() => { const o = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(o); return o; })(), h("h1", {}, t("helloTitle")), trip ? h("p", { class: "trip-pill" }, tripLine()) : "", h("p", {}, trip ? t("helloSubTrip") : t("helloSub"))),
-    h("section", { class: "card" }, h("h2", {}, t("safetyNet")), h("p", { class: "muted small" }, t("safetyIntro")),
-      h("ul", { class: "list" }, t("plan").map(([, what, sub], i) => h("li", {}, h("span", { class: "emoji ib" }, icon(["card", "buoy", "lock", "cash"][i])), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
+    h("div", { class: "hello" }, (() => { const o = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(o); return o; })(), h("h1", {}, t("helloTitle")), trip ? h("p", { class: "trip-pill" }, tripLine()) : "", h("p", {}, mine ? t("mineSub") : trip ? t("helloSubTrip") : t("helloSub"))),
+    h("section", { class: "card" }, h("h2", {}, t("safetyNet")), h("p", { class: "muted small" }, mine ? t("netIntroMine") : t("safetyIntro")),
+      h("ul", { class: "list" }, netItems().map(([ic, what, sub]) => h("li", {}, h("span", { class: "emoji ib" }, icon(ic)), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
     trip ? routeTips(3) : "",
-    h("p", { class: "muted small", style: "text-align:center" }, t("ownPlanSoon")),
+    mine ? "" : h("p", { class: "muted small", style: "text-align:center" }, t("ownPlanSoon")),
     slider(t("slideStart"), t("getStarted"), () => go("home")),
   );
 }
@@ -596,10 +672,11 @@ function me() {
   view.append(
     h("section", { class: "card trip-card" }, h("div", { class: "bal-head" }, h("h2", { style: "margin:0;flex:1" }, t("yourTrip")), h("button", { class: "link", onclick: () => go("setup", "me") }, t("change"))),
       h("p", { style: "margin:6px 0 0" }, trip ? tripLine() : h("span", { class: "muted" }, t("setupSub")))),
-    h("h1", {}, t("meTitle")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("meSub")),
+    h("div", { class: "bal-head" }, h("h1", { style: "flex:1" }, t("meTitle")), h("button", { class: "link", onclick: () => go("plan", { i: 0, back: "me" }) }, t("changePlan"))),
+    h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("meSub")),
     h("section", { class: "card" }, h("ul", { class: "list" },
-      t("plan").map(([, what, sub], i) => item(["card", "buoy", "lock", "cash"][i], what, sub)),
-      item("family", t("trusted"), t("trustedSub")))),
+      netItems().map(([ic, what, sub]) => item(ic, what, sub)),
+      mine ? "" : item("family", t("trusted"), t("trustedSub")))),
     routeTips(),
     h("section", { class: "card" }, h("h2", {}, t("account")), h("ul", { class: "list" }, item("user", t("signedInAs"), t("signedInSub")))),
     h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), icon("chev", "chev-r")));

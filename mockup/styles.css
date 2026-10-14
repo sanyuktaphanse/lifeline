@@ -625,3 +625,25 @@ body.signin #view > .btn { max-width: 380px; margin: 0 auto 6px; }
 .cp-item.cp-soon .cp-flag { opacity: 0.45; filter: grayscale(0.6); }
 .cp-flag { font-size: 20px; line-height: 1; width: 24px; text-align: center; }
 .cp-none { margin: 10px; }
+
+/* Safety net questions */
+.plan-steps { margin: 18px 4px 6px; }
+.plan-count { margin: 0 4px 12px; }
+.q-card { display: grid; gap: 10px; }
+.q-card h2 { margin: 2px 0 0; font-size: 20px; }
+.q-card h3 { margin: 6px 0 6px; font-size: 15px; }
+.q-card > p { margin: 0; }
+.q-card .chips.wrap { margin: 2px 0 0; }
+.q-card select.field { width: 100%; min-height: 50px; padding: 0 12px; border-radius: 14px; border: 1px solid var(--edge); background: #FFFFFF; font: inherit; font-size: 15.5px; color: var(--ink); }
+.q-card input.field { min-height: 50px; }
+.info { background: var(--purple-soft); border-radius: 14px; padding: 12px 14px; }
+.info h3 { margin: 0 0 6px; }
+.info ul { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 6px; font-size: 14.5px; }
+.info p { margin: 0; }
+.note { margin: 2px 0 0; padding: 10px 12px; border-radius: 12px; background: rgba(31, 27, 45, 0.04); color: var(--ink-soft); font-size: 13.5px; }
+.plan-links { display: flex; justify-content: space-between; margin: 6px 6px 0; }
+body.signin #view > .btn { width: 100%; }
+
+/* Question screens stack from the top instead of spreading over the height */
+body.signin #view[data-screen="plan"], body.signin #view[data-screen="setup"] { justify-content: flex-start; gap: 12px; display: flex; flex-direction: column; }
+#view[data-screen="plan"] .plan-links { margin-top: 2px; }
