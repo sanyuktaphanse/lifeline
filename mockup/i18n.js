@@ -6,6 +6,7 @@
 export const LANGS = [["en", "EN", "English"], ["pt", "PT", "Português"], ["zh", "中", "中文"]];
 
 const en = {
+  relLabel: "Relationship", rels: {"parent": "Parent", "sibling": "Sibling", "partner": "Partner", "relative": "Other family", "friend": "Friend"}, phoneLabel: "Phone number, with country code", emailLabel: "Email (optional)", reachLabel: "How should they be told?", onDevice: "Their number and email stay on this phone. Lifeline's servers and AI only see the name and how to reach them.", phoneOrEmail: "Add a phone number or an email.",
   planStep: "Step {n} of {total}",
   back: "Back",
   qCard: "Which card will you use abroad?",
@@ -30,7 +31,7 @@ const en = {
   qContact: "Who should Lifeline tell if your card is lost?",
   qContactWhy: "Lifeline only sends them a short notice. It never sends them money.",
   contactName: "Their name",
-  channels: {"whatsapp": "WhatsApp", "wechat": "WeChat", "telegram": "Telegram", "sms": "SMS"},
+  channels: {"whatsapp": "WhatsApp", "wechat": "WeChat", "telegram": "Telegram", "sms": "SMS", "email": "Email"},
   noOne: "No one for now",
   qEmergency: "If you're stuck, how much can Lifeline send to your own account?",
   qEmergencyWhy: "Only to your own account, and only after you say yes.",
@@ -162,6 +163,7 @@ const en = {
 };
 
 const pt = {
+  relLabel: "Relação", rels: {"parent": "Pai ou mãe", "sibling": "Irmão ou irmã", "partner": "Parceiro ou parceira", "relative": "Outro familiar", "friend": "Amigo ou amiga"}, phoneLabel: "Telefone, com código do país", emailLabel: "E-mail (opcional)", reachLabel: "Como a pessoa deve ser avisada?", onDevice: "O telefone e o e-mail ficam só neste celular. Os servidores e a IA do Lifeline só veem o nome e o canal.", phoneOrEmail: "Adicione um telefone ou um e-mail.",
   planStep: "Etapa {n} de {total}",
   back: "Voltar",
   qCard: "Qual cartão você vai usar no exterior?",
@@ -186,7 +188,7 @@ const pt = {
   qContact: "Quem o Lifeline deve avisar se você perder o cartão?",
   qContactWhy: "O Lifeline só envia um aviso curto. Nunca envia dinheiro para essa pessoa.",
   contactName: "Nome da pessoa",
-  channels: {"whatsapp": "WhatsApp", "wechat": "WeChat", "telegram": "Telegram", "sms": "SMS"},
+  channels: {"whatsapp": "WhatsApp", "wechat": "WeChat", "telegram": "Telegram", "sms": "SMS", "email": "Email"},
   noOne: "Ninguém por enquanto",
   qEmergency: "Se você ficar sem saída, quanto o Lifeline pode enviar para sua própria conta?",
   qEmergencyWhy: "Só para sua própria conta, e só depois do seu sim.",
@@ -310,6 +312,7 @@ const pt = {
 };
 
 const zh = {
+  relLabel: "关系", rels: {"parent": "父母", "sibling": "兄弟姐妹", "partner": "伴侣", "relative": "其他亲属", "friend": "朋友"}, phoneLabel: "电话号码（含国家代码）", emailLabel: "电子邮箱（选填）", reachLabel: "通过什么方式通知对方？", onDevice: "对方的电话和邮箱只保存在这部手机上。Lifeline 的服务器和 AI 只能看到名字和通知方式。", phoneOrEmail: "请填写电话号码或电子邮箱。",
   planStep: "第 {n} 步，共 {total} 步",
   back: "返回",
   qCard: "您在海外会用哪张卡？",
@@ -334,7 +337,7 @@ const zh = {
   qContact: "卡丢了时，Lifeline 应该通知谁？",
   qContactWhy: "Lifeline 只会发一条简短通知，绝不会给对方转钱。",
   contactName: "对方的名字",
-  channels: {"whatsapp": "WhatsApp", "wechat": "微信", "telegram": "Telegram", "sms": "短信"},
+  channels: {"whatsapp": "WhatsApp", "wechat": "微信", "telegram": "Telegram", "sms": "短信", "email": "电子邮件"},
   noOne: "暂时不需要",
   qEmergency: "如果您陷入困境，Lifeline 最多可以向您自己的账户转多少钱？",
   qEmergencyWhy: "只转入您自己的账户，并且须经您同意。",

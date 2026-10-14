@@ -657,3 +657,4 @@ body.signin #view[data-screen="plan"], body.signin #view[data-screen="setup"] { 
 /* Countries without checked rules can be picked too; only the weight differs */
 .cp-item.cp-soon { color: var(--ink); cursor: pointer; }
 .cp-item.cp-soon .cp-flag { opacity: 1; filter: none; }
+.note .i { width: 14px; height: 14px; vertical-align: -2px; }

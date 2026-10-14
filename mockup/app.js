@@ -189,11 +189,17 @@ function plan(arg = {}) {
     body = [h("h2", {}, t("qQuestion")), h("p", { class: "muted small" }, t("qQuestionWhy")), sel, ans, h("p", { class: "note" }, t("answerNote"))];
     ok = () => draft.question !== null && (draft.answered || mine?.answered);
   } else if (i === 3) {
-    const name = h("input", { class: "field", type: "text", autocomplete: "off", placeholder: t("contactName"), "aria-label": t("contactName"), value: draft.contactName, oninput: (e) => { draft.contactName = e.target.value; ready(); } });
-    body = [h("h2", {}, t("qContact")), h("p", { class: "muted small" }, t("qContactWhy")), name,
-      chips(t("channels"), draft.channel, (k) => { draft.channel = k; ready(); }),
-      h("button", { class: "link", onclick: () => { draft.contactName = ""; draft.channel = null; mine = draft; next(); } }, t("noOne"))];
-    ok = () => draft.contactName.trim() && draft.channel;
+    // The number and email stay in this page, as they would stay on the phone in a real app. Nothing here sends them
+    // to the API: decision 4 keeps a trusted contact on the server to a name and a channel.
+    const field = (key, type, label, auto) => h("input", { class: "field", type, autocomplete: auto, placeholder: label, "aria-label": label, value: draft[key] || "", oninput: (e) => { draft[key] = e.target.value; ready(); } });
+    body = [h("h2", {}, t("qContact")), h("p", { class: "muted small" }, t("qContactWhy")),
+      field("contactName", "text", t("contactName"), "off"),
+      h("h3", {}, t("relLabel")), chips(t("rels"), draft.rel, (k) => { draft.rel = k; ready(); }),
+      field("phone", "tel", t("phoneLabel"), "off"), field("email", "email", t("emailLabel"), "off"),
+      h("h3", {}, t("reachLabel")), chips(t("channels"), draft.channel, (k) => { draft.channel = k; ready(); }),
+      h("p", { class: "note" }, icon("lock"), " ", t("onDevice")),
+      h("button", { class: "link", onclick: () => { Object.assign(draft, { contactName: "", rel: null, phone: "", email: "", channel: null }); mine = draft; next(); } }, t("noOne"))];
+    ok = () => draft.contactName.trim() && draft.rel && draft.channel && ((draft.phone || "").replace(/\D/g, "").length >= 6 || /.+@.+\..+/.test(draft.email || ""));
   } else {
     body = [h("h2", {}, t("qEmergency")), h("p", { class: "muted small" }, t("qEmergencyWhy")),
       chips({ 100: money(100, "SGD"), 200: money(200, "SGD"), 300: money(300, "SGD"), 0: t("none") }, draft.emergency === null ? null : String(draft.emergency), (k) => { draft.emergency = Number(k); ready(); })];
@@ -221,7 +227,7 @@ function netItems() {
     ["card", t("sMain"), mine.card && mine.card !== "unsure" ? card[mine.card] : t("notChosen")],
     ["buoy", t("sBackup"), mine.backup ? card[mine.backup] : t("noneYet")],
     ["lock", t("sQuestion"), mine.question !== null ? `${t("questions")[mine.question]} · ${t("answerSet")}` : t("noneYet")],
-    ["family", t("sContact"), mine.contactName ? t("contactVia", { name: mine.contactName, channel: t("channels")[mine.channel] }) : t("noneYet")],
+    ["family", t("sContact"), mine.contactName ? t("contactVia", { name: mine.rel ? `${mine.contactName} (${t("rels")[mine.rel]})` : mine.contactName, channel: t("channels")[mine.channel] }) : t("noneYet")],
     ["cash", t("sEmergency"), mine.emergency ? t("upTo", { amount: money(mine.emergency, "SGD") }) : t("off")],
   ];
 }
