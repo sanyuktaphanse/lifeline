@@ -99,7 +99,7 @@ function welcome() {
     h("div", { class: "w-mid" }, orb),
     h("div", { class: "w-bottom" },
       h("button", { class: "btn", onclick: () => go("hello") }, t("tryDemo")),
-      h("div", { class: "sso-row" }, icon("Face ID", "🙂"), icon("Apple", "A"), icon("Google", "G")),
+      h("div", { class: "sso-row" }, icon("Face ID", "🙂"), icon("Apple", h("img", { src: "icons/apple.png", alt: "" })), icon("Google", h("img", { src: "icons/google.png", alt: "" }))),
       h("p", { class: "fine" }, t("signinSoon"))),
   );
 }

@@ -427,3 +427,4 @@ textarea::placeholder, input::placeholder { color: #8A8599; }
 }
 .monitor .trace { stroke: #5B3FD6; filter: drop-shadow(0 0 4px rgba(91,63,214,0.4)); }
 .lost .code { color: var(--red-ink); }
+.sso-dot img { width: 20px; height: 20px; object-fit: contain; }
