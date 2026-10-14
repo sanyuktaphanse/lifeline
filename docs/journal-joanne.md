@@ -27,10 +27,16 @@ The agent prefers routes that are not simulated. Because the fixture bank wire s
 3. The translator, which no one has built yet.
 4. The deployment guide.
 
-## 14 October 2026: Wise balances
+# 14 October 2026
+
+## What I did
 
 The mockup's balance card showed the demo fixture. I added `WiseSandboxClient.balances()`, which reads the profile's everyday balances from Wise's "List Balances for a Profile" call, so a connected Wise sandbox account can supply real numbers. Savings balances and balances the student has hidden are left out, and a balance with no readable amount raises instead of showing zero. Four tests in `tests/test_wise_sandbox.py` cover it against the fake Wise server.
 
+## What I learned
+
 Revolut has no API for personal accounts, and Singapore banks need open banking partners, so Wise is the only card whose balance Lifeline can read today.
 
-Next: an API endpoint that returns these balances, which needs Sanyukta's agreement, then the mockup's balance card reads it.
+## What is next
+
+An API endpoint that returns these balances, which needs Sanyukta's agreement, then the mockup's balance card reads it.
