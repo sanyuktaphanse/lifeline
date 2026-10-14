@@ -6,6 +6,19 @@
 export const LANGS = [["en", "EN", "English"], ["pt", "PT", "Português"], ["zh", "中", "中文"]];
 
 const en = {
+  bookTitle: "Book and pay safely",
+  bookSub: "Flights, stays and rent abroad: where to start, and how to avoid the scams aimed at students.",
+  bookBanner: "Booking flights or a place to stay?",
+  bookBannerSub: "Book and pay safely",
+  checkTitle: "Before you book or pay",
+  checks: ["Open the booking app or website yourself. Don't book from a link someone sent you.", "If a host or landlord asks you to pay outside the booking app, by bank transfer or in a chat, stop. That's a common way fake listings take money.", "Pay by card or a traceable transfer. Never by gift card or crypto.", "Not sure about a message? Let Lifeline check it before you pay."],
+  checkBtn: "Check a booking message",
+  depositTitle: "Before you pay a rent deposit",
+  deposit: ["You've seen the place, in person or on a live video call.", "The landlord's name matches the agreement.", "You have a written agreement with the rent, deposit and dates.", "You're paying a traceable account, and you'll get a receipt."],
+  appsTitle: "Apps students often use",
+  appsNote: "Lifeline isn't partnered with or paid by any of these apps. Names only, so you know where to start.",
+  appGroups: [["Flights", [["Skyscanner", "Compares fares across airlines and booking sites"], ["Trip.com", "Flights and hotels in one app"], ["Singapore Airlines", "Or any airline's own app, to book direct"]]], ["Places to stay", [["Trip.com", "Hotels, often bundled with flights"], ["Trivago", "Compares hotel prices across booking sites"]]], ["Paying abroad", [["YouTrip", "A travel card for spending in many currencies"], ["HeyMax", "Collects rewards on spending and travel bookings"]]]],
+  helpBook: "Book and pay safely",
   relLabel: "Relationship", rels: {"parent": "Parent", "sibling": "Sibling", "partner": "Partner", "relative": "Other family", "friend": "Friend"}, phoneLabel: "Phone number, with country code", emailLabel: "Email (optional)", reachLabel: "How should they be told?", onDevice: "Their number and email stay on this phone. Lifeline's servers and AI only see the name and how to reach them.", phoneOrEmail: "Add a phone number or an email.",
   planStep: "Step {n} of {total}",
   back: "Back",
@@ -163,6 +176,19 @@ const en = {
 };
 
 const pt = {
+  bookTitle: "Reserve e pague com segurança",
+  bookSub: "Voos, hospedagem e aluguel no exterior: por onde começar e como evitar os golpes contra estudantes.",
+  bookBanner: "Vai reservar voo ou hospedagem?",
+  bookBannerSub: "Reserve e pague com segurança",
+  checkTitle: "Antes de reservar ou pagar",
+  checks: ["Abra você mesmo o app ou site de reservas. Não reserve por um link que alguém mandou.", "Se um anfitrião ou locador pedir pagamento fora do app de reservas, por transferência ou no chat, pare. É um jeito comum de anúncios falsos levarem dinheiro.", "Pague com cartão ou transferência rastreável. Nunca com vale-presente ou cripto.", "Na dúvida sobre uma mensagem? Deixe o Lifeline conferir antes de pagar."],
+  checkBtn: "Conferir uma mensagem de reserva",
+  depositTitle: "Antes de pagar o depósito do aluguel",
+  deposit: ["Você viu o lugar, pessoalmente ou em uma chamada de vídeo ao vivo.", "O nome do locador é o mesmo do contrato.", "Você tem um contrato escrito com aluguel, depósito e datas.", "Você paga para uma conta rastreável e vai receber um recibo."],
+  appsTitle: "Apps que estudantes costumam usar",
+  appsNote: "O Lifeline não tem parceria nem recebe nada desses apps. Só os nomes, para você saber por onde começar.",
+  appGroups: [["Voos", [["Skyscanner", "Compara tarifas entre companhias e sites"], ["Trip.com", "Voos e hotéis em um app"], ["Singapore Airlines", "Ou o app da própria companhia, para reservar direto"]]], ["Hospedagem", [["Trip.com", "Hotéis, muitas vezes junto com voos"], ["Trivago", "Compara preços de hotéis entre sites"]]], ["Pagar no exterior", [["YouTrip", "Cartão de viagem para gastar em várias moedas"], ["HeyMax", "Junta recompensas em gastos e reservas de viagem"]]]],
+  helpBook: "Reserve e pague com segurança",
   relLabel: "Relação", rels: {"parent": "Pai ou mãe", "sibling": "Irmão ou irmã", "partner": "Parceiro ou parceira", "relative": "Outro familiar", "friend": "Amigo ou amiga"}, phoneLabel: "Telefone, com código do país", emailLabel: "E-mail (opcional)", reachLabel: "Como a pessoa deve ser avisada?", onDevice: "O telefone e o e-mail ficam só neste celular. Os servidores e a IA do Lifeline só veem o nome e o canal.", phoneOrEmail: "Adicione um telefone ou um e-mail.",
   planStep: "Etapa {n} de {total}",
   back: "Voltar",
@@ -312,6 +338,19 @@ const pt = {
 };
 
 const zh = {
+  bookTitle: "安全预订与付款",
+  bookSub: "海外机票、住宿和租房：从哪里开始，以及如何避开针对学生的骗局。",
+  bookBanner: "要订机票或住处吗？",
+  bookBannerSub: "安全预订与付款",
+  checkTitle: "预订或付款之前",
+  checks: ["自己打开预订应用或网站，不要通过别人发来的链接预订。", "如果房东或民宿主人要求您在预订应用之外付款，比如银行转账或聊天里付款，请停下。这是虚假房源常见的骗钱方式。", "用银行卡或可追踪的转账付款，绝不要用礼品卡或加密货币。", "不确定某条消息？付款前先让 Lifeline 核查。"],
+  checkBtn: "核查一条预订消息",
+  depositTitle: "支付租房押金之前",
+  deposit: ["您已经亲自或通过实时视频看过房子。", "房东姓名与合同一致。", "有书面合同，写明租金、押金和日期。", "付款到可追踪的账户，并会收到收据。"],
+  appsTitle: "学生常用的应用",
+  appsNote: "Lifeline 与这些应用没有合作，也不收取任何费用。这里只列名字，方便您知道从哪里开始。",
+  appGroups: [["机票", [["Skyscanner", "比较各航空公司和预订网站的票价"], ["Trip.com", "一个应用里订机票和酒店"], ["Singapore Airlines", "或任何航空公司自己的应用，直接预订"]]], ["住宿", [["Trip.com", "酒店，常可与机票一起订"], ["Trivago", "比较各预订网站的酒店价格"]]], ["海外付款", [["YouTrip", "可在多种货币间消费的旅行卡"], ["HeyMax", "在消费和旅行预订中积累奖励"]]]],
+  helpBook: "安全预订与付款",
   relLabel: "关系", rels: {"parent": "父母", "sibling": "兄弟姐妹", "partner": "伴侣", "relative": "其他亲属", "friend": "朋友"}, phoneLabel: "电话号码（含国家代码）", emailLabel: "电子邮箱（选填）", reachLabel: "通过什么方式通知对方？", onDevice: "对方的电话和邮箱只保存在这部手机上。Lifeline 的服务器和 AI 只能看到名字和通知方式。", phoneOrEmail: "请填写电话号码或电子邮箱。",
   planStep: "第 {n} 步，共 {total} 步",
   back: "返回",

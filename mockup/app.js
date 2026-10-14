@@ -70,7 +70,7 @@ const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden
 // ---------- navigation and language ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { welcome, setup, plan, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
+const screens = { book, welcome, setup, plan, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
 const FULL = new Set(["welcome", "setup", "plan", "hello", "soon", "lost"]);
 let currentScreen = "welcome";
 function go(name, arg) {
@@ -348,6 +348,8 @@ async function home() {
       card("lost", "buoy", t("cLost"), h("span", { class: "sub" }, t("cLostSub")), () => go("sos")),
       card("home", "inbound", t("cHome"), h("span", { class: "sub" }, trip && trip.home !== "other" ? t("fromFamily", { home: place(trip.home) }) : t("cHomeSub")), () => go("chat", { ...q1, send: true })),
       card("scam", "shield", t("cScam"), h("span", { class: "sub" }, t("cScamSub")), () => go("chat", q2))),
+    h("button", { class: "card book-banner", onclick: () => go("book") }, h("span", { class: "s-ic" }, icon("plane")),
+      h("span", { class: "bb-text" }, h("span", { class: "muted small" }, t("bookBanner")), h("strong", {}, t("bookBannerSub"))), icon("chev", "chev-r")),
     h("div", { class: "glow-box" }, ask,
       h("div", { class: "glow-actions" }, h("button", { class: "iconbtn", "aria-label": t("attach"), onclick: () => go("chat", { prompt: ask.value, attach: true }) }, icon("clip")),
         h("span", { style: "flex:1" }), h("button", { class: "iconbtn send", "aria-label": t("send"), onclick: sendIt }, icon("send")))),
@@ -688,13 +690,31 @@ function me() {
       mine ? "" : item("family", t("trusted"), t("trustedSub")))),
     routeTips(),
     h("section", { class: "card" }, h("h2", {}, t("account")), h("ul", { class: "list" }, item("user", t("signedInAs"), t("signedInSub")))),
+    h("button", { class: "card roadmap-link", onclick: () => go("book") }, icon("plane"), h("span", {}, t("helpBook")), icon("chev", "chev-r")),
     h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), icon("chev", "chev-r")));
+}
+
+// ---------- Book and pay safely ----------
+// Protect, applied to booking: general safety advice and app names only. No fee, price or ranking is given, since
+// none is sourced, and the page says Lifeline has no partnership with any app it names.
+function book() {
+  const [, , scamQ] = t("quick");
+  const ticks = (items) => h("ul", { class: "ticks" }, items.map((x) => h("li", {}, icon("check"), h("span", {}, x))));
+  view.append(h("h1", {}, t("bookTitle")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("bookSub")),
+    h("section", { class: "card" }, h("h2", {}, icon("shield"), " ", t("checkTitle")), ticks(t("checks")),
+      h("button", { class: "btn secondary", onclick: () => go("chat", scamQ) }, icon("shield"), " ", t("checkBtn"))),
+    h("section", { class: "card" }, h("h2", {}, icon("home"), " ", t("depositTitle")), ticks(t("deposit"))),
+    h("section", { class: "card" }, h("h2", {}, t("appsTitle")),
+      t("appGroups").map(([group, apps]) => h("div", { class: "app-group" }, h("h3", {}, group),
+        h("ul", { class: "list" }, apps.map(([name, what]) => h("li", {}, h("span", { class: "app-dot", "aria-hidden": "true" }, name[0]), h("div", {}, h("div", { class: "what" }, name), h("div", { class: "muted small" }, what))))))),
+      h("p", { class: "note" }, t("appsNote"))));
 }
 
 // ---------- Help and the roadmap ----------
 function help() {
   view.append(h("h1", {}, t("help")),
     h("section", { class: "card" }, t("faq").map(([q, a]) => h("details", { class: "faq" }, h("summary", {}, h("span", {}, q), icon("chev")), h("p", {}, a)))),
+    h("button", { class: "card roadmap-link", onclick: () => go("book") }, icon("plane"), h("span", {}, t("helpBook")), icon("chev", "chev-r")),
     h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), icon("chev", "chev-r")));
 }
 // Planned, not built: each line says what exists today, so nothing on this screen claims a feature that is not there.

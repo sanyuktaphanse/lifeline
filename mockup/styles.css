@@ -658,3 +658,17 @@ body.signin #view[data-screen="plan"], body.signin #view[data-screen="setup"] { 
 .cp-item.cp-soon { color: var(--ink); cursor: pointer; }
 .cp-item.cp-soon .cp-flag { opacity: 1; filter: none; }
 .note .i { width: 14px; height: 14px; vertical-align: -2px; }
+
+/* Book and pay safely */
+.book-banner { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 12px 14px; margin: 0 0 12px; cursor: pointer; font: inherit; color: var(--ink); }
+.bb-text { flex: 1; display: grid; gap: 1px; }
+.bb-text strong { font-weight: 600; }
+.ticks { list-style: none; margin: 4px 0 12px; padding: 0; display: grid; gap: 10px; }
+.ticks li { display: flex; gap: 10px; align-items: flex-start; line-height: 1.45; }
+.ticks .i { width: 18px; height: 18px; color: var(--green-ink); margin-top: 2px; }
+#view[data-screen="book"] h2 { display: flex; align-items: center; gap: 6px; }
+#view[data-screen="book"] h2 .i { width: 19px; height: 19px; color: var(--purple); }
+#view[data-screen="book"] .btn.secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+#view[data-screen="book"] .btn .i { width: 17px; height: 17px; }
+.app-group h3 { margin: 12px 2px 2px; font-size: 13px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-soft); }
+.app-dot { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; background: rgba(31, 27, 45, 0.06); color: var(--ink-soft); font-weight: 700; font-family: Montserrat, Inter, system-ui, sans-serif; flex: none; }
