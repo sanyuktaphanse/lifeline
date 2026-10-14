@@ -116,40 +116,40 @@ function hello() {
   );
 }
 
-// ---------- Home ----------
+// ---------- Home: a calm assistant home, four live cards and the message box ----------
 async function home() {
-  const next = h("p", { class: "muted" }, t("loading"));
-  const recent = h("ul", { class: "list" }, h("li", {}, h("span", { class: "muted" }, t("loading"))));
+  const orb = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(orb);
+  const rentSub = h("span", { class: "sub" }, t("cRentSub"));
   const badge = h("span", { class: "badge" }, t("checking"));
   const count = h("span", { class: "count", hidden: true });
-  const comingUp = h("section", { class: "card" }, h("h2", {}, t("comingUp")), next);
+  const card = (cls, icon, title, sub, onclick) => h("button", { class: `tile ${cls}`, onclick }, h("span", { class: "ico", "aria-hidden": "true" }, icon), h("span", { class: "ttl" }, title), sub);
+  const [q0, q1, q2, q3] = t("quick");
+  const ask = h("textarea", { class: "msg", rows: "2", placeholder: t("askPh"), "aria-label": t("yourMessage") });
+  const sendIt = () => { const v = ask.value.trim(); if (v) go("chat", { prompt: v, send: true }); else ask.focus(); };
+  ask.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendIt(); } });
+  // A paste here is someone else's words, so it opens Chat with the message attached rather than as the student's own.
+  ask.addEventListener("paste", (e) => { const v = e.clipboardData?.getData("text") ?? ""; if (!v) return; e.preventDefault(); go("chat", { prompt: ask.value, pasted: v }); });
   view.append(
-    h("div", { class: "greet" },
-      h("div", {}, h("h1", {}, t("hi")), h("p", {}, t("helpToday"))),
-      h("button", { class: "bell", "aria-label": t("reminders"), onclick: () => comingUp.scrollIntoView({ behavior: "smooth", block: "center" }) }, "🔔", count)),
-    h("button", { class: "card sos-card", onclick: () => go("sos") },
-      h("span", { class: "big", "aria-hidden": "true" }, "🛟"),
-      h("div", {}, h("h2", {}, t("lostTitle")), h("p", {}, t("lostSub")))),
-    comingUp,
-    h("section", {}, h("div", { class: "grid2" }, t("quick").map((q) =>
-      h("button", { class: "action", onclick: () => go("chat", q) }, h("span", { class: "emoji", "aria-hidden": "true" }, q.emoji), q.label)))),
-    h("div", { style: "height:14px" }),
-    h("section", { class: "card" }, h("h2", {}, t("recent")), recent, h("p", {}, badge),
-      h("button", { class: "link", onclick: () => go("activity") }, t("seeAll"))),
-    h("button", { class: "link center", onclick: () => go("roadmap") }, t("whatsNext")),
+    h("div", { class: "home-hero" },
+      h("button", { class: "bell", "aria-label": t("reminders"), onclick: () => go("chat", { prompt: t("more")[1] }) }, "🔔", count), orb, h("p", { class: "muted" }, t("homeHello")),
+      h("h1", {}, t("homeHead")[0], h("br"), h("span", { class: "soft" }, t("homeHead")[1]))),
+    h("div", { class: "tiles" },
+      card("rent", "🏠", t("cRent"), rentSub, () => go("chat", q0)),
+      card("lost", "🛟", t("cLost"), h("span", { class: "sub" }, t("cLostSub")), () => go("sos")),
+      card("home", "📦", t("cHome"), h("span", { class: "sub" }, t("cHomeSub")), () => go("chat", q1)),
+      card("scam", "🛡️", t("cScam"), h("span", { class: "sub" }, t("cScamSub")), () => go("chat", q2))),
+    h("div", { class: "glow-box" }, ask,
+      h("div", { class: "glow-actions" }, h("button", { class: "iconbtn", "aria-label": t("attach"), onclick: () => go("chat", { prompt: ask.value, attach: true }) }, "📎"),
+        h("span", { style: "flex:1" }), h("button", { class: "iconbtn send", "aria-label": t("send"), onclick: sendIt }, "➤"))),
+    h("div", { class: "home-foot" }, h("button", { class: "link", onclick: () => go("activity") }, badge), h("button", { class: "link", onclick: () => go("roadmap") }, t("whatsNext"))),
   );
   try {
     const r = await call("GET", `/reminders/${USER}`);
     const items = [...(r.due || []), ...(r.upcoming || [])];
-    next.textContent = items.length ? `${items[0].text} · ${when(items[0].due)}` : t("nothingScheduled");
+    if (items.length) rentSub.textContent = t("dueIn", { text: items[0].text, when: when(items[0].due) });
     if ((r.due || []).length) { count.textContent = String(r.due.length); count.hidden = false; count.setAttribute("aria-label", t("due", { n: r.due.length })); }
-  } catch (e) { next.textContent = errorText(e); }
-  try {
-    const [entries, verify] = await Promise.all([call("GET", `/ledger/${USER}`), call("GET", `/ledger/${USER}/verify`)]);
-    const items = friendly(entries).slice(0, 3);
-    recent.replaceChildren(...(items.length ? items.map(row) : [h("li", {}, h("span", { class: "muted" }, t("noActivity")))]));
-    setBadge(badge, verify);
-  } catch (e) { recent.replaceChildren(h("li", {}, h("span", { class: "muted" }, errorText(e)))); badge.remove(); }
+  } catch { /* the card keeps its plain subtitle */ }
+  try { setBadge(badge, await call("GET", `/ledger/${USER}/verify`)); } catch { badge.remove(); }
 }
 
 // ---------- Chat ----------
@@ -174,18 +174,23 @@ function chat(seed) {
   const chips = h("div", { class: "chips" },
     t("quick").map((q) => h("button", { class: "chip top", onclick: () => use(q) }, `${q.emoji} ${q.label}`)),
     h("button", { class: "chip", onclick: (ev) => { ev.currentTarget.remove(); t("more").forEach((p) => chips.append(h("button", { class: "chip", onclick: () => use({ prompt: p }) }, p))); } }, t("moreIdeas")));
-  function use(q) { msg.value = q.prompt; if (q.attach) { attached.hidden = false; pasteBox.focus(); } else msg.focus(); }
+  function use(q) {
+    msg.value = q.prompt || "";
+    if (q.pasted) { pasteBox.value = q.pasted; attached.hidden = false; }
+    if (q.attach) { attached.hidden = false; pasteBox.focus(); } else msg.focus();
+  }
 
   async function submit() {
     const text = msg.value.trim();
     const pasted = attached.hidden ? "" : pasteBox.value.trim();
     if (!text) { push(h("div", { class: "error" }, pasted ? t("typeOwn") : t("typeFirst"))); return; }
     push(h("div", { class: "bubble me" }, text));
+    push(h("div", { class: "stamp" }, new Date().toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })));
     if (pasted) push(h("div", { class: "bubble quoted" }, h("span", { class: "label" }, t("received")), pasted));
     msg.value = ""; pasteBox.value = ""; attached.hidden = true; send.disabled = true;
     const mini = h("span", { class: "mini", "aria-hidden": "true" });
     drawTrace(mini);
-    const typing = h("div", { class: "thinking" }, mini, t("thinking"));
+    const typing = h("div", { class: "thinking", role: "status", "aria-label": t("thinking") }, mini, h("span", { class: "dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")));
     list.append(typing);
     try {
       const body = { user_id: USER, text, lang: getLang() };
@@ -201,8 +206,8 @@ function chat(seed) {
   view.classList.add("chatting");
   view.append(h("h1", {}, t("chat")), list, h("div", { class: "composer" }, chips, attached, h("div", { class: "line" }, clip, msg, send)));
   list.append(...thread);
-  if (thread.length === 0) list.append(h("div", { class: "bubble bot" }, t("hello")));
-  if (seed) use(seed);
+  if (thread.length === 0) list.append(answer(t("hello"), false));
+  if (seed) { use(seed); if (seed.send) submit(); }
 }
 
 // Turns an AgentReply into nodes, in the order docs/api.md "Reading an AgentReply" gives.
@@ -212,13 +217,20 @@ function replyNodes(r, onReply) {
   for (const s of r.blocked || []) { out.push(h("div", { class: "blocked" }, t("blocked"), s)); body = body.replace(s, ""); }
   if (r.turn_summary) body = body.replace(r.turn_summary, "");
   body = body.trim();
-  if (body) out.push(h("div", { class: "bubble bot" }, body, r.sample ? tag(t("sample")) : ""));
+  if (body) out.push(answer(body, r.sample));
   if (r.receipt) out.push(receiptCard(r.receipt));
   if (r.freeze) out.push(h("div", { class: "bubble bot" }, t("freeze", { s: nice(r.freeze.status) }), r.freeze.deep_link ? h("a", { href: r.freeze.deep_link, target: "_blank", rel: "noopener" }, t("openCardApp")) : ""));
   if (r.cancel) out.push(h("div", { class: "bubble bot" }, t("cancel", { s: nice(r.cancel.status) }), r.cancel.reason ? `. ${r.cancel.reason}` : ""));
   if (r.confirmation) out.push(paymentSheet(r.confirmation, onReply));
   if (r.turn_summary) out.push(h("div", { class: "summary" }, "✓ ", r.turn_summary));
   return out;
+}
+function answer(text, isSample) {
+  const mini = h("span", { class: "mini", "aria-hidden": "true" }); drawTrace(mini);
+  const copy = h("button", { class: "chipbtn", onclick: async () => { try { await navigator.clipboard.writeText(text); copy.textContent = t("copied"); } catch { /* the text stays selectable */ } } }, "⧉ ", t("copy"));
+  return h("div", { class: "answer" },
+    h("div", { class: "who" }, mini, h("span", {}, t("answer")), isSample ? tag(t("sample")) : ""),
+    h("p", {}, text), h("div", { class: "answer-actions" }, copy));
 }
 function receiptCard(rc) {
   return h("div", { class: "card sheet" },

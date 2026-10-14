@@ -6,7 +6,10 @@
 export const LANGS = [["en", "EN", "English"], ["pt", "PT", "Português"], ["zh", "中", "中文"]];
 
 const en = {
-  demo: "Demo · no real money", preview: "Preview · sample data", previewTitle: "No Lifeline server is running here, so these screens show sample data. Nothing moves.",
+  homeHello: "Hi! I'm Lifeline, your money's safety net", homeHead: ["Ask about money,", "rent or a lost card."], askPh: "Ask Lifeline…",
+  cRent: "Pay rent", cRentSub: "1,200 SGD to your landlord", cLost: "Lost card", cLostSub: "Freeze it and get help", cHome: "Money from home", cHomeSub: "Trace a transfer", cScam: "Is this a scam?", cScamSub: "Check a message",
+  dueIn: "{text} · {when}", answer: "Lifeline", copy: "Copy", copied: "Copied",
+  demo: "Demo", preview: "Sample data", previewTitle: "No Lifeline server is running here, so these screens show sample data. Nothing moves.",
   language: "Language",
   tabHome: "Home", tabChat: "Chat", tabSos: "Lost card", tabActivity: "Activity", tabHelp: "Help",
   // welcome
@@ -91,7 +94,10 @@ const en = {
 };
 
 const pt = {
-  demo: "Demo · sem dinheiro real", preview: "Prévia · dados de exemplo", previewTitle: "Nenhum servidor do Lifeline roda aqui, então estas telas mostram dados de exemplo. Nada é movimentado.",
+  homeHello: "Oi! Eu sou o Lifeline, a rede de segurança do seu dinheiro", homeHead: ["Pergunte sobre dinheiro,", "aluguel ou cartão perdido."], askPh: "Pergunte ao Lifeline…",
+  cRent: "Pagar aluguel", cRentSub: "1.200 SGD para seu locador", cLost: "Cartão perdido", cLostSub: "Bloqueie e peça ajuda", cHome: "Dinheiro de casa", cHomeSub: "Acompanhe uma transferência", cScam: "Isto é golpe?", cScamSub: "Confira uma mensagem",
+  dueIn: "{text} · {when}", answer: "Lifeline", copy: "Copiar", copied: "Copiado",
+  demo: "Demo", preview: "Exemplo", previewTitle: "Nenhum servidor do Lifeline roda aqui, então estas telas mostram dados de exemplo. Nada é movimentado.",
   language: "Idioma",
   tabHome: "Início", tabChat: "Chat", tabSos: "Cartão", tabActivity: "Atividade", tabHelp: "Ajuda",
   wTitle: ["O ", "lifeline", " do dinheiro de estudantes no exterior"], tryDemo: "Testar a demo", signinSoon: "Login em breve · nenhum dinheiro real se move", soon: "em breve", orb: "O batimento do Lifeline",
@@ -168,7 +174,10 @@ const pt = {
 };
 
 const zh = {
-  demo: "演示 · 无真实资金", preview: "预览 · 示例数据", previewTitle: "此处没有运行 Lifeline 服务器，因此这些页面显示示例数据。不会转出任何资金。",
+  homeHello: "您好！我是 Lifeline，您资金的安全网", homeHead: ["问问资金、", "房租或丢卡的事。"], askPh: "问问 Lifeline…",
+  cRent: "交房租", cRentSub: "1,200 SGD 给您的房东", cLost: "卡片丢失", cLostSub: "冻结卡片并获取帮助", cHome: "家里汇的钱", cHomeSub: "追踪一笔转账", cScam: "这是诈骗吗？", cScamSub: "核查一条消息",
+  dueIn: "{text} · {when}", answer: "Lifeline", copy: "复制", copied: "已复制",
+  demo: "演示", preview: "示例数据", previewTitle: "此处没有运行 Lifeline 服务器，因此这些页面显示示例数据。不会转出任何资金。",
   language: "语言",
   tabHome: "首页", tabChat: "聊天", tabSos: "卡片丢失", tabActivity: "记录", tabHelp: "帮助",
   wTitle: ["留学生海外资金的", " lifeline", ""], tryDemo: "试用演示", signinSoon: "登录即将推出 · 不涉及真实资金", soon: "即将推出", orb: "Lifeline 的心跳",
