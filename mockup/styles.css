@@ -354,3 +354,76 @@ details.compare summary { cursor: pointer; color: var(--purple-bright); font-wei
 .tile .ico { margin-bottom: 10px; }
 .tile .ttl { margin-top: 0; }
 .demo-pill { white-space: nowrap; }
+
+/* ===== Light theme: cream, white, grey and an indigo leaning violet. Overrides everything above. =====
+   Contrast on the cream background: ink 15:1, ink soft 6.4:1, violet links 6.6:1, white on violet buttons 7.5:1. */
+:root {
+  --bg: #FAF7F2;
+  --ink: #1F1B2D;
+  --ink-soft: #5D5870;
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-strong: rgba(255, 255, 255, 0.88);
+  --edge: rgba(31, 27, 45, 0.08);
+  --line: rgba(31, 27, 45, 0.08);
+  --purple: #5B3FD6;
+  --purple-bright: #5B3FD6;
+  --purple-soft: rgba(91, 63, 214, 0.10);
+  --red: #C62D2D;
+  --red-soft: rgba(198, 45, 45, 0.08);
+  --red-ink: #A82424;
+  --green-ink: #12704F;
+  --green-soft: rgba(18, 112, 79, 0.09);
+  --amber-ink: #7A5200;
+  --amber-soft: rgba(217, 160, 30, 0.14);
+  --shadow: 0 6px 24px rgba(60, 40, 120, 0.08);
+  color-scheme: light;
+}
+.blobs span { opacity: 0.35; filter: blur(80px); }
+.b1 { background: #C9B8FF; }
+.b2 { background: #FFD9C2; }
+.b3 { background: #E6DEFF; opacity: 0.4; }
+@media (min-width: 600px) { .phone { background: rgba(255,255,255,0.35); } }
+
+.tabs { background: rgba(255, 255, 255, 0.82); box-shadow: 0 10px 30px rgba(60, 40, 120, 0.12); }
+.tabs button[aria-current="page"] { color: var(--purple); background: var(--purple-soft); }
+.tabs .sos[aria-current="page"] { color: var(--red); }
+.composer { background: rgba(255, 255, 255, 0.9); }
+.card, .tile, .action, .bubble.bot, .chip, .iconbtn, .sso-dot, .bell, .chipbtn, .filters button, .choice, .field { box-shadow: 0 2px 10px rgba(60, 40, 120, 0.05); }
+@media (prefers-reduced-transparency: reduce) { .card, .tabs, .bubble, .composer { background: #FFFFFF; } }
+
+.btn, .bubble.me, .iconbtn.send { background: linear-gradient(135deg, #6B4FE6, #4F35C4); }
+.btn { box-shadow: 0 8px 22px rgba(91, 63, 214, 0.25); }
+.btn.secondary { color: var(--ink); background: #FFFFFF; }
+.btn.danger { background: linear-gradient(135deg, #D23A3A, #B02525); }
+.sos-card { background: linear-gradient(135deg, #D23A3A, #B02525); }
+
+textarea::placeholder, input::placeholder { color: #8A8599; }
+.home-hero .soft { color: #8A8599; }
+.stamp { color: #8A8599; }
+.hero h1 em, .w-top h1 em { background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--purple); }
+.filters button[aria-pressed="true"] { background: var(--ink); color: #FFFFFF; border-color: var(--ink); }
+.lang { background-color: rgba(255,255,255,0.85); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%235D5870' stroke-width='1.5'/%3E%3C/svg%3E"); }
+.lang option { background: #FFFFFF; color: var(--ink); }
+.demo-pill { border-color: rgba(217,160,30,0.35); }
+.choice[aria-pressed="true"] { border-color: #D23A3A; background: #FFF4F4; }
+.blocked { border-color: rgba(198,45,45,0.25); }
+.error { border-color: rgba(217,160,30,0.3); }
+.bubble.quoted, .attached { border-color: rgba(91, 63, 214, 0.45); background: #FFFFFF; }
+.route { background: #FFFFFF; }
+.steps span { background: rgba(31, 27, 45, 0.1); }
+.dots button::after { background: rgba(31, 27, 45, 0.2); }
+.go-pill { background: rgba(255,255,255,0.7); }
+.thinking .dots i { background: var(--purple); }
+
+/* The message box: a soft iridescent border around white */
+.glow-box { background-image: linear-gradient(#FFFFFF, #FFFFFF), linear-gradient(120deg, #F9A8D4, #A78BFA 35%, #93C5FD 65%, #A7F3D0); box-shadow: 0 8px 26px rgba(91, 63, 214, 0.10); }
+
+/* The orb stays a deep violet sphere, so the white heartbeat keeps its contrast on a light page */
+.orb { background: radial-gradient(circle at 35% 30%, #C4B5FD, #7C5CF0 40%, #3B2A9E 75%, #241A66); box-shadow: 0 18px 50px rgba(91, 63, 214, 0.35), inset 0 0 30px rgba(255,255,255,0.18); }
+.w-mid .orb { box-shadow: 0 20px 60px rgba(91, 63, 214, 0.30), inset 0 0 36px rgba(255,255,255,0.16); }
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes breathe-calm { 0%, 100% { box-shadow: 0 18px 50px rgba(91,63,214,0.25), inset 0 0 36px rgba(255,255,255,0.14); } 30% { box-shadow: 0 18px 70px rgba(91,63,214,0.42), inset 0 0 36px rgba(255,255,255,0.2); } }
+  @keyframes breathe { 0%, 100% { box-shadow: 0 16px 44px rgba(91,63,214,0.25), inset 0 0 30px rgba(255,255,255,0.15); } 30% { box-shadow: 0 16px 64px rgba(91,63,214,0.42), inset 0 0 30px rgba(255,255,255,0.2); } }
+}
+.monitor .trace { stroke: #5B3FD6; filter: drop-shadow(0 0 4px rgba(91,63,214,0.4)); }
+.lost .code { color: var(--red-ink); }
