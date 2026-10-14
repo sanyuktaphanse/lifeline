@@ -31,12 +31,14 @@ RECIPIENTS = {"landlord_sp": 8692237, "self_sg": 555}
 class FakeWise:
     """Answers the Wise endpoints the rail uses, keeping transfers by id, as the sandbox would."""
 
-    def __init__(self, fee="5.31", disabled=False, fund_status="COMPLETED", cancel_code=200, quote_code=200):
+    def __init__(self, fee="5.31", disabled=False, fund_status="COMPLETED", cancel_code=200, quote_code=200, balances=None, balances_code=200):
         self.fee = fee
         self.disabled = disabled
         self.fund_status = fund_status
         self.cancel_code = cancel_code
         self.quote_code = quote_code
+        self.balances = balances if balances is not None else []
+        self.balances_code = balances_code
         self.transfers: dict[int, dict] = {}
         self.by_customer_id: dict[str, int] = {}
         self.requests: list[httpx.Request] = []
@@ -82,6 +84,10 @@ class FakeWise:
             if transfer_id not in self.transfers:
                 return httpx.Response(404, json={"errors": [{"message": "Transfer not found"}]})
             return httpx.Response(200, json=self.transfers[transfer_id])
+        if request.method == "GET" and path == f"/profiles/{PROFILE}/balances":
+            if self.balances_code != 200:
+                return httpx.Response(self.balances_code, json={"errors": [{"message": "Balances not available"}]})
+            return httpx.Response(200, json=self.balances)
         if request.method == "GET" and path.startswith("/simulation/transfers/"):
             _, _, _, transfer_id, status = path.split("/")
             self.transfers[int(transfer_id)]["status"] = status
@@ -434,3 +440,41 @@ def test_the_router_passes_prechecks_to_the_inner_router():
     router = _router(FakeWise())
 
     assert router.precheck("enable_pix", "nubank", {}) == FakeRouter().precheck("enable_pix", "nubank", {})
+
+
+# Balances
+
+
+def _balance(currency, value, visible=True, kind="STANDARD"):
+    # The fields of a balance in Wise's reference, https://docs.wise.com/api-reference/balance/balancelist; the
+    # values are made up.
+    return {"id": 200 + len(currency), "currency": currency, "type": kind, "name": None, "visible": visible,
+            "amount": {"value": value, "currency": currency}, "reservedAmount": {"value": 0, "currency": currency}}
+
+
+def test_balances_read_the_profiles_standard_balances_by_currency_as_decimals():
+    wise = FakeWise(balances=[_balance("SGD", 2300.5), _balance("BRL", 150)])
+    assert _client(wise).balances() == {"BRL": Decimal("150"), "SGD": Decimal("2300.5")}
+    request = wise.requests[-1]
+    assert request.method == "GET"
+    assert request.url.path == f"/2026Q4/profiles/{PROFILE}/balances"
+    assert request.url.params["types"] == "STANDARD"
+
+
+def test_a_balance_the_student_has_hidden_is_left_out():
+    wise = FakeWise(balances=[_balance("SGD", 10), _balance("EUR", 99, visible=False)])
+    assert _client(wise).balances() == {"SGD": Decimal("10")}
+
+
+def test_a_balance_with_no_readable_amount_is_an_error_not_a_zero():
+    broken = _balance("SGD", 10)
+    del broken["amount"]
+    with pytest.raises(WiseSandboxError, match="balance"):
+        _client(FakeWise(balances=[broken])).balances()
+
+
+def test_a_refused_balances_call_raises_with_wises_reason_and_no_token():
+    with pytest.raises(WiseSandboxError) as error:
+        _client(FakeWise(balances_code=403)).balances()
+    assert "403" in str(error.value) and "Balances not available" in str(error.value)
+    assert TOKEN not in str(error.value)

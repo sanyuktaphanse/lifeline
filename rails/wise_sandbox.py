@@ -36,6 +36,10 @@ NAME = "wise"
 SANDBOX_BASE_URL = "https://api.wise-sandbox.com/2026Q4"
 SANDBOX_HOST = "api.wise-sandbox.com"
 QUOTE_SOURCE = "https://docs.wise.com/api-docs/api-reference/quote"
+# Source: https://docs.wise.com/api-reference/balance/balancelist, "List Balances for a Profile", 14 October 2026.
+# STANDARD is the everyday balance; SAVINGS balances are not money a student spends, so they are not read.
+BALANCES_SOURCE = "https://docs.wise.com/api-reference/balance/balancelist"
+BALANCE_TYPES = "STANDARD"
 STATUS_SOURCE = "https://docs.wise.com/guides/product/send-money/tracking/transfer-statuses"
 # Lifeline's own reading of each status Wise documents at STATUS_SOURCE onto a ReceiptStatus. Wise's guide gives the
 # meanings; the mapping is Lifeline's. A cancelled transfer was never funded and a refunded or charged back one went
@@ -171,6 +175,26 @@ class WiseSandboxClient:
     def simulate(self, transfer_id: int, status: str) -> dict[str, Any]:
         """Move a sandbox transfer to a status, as Wise's simulation endpoints allow. Sandbox only."""
         return self._call("GET", f"/simulation/transfers/{transfer_id}/{status}")
+
+    def balances(self) -> dict[str, Decimal]:
+        """The profile's everyday balances by currency, read from Wise: each balance's `amount`, which Wise calls the
+        available balance that can fund transfers (BALANCES_SOURCE). A balance the student has hidden is left out.
+        A balance with no readable amount raises, so a broken answer is never shown as zero."""
+        answer = self._call("GET", f"/profiles/{self.config.profile_id}/balances?types={BALANCE_TYPES}")
+        if not isinstance(answer, list):
+            raise WiseSandboxError("The Wise sandbox answered the balance list with something that is not a list.")
+        held: dict[str, Decimal] = {}
+        for balance in answer:
+            if not isinstance(balance, dict) or balance.get("visible") is False:
+                continue
+            amount = balance.get("amount")
+            try:
+                currency = str(amount["currency"])
+                value = Decimal(str(amount["value"]))
+            except (KeyError, TypeError, InvalidOperation):
+                raise WiseSandboxError("The Wise sandbox answered a balance with no readable amount.") from None
+            held[currency] = held.get(currency, Decimal("0")) + value
+        return dict(sorted(held.items()))
 
 
 def payment_option(quote: Mapping[str, Any]) -> Mapping[str, Any] | None:
