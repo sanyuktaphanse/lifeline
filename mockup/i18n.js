@@ -6,6 +6,7 @@
 export const LANGS = [["en", "EN", "English"], ["pt", "PT", "Português"], ["zh", "中", "中文"]];
 
 const en = {
+  chooseCountry: "Choose a country", searchCountry: "Search countries", availableNow: "Available now", comingSoonH: "Coming soon", noMatch: "No country matches that.",
   // Route tips restate rails/knowledge entries; the id leads each tip.
   helloSubTrip: "Here's the safety net our sample student set up before leaving.", setupTitle: "Tell us about your trip",
   setupSub: "So Lifeline can show the money rules for your route.",
@@ -119,6 +120,7 @@ const en = {
 };
 
 const pt = {
+  chooseCountry: "Escolha um país", searchCountry: "Buscar países", availableNow: "Disponível agora", comingSoonH: "Em breve", noMatch: "Nenhum país corresponde.",
   // Route tips restate rails/knowledge entries; the id leads each tip.
   helloSubTrip: "Esta é a rede de segurança que nosso estudante de exemplo criou antes de viajar.", setupTitle: "Conte sobre a sua viagem",
   setupSub: "Assim o Lifeline mostra as regras de dinheiro da sua rota.",
@@ -224,6 +226,7 @@ const pt = {
 };
 
 const zh = {
+  chooseCountry: "选择国家或地区", searchCountry: "搜索国家或地区", availableNow: "现已支持", comingSoonH: "即将推出", noMatch: "没有匹配的国家或地区。",
   // Route tips restate rails/knowledge entries; the id leads each tip.
   helloSubTrip: "以下是示例学生出发前设置的安全网。", setupTitle: "说说您的行程",
   setupSub: "这样 Lifeline 能显示您这条路线的资金规则。",
