@@ -3,7 +3,7 @@
 // lives in memory inside its card and is sent back once; pasted text goes in `pasted_text`, never in `text`; the
 // rescue takes only typed words and the identity answer is never stored. Nothing is kept in browser storage.
 
-import { sample } from "./sample.js";
+import { sample, useSamplePlan } from "./sample.js";
 import { LANGS, getLang, setLang, t } from "./i18n.js";
 import { icon } from "./icons.js";
 
@@ -185,7 +185,7 @@ function plan(arg = {}) {
     const qs = t("questions");
     const sel = h("select", { class: "field", "aria-label": t("qQuestion"), onchange: (e) => { draft.question = Number(e.target.value); ready(); } },
       h("option", { value: "", disabled: true, selected: draft.question === null }, "…"), qs.map((q, n) => h("option", { value: String(n), selected: draft.question === n }, q)));
-    const ans = typed(h("input", { class: "field", type: "password", autocomplete: "off", placeholder: t("yourAnswer"), "aria-label": t("yourAnswer"), oninput: (e) => { draft.answered = e.target.value.trim().length > 0; ready(); } }));
+    const ans = typed(h("input", { class: "field", type: "password", autocomplete: "off", placeholder: t("yourAnswer"), "aria-label": t("yourAnswer"), oninput: (e) => { draft.answered = e.target.value.trim().length > 0; draft.answer = e.target.value.trim().toLowerCase().replace(/\s+/g, ""); ready(); } }));
     body = [h("h2", {}, t("qQuestion")), h("p", { class: "muted small" }, t("qQuestionWhy")), sel, ans, h("p", { class: "note" }, t("answerNote"))];
     ok = () => draft.question !== null && (draft.answered || mine?.answered);
   } else if (i === 3) {
@@ -219,6 +219,13 @@ function plan(arg = {}) {
       back ? "" : h("button", { class: "link", onclick: () => { mine = null; go("hello"); } }, t("skip"))));
   ready();
 }
+// The sample rescue asks the student's own question and uses their cards, backup, emergency amount and contact.
+useSamplePlan(() => {
+  if (!mine || mine.question === null || !mine.card || mine.card === "unsure") return null;
+  const named = t("cardNamed");
+  return { question: t("questions")[mine.question], answer: mine.answer || null, card: named[mine.card], backup: mine.backup ? named[mine.backup] : null,
+    emergency: mine.emergency ? money(mine.emergency, "SGD") : null, contact: mine.contactName ? mine.contactName : false };
+});
 // The safety net as the student set it, or the demo student's when they skipped.
 function netItems() {
   if (!mine) return t("plan").map(([, what, sub], n) => [["card", "buoy", "lock", "cash"][n], what, sub]);

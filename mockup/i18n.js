@@ -6,6 +6,7 @@
 export const LANGS = [["en", "EN", "English"], ["pt", "PT", "Português"], ["zh", "中", "中文"]];
 
 const en = {
+  cardNamed: {"wise": "Wise card", "revolut": "Revolut card", "youtrip": "YouTrip card", "dbs": "DBS / POSB card", "ocbc": "OCBC card", "uob": "UOB card", "home": "bank card from home"},
   bookTitle: "Book and pay safely",
   bookSub: "Flights, stays and rent abroad: where to start, and how to avoid the scams aimed at students.",
   bookBanner: "Booking flights or a place to stay?",
@@ -40,7 +41,7 @@ const en = {
   qQuestion: "Pick a safety question",
   qQuestionWhy: "Lifeline asks it before freezing a card, so nobody else can.",
   questions: ["What are the last four characters of your student pass number?", "What was the name of your first pet?", "What street did you grow up on?", "What is your favourite teacher's surname?"],
-  answerNote: "Your answer isn't kept in this demo. The live rescue still asks the sample student's question.",
+  answerNote: "Your answer stays on this phone and is only used to check it's you in the Lost card rescue. With the live backend, the rescue still asks the sample student's question.",
   qContact: "Who should Lifeline tell if your card is lost?",
   qContactWhy: "Lifeline only sends them a short notice. It never sends them money.",
   contactName: "Their name",
@@ -176,6 +177,7 @@ const en = {
 };
 
 const pt = {
+  cardNamed: {"wise": "cartão Wise", "revolut": "cartão Revolut", "youtrip": "cartão YouTrip", "dbs": "cartão DBS / POSB", "ocbc": "cartão OCBC", "uob": "cartão UOB", "home": "cartão do banco do seu país"},
   bookTitle: "Reserve e pague com segurança",
   bookSub: "Voos, hospedagem e aluguel no exterior: por onde começar e como evitar os golpes contra estudantes.",
   bookBanner: "Vai reservar voo ou hospedagem?",
@@ -210,7 +212,7 @@ const pt = {
   qQuestion: "Escolha uma pergunta de segurança",
   qQuestionWhy: "O Lifeline pergunta antes de bloquear um cartão, para que ninguém mais consiga.",
   questions: ["Quais são os quatro últimos caracteres do seu cartão de estudante?", "Qual era o nome do seu primeiro animal de estimação?", "Em que rua você cresceu?", "Qual é o sobrenome do seu professor favorito?"],
-  answerNote: "Sua resposta não é guardada nesta demo. O resgate ao vivo ainda faz a pergunta do estudante de exemplo.",
+  answerNote: "Sua resposta fica só neste celular e serve apenas para confirmar que é você no resgate do cartão. Com o backend ao vivo, o resgate ainda faz a pergunta do estudante de exemplo.",
   qContact: "Quem o Lifeline deve avisar se você perder o cartão?",
   qContactWhy: "O Lifeline só envia um aviso curto. Nunca envia dinheiro para essa pessoa.",
   contactName: "Nome da pessoa",
@@ -338,6 +340,7 @@ const pt = {
 };
 
 const zh = {
+  cardNamed: {"wise": "Wise 卡", "revolut": "Revolut 卡", "youtrip": "YouTrip 卡", "dbs": "DBS / POSB 卡", "ocbc": "OCBC 卡", "uob": "UOB 卡", "home": "国内银行卡"},
   bookTitle: "安全预订与付款",
   bookSub: "海外机票、住宿和租房：从哪里开始，以及如何避开针对学生的骗局。",
   bookBanner: "要订机票或住处吗？",
@@ -372,7 +375,7 @@ const zh = {
   qQuestion: "选择一个安全问题",
   qQuestionWhy: "冻结卡片前 Lifeline 会先问这个问题，别人无法冒充您。",
   questions: ["您学生准证号码的最后四位是什么？", "您的第一只宠物叫什么名字？", "您在哪条街长大？", "您最喜欢的老师姓什么？"],
-  answerNote: "本演示不会保存您的答案。实时救援仍会问示例学生的问题。",
+  answerNote: "您的答案只保存在这部手机上，仅用于丢卡救援时确认是您本人。连接实时后端时，救援仍会问示例学生的问题。",
   qContact: "卡丢了时，Lifeline 应该通知谁？",
   qContactWhy: "Lifeline 只会发一条简短通知，绝不会给对方转钱。",
   contactName: "对方的名字",
