@@ -70,8 +70,8 @@ const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden
 // ---------- navigation and language ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { welcome, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
-const FULL = new Set(["welcome", "hello", "soon", "lost"]);
+const screens = { welcome, setup, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
+const FULL = new Set(["welcome", "setup", "hello", "soon", "lost"]);
 let currentScreen = "welcome";
 function go(name, arg) {
   currentScreen = name;
@@ -115,18 +115,56 @@ function welcome() {
     h("div", { class: "w-top" }, h("h1", {}, a, h("em", {}, b), c), h("p", { class: "w-sub" }, t("wSub"))),
     h("div", { class: "w-mid" }, h("span", { class: "aura", "aria-hidden": "true" }), orb),
     h("div", { class: "w-bottom" },
-      h("button", { class: "btn", onclick: () => go("hello") }, t("tryDemo")),
+      h("button", { class: "btn", onclick: () => go("setup") }, t("tryDemo")),
       h("div", { class: "sso-row" }, icon("Email", "icons/mail.png"), icon("Apple", "icons/apple.png"), icon("Google", "icons/google.png")),
       h("p", { class: "fine" }, t("signinSoon"))),
   );
 }
 
+// ---------- Setup: three questions about the trip ----------
+// Kept only in memory while the page is open. The backend runs one demo student, so the answers change tips and
+// suggestions, never payments or balances; the screen says so.
+let trip = null;
+function setup(next = "hello") {
+  const pickd = { home: trip?.home ?? null, study: trip?.study ?? null, purpose: trip?.purpose ?? null };
+  const cont = h("button", { class: "btn", onclick: () => { trip = { ...pickd }; go(next); } }, t("cont"));
+  const group = (key, q, why, options) => {
+    const row = h("div", { class: "chips wrap pick" });
+    const paint = () => { row.replaceChildren(...Object.entries(options).map(([k, label]) => h("button", { class: "chip", "aria-pressed": String(pickd[key] === k), onclick: () => { pickd[key] = k; paint(); ready(); } }, label))); };
+    paint();
+    return h("section", { class: "q" }, h("h2", {}, q), why ? h("p", { class: "muted small" }, why) : "", row);
+  };
+  const ready = () => { cont.disabled = !(pickd.home && pickd.study && pickd.purpose); };
+  const c = t("countries");
+  view.append(
+    h("div", { class: "hello" }, h("h1", {}, t("setupTitle")), h("p", {}, t("setupSub"))),
+    h("section", { class: "card" },
+      group("home", t("qHome"), t("qHomeWhy"), { cn: c.cn, br: c.br, in: c.in, other: c.other }),
+      group("study", t("qStudy"), t("qStudyWhy"), { sg: c.sg, other: c.other }),
+      group("purpose", t("qWhat"), "", t("purposesTrip"))),
+    h("p", { class: "muted small", style: "text-align:center;margin:0 8px 12px" }, t("setupNote")),
+    cont, h("button", { class: "link center", onclick: () => { trip = null; go(next); } }, t("skip")));
+  ready();
+}
+const place = (k) => t("countries")[k];
+const tripLine = () => trip && t("tripLine", { purpose: t("purposesTrip")[trip.purpose], home: place(trip.home), study: place(trip.study) });
+// The sourced tips for the route: the home country's, the study country's, then one for everyone.
+function routeTips(limit = Infinity) {
+  const all = t("tips");
+  const list = [...(all[trip?.home] || []), ...(all[trip?.study] || []), ...all.all].slice(0, limit);
+  const known = trip && (all[trip.home] || all[trip.study]);
+  return h("section", { class: "card tips" }, h("h2", {}, t("goodToKnow")),
+    trip && !known ? h("p", { class: "muted small" }, t("noRules")) : "",
+    h("ul", { class: "list" }, list.map(([, text, src]) => h("li", {}, h("span", { class: "emoji ib" }, icon("sparkle")), h("div", {}, h("div", {}, text), h("div", { class: "muted small" }, t("source", { s: src })))))));
+}
+
 // After Try the demo: the demo plan in fixtures/demo_user.yaml as docs/api.md, "Rescue", states it. Nothing is asked.
 function hello() {
   view.append(
-    h("div", { class: "hello" }, (() => { const o = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(o); return o; })(), h("h1", {}, t("helloTitle")), h("p", {}, t("helloSub"))),
+    h("div", { class: "hello" }, (() => { const o = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(o); return o; })(), h("h1", {}, t("helloTitle")), trip ? h("p", { class: "trip-pill" }, tripLine()) : "", h("p", {}, trip ? t("helloSubTrip") : t("helloSub"))),
     h("section", { class: "card" }, h("h2", {}, t("safetyNet")), h("p", { class: "muted small" }, t("safetyIntro")),
       h("ul", { class: "list" }, t("plan").map(([, what, sub], i) => h("li", {}, h("span", { class: "emoji ib" }, icon(["card", "buoy", "lock", "cash"][i])), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
+    trip ? routeTips(3) : "",
     h("p", { class: "muted small", style: "text-align:center" }, t("ownPlanSoon")),
     slider(t("slideStart"), t("getStarted"), () => go("home")),
   );
@@ -156,7 +194,7 @@ function slider(label, a11y, done) {
 function soon(name) {
   const orb = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(orb);
   view.append(h("div", { class: "soon" }, orb, h("h1", {}, t("soonTitle")), h("p", {}, t("soonBody", { name: name || "" })),
-    h("button", { class: "btn", onclick: () => go("hello") }, t("tryDemo")),
+    h("button", { class: "btn", onclick: () => go("setup") }, t("tryDemo")),
     h("button", { class: "link center", onclick: () => go("welcome") }, t("soonBack"))));
 }
 
@@ -179,14 +217,14 @@ async function home() {
   ask.addEventListener("paste", (e) => { const v = e.clipboardData?.getData("text") ?? ""; if (!v) return; e.preventDefault(); go("chat", { prompt: ask.value, pasted: v }); });
   view.append(
     h("div", { class: "home-hero" },
-      h("button", { class: "bell", "aria-label": t("reminders"), "aria-expanded": "false", onclick: (ev) => { const open = remindBox.hidden; remindBox.hidden = !open; ev.currentTarget.setAttribute("aria-expanded", String(open)); } }, icon("bell"), count), orb, h("p", { class: "muted" }, t("homeHello")),
+      h("button", { class: "bell", "aria-label": t("reminders"), "aria-expanded": "false", onclick: (ev) => { const open = remindBox.hidden; remindBox.hidden = !open; ev.currentTarget.setAttribute("aria-expanded", String(open)); } }, icon("bell"), count), orb, h("p", { class: "muted" }, !trip ? t("homeHello") : trip.study === "other" ? t("homeHelloAbroad") : t("homeHelloIn", { place: place(trip.study) })),
       h("h1", {}, t("homeHead")[0], h("br"), h("span", { class: "soft" }, t("homeHead")[1]))),
     remindBox,
     balance,
     h("div", { class: "tiles" },
       card("rent", "home", t("cRent"), rentSub, () => go("chat", { ...q0, send: true })),
       card("lost", "buoy", t("cLost"), h("span", { class: "sub" }, t("cLostSub")), () => go("sos")),
-      card("home", "inbound", t("cHome"), h("span", { class: "sub" }, t("cHomeSub")), () => go("chat", { ...q1, send: true })),
+      card("home", "inbound", t("cHome"), h("span", { class: "sub" }, trip && trip.home !== "other" ? t("fromFamily", { home: place(trip.home) }) : t("cHomeSub")), () => go("chat", { ...q1, send: true })),
       card("scam", "shield", t("cScam"), h("span", { class: "sub" }, t("cScamSub")), () => go("chat", q2))),
     h("div", { class: "glow-box" }, ask,
       h("div", { class: "glow-actions" }, h("button", { class: "iconbtn", "aria-label": t("attach"), onclick: () => go("chat", { prompt: ask.value, attach: true }) }, icon("clip")),
@@ -280,8 +318,10 @@ function chat(seed) {
   function showReply(r) { replyNodes(r, showReply).forEach(push); }
 
   // An empty chat offers four starting questions in the middle, so the screen is never blank.
+  const extra = { cn: { label: t("more")[4], prompt: t("more")[4] }, br: { label: t("more")[3], prompt: t("more")[3] } }[trip?.home];
+  const starterList = extra ? [...t("quick"), extra] : t("quick");
   const starters = h("div", { class: "starters" }, h("p", { class: "muted small" }, t("tryAsking")),
-    t("quick").map((q, i) => h("button", { class: "starter", onclick: () => { use(q); if (!q.attach) submit(); } }, h("span", { class: "s-ic" }, icon(QICONS[i])), h("span", {}, q.label), icon("arrowUp", "s-go"))));
+    starterList.map((q, i) => h("button", { class: "starter", onclick: () => { use(q); if (!q.attach) submit(); } }, h("span", { class: "s-ic" }, icon(QICONS[i] || "sparkle")), h("span", {}, q.label), icon("arrowUp", "s-go"))));
   view.classList.add("chatting");
   view.append(h("h1", {}, t("chat")), list, h("div", { class: "composer" }, chips, attached, h("div", { class: "line" }, clip, msg, send)));
   list.append(...thread);
@@ -516,10 +556,14 @@ async function activity() {
 // The plan is the demo one in fixtures/demo_user.yaml (cards, identity check, emergency money, trusted contact Ana).
 function me() {
   const item = (ic, what, sub) => h("li", {}, h("span", { class: "emoji ib" }, icon(ic)), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)));
-  view.append(h("h1", {}, t("meTitle")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("meSub")),
+  view.append(
+    h("section", { class: "card trip-card" }, h("div", { class: "bal-head" }, h("h2", { style: "margin:0;flex:1" }, t("yourTrip")), h("button", { class: "link", onclick: () => go("setup", "me") }, t("change"))),
+      h("p", { style: "margin:6px 0 0" }, trip ? tripLine() : h("span", { class: "muted" }, t("setupSub")))),
+    h("h1", {}, t("meTitle")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("meSub")),
     h("section", { class: "card" }, h("ul", { class: "list" },
       t("plan").map(([, what, sub], i) => item(["card", "buoy", "lock", "cash"][i], what, sub)),
       item("family", t("trusted"), t("trustedSub")))),
+    routeTips(),
     h("section", { class: "card" }, h("h2", {}, t("account")), h("ul", { class: "list" }, item("user", t("signedInAs"), t("signedInSub")))),
     h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), icon("chev", "chev-r")));
 }

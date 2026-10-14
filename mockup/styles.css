@@ -593,3 +593,17 @@ details.compare summary .i { color: var(--purple); }
 /* Lost card quick answers wrap onto lines */
 .chips.wrap { flex-wrap: wrap; overflow: visible; margin: 4px 0 8px; }
 .chips.wrap .chip { white-space: normal; text-align: left; }
+
+/* Setup questions */
+.q { padding: 4px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+.q:last-child { border-bottom: 0; margin-bottom: 0; }
+.q h2 { margin: 6px 0 2px; font-size: 17px; }
+.q p { margin: 0 0 8px; }
+.chips.pick .chip[aria-pressed="true"] { background: var(--purple); color: #FFFFFF; border-color: var(--purple); }
+body.signin #view > .btn { max-width: 380px; margin: 0 auto 6px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+.trip-pill { display: inline-block; margin: 6px auto 4px; padding: 5px 12px; border-radius: 999px; background: var(--purple-soft); color: var(--purple); font-weight: 600; font-size: 13.5px; }
+.tips { margin-top: 12px; }
+.tips h2 { margin-bottom: 4px; }
+.trip-card { margin-bottom: 16px; }
+.tips li > div > div:first-child { font-size: 15px; line-height: 1.45; }
