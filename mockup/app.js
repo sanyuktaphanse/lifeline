@@ -65,7 +65,7 @@ const RAILS = { wise: "Wise", revolut: "Revolut", sim_pix: "Pix", pix: "Pix", ba
 const rail = (r) => RAILS[r] ?? nice(r);
 const nice = (s) => String(s ?? "").replace(/_/g, " ");
 const tag = (label) => h("span", { class: "tag" }, label);
-const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden="true"><path class="trace" d="${PULSE}"/></svg>`; }; // a fixed drawing, never server text
+const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden="true"><path class="trace-base" d="${PULSE}"/><path class="trace" pathLength="100" d="${PULSE}"/></svg>`; }; // a fixed drawing, never server text
 
 // ---------- navigation and language ----------
 const view = document.getElementById("view");
@@ -282,12 +282,13 @@ function chat(seed) {
   view.classList.add("chatting");
   view.append(h("h1", {}, t("chat")), list, h("div", { class: "composer" }, chips, attached, h("div", { class: "line" }, clip, msg, send)));
   list.append(...thread);
-  if (thread.length === 0) { list.append(answer(t("hello"), false), starters); chips.hidden = true; }
+  if (thread.length === 0) { list.append(answerNode(t("hello"), false, false), starters); chips.hidden = true; }
   if (seed) { use(seed); if (seed.send) submit(); }
 }
 
 // Turns an AgentReply into nodes, in the order docs/api.md "Reading an AgentReply" gives.
 function replyNodes(r, onReply, inRescue = false) {
+  const answer = (text, isSample) => answerNode(text, isSample, !inRescue);
   const out = [];
   let body = r.text || "";
   for (const s of r.blocked || []) { out.push(h("div", { class: "blocked" }, icon("ban"), h("span", {}, t("blocked"), s))); body = body.replace(s, ""); }
@@ -302,12 +303,12 @@ function replyNodes(r, onReply, inRescue = false) {
   if (r.turn_summary) out.push(h("div", { class: "summary" }, "✓ ", r.turn_summary));
   return out;
 }
-function answer(text, isSample) {
+function answerNode(text, isSample, copyable = true) {
   const mini = h("span", { class: "mini", "aria-hidden": "true" }); drawTrace(mini);
   const copy = h("button", { class: "chipbtn", onclick: async () => { try { await navigator.clipboard.writeText(text); copy.lastChild.textContent = t("copied"); } catch { /* the text stays selectable */ } } }, icon("copy"), h("span", {}, t("copy")));
   return h("div", { class: "answer" },
     h("div", { class: "who" }, mini, h("span", {}, t("answer")), isSample ? tag(t("sample")) : ""),
-    h("p", {}, text), h("div", { class: "answer-actions" }, copy));
+    h("p", {}, text), copyable ? h("div", { class: "answer-actions" }, copy) : "");
 }
 function receiptCard(rc) {
   return h("div", { class: "card sheet" },
@@ -338,18 +339,19 @@ function paymentSheet(c, onReply) {
     const on = sel && rt.rail === sel.rail;
     const off = rt.blocked_reason || rt.limit_ok === false || rt.status === "down";
     return h("div", { class: `route${on ? " sel" : ""}${off ? " off" : ""}` },
-      h("span", {}, on ? "● " : "○ ", rail(rt.rail), rt.simulated ? tag(t("simulated")) : ""),
-      h("span", { class: "muted" }, off ? t("blockedRoute") : t("feeShort", { fee: money(rt.fee, rt.currency_from), t: arrive(rt.arrival_hours) })));
+      h("span", { class: "r-dot", "aria-hidden": "true" }),
+      h("span", { class: "r-main" }, h("span", { class: "r-name" }, rail(rt.rail), rt.simulated ? tag(t("simulated")) : ""),
+        h("span", { class: "muted small" }, off ? t("blockedRoute") : t("feeShort", { fee: money(rt.fee, rt.currency_from), t: arrive(rt.arrival_hours) }))));
   });
   const timer = h("span", {});
   const yes = h("button", { class: "btn", onclick: async () => {
     if (!token) return;
-    const tk = token; token = null; stop(); yes.disabled = no.disabled = true; yes.textContent = t("sending");
+    const tk = token; token = null; stop(); yes.disabled = no.disabled = true; yes.textContent = t("sending"); no.hidden = true; timer.hidden = true;
     try { onReply(await call("POST", "/confirm", { user_id: USER, confirmation_token: tk, lang: getLang() })); }
     catch (e) { onReply({ text: errorText(e), blocked: [], turn_summary: null }); }
     yes.textContent = t("confirmed");
   } }, a.type === "transfer" ? t("confirmSend") : t("confirmBtn"));
-  const no = h("button", { class: "link", onclick: () => { token = null; stop(); yes.disabled = no.disabled = true; no.textContent = t("notSent"); } }, t("notNow"));
+  const no = h("button", { class: "link", onclick: () => { token = null; stop(); yes.hidden = true; no.disabled = true; no.textContent = t("notSent"); no.classList.add("done"); timer.hidden = true; } }, t("notNow"));
   // A live countdown to the token's expiry, so the student knows how long the confirmation lasts.
   let left = c.expires_in_seconds || 300;
   const tick = () => { timer.textContent = t("expires", { t: `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` }); if (left-- <= 0) { stop(); token = null; yes.disabled = true; timer.textContent = t("expired"); } };
@@ -361,7 +363,7 @@ function paymentSheet(c, onReply) {
     h("p", { class: "muted" }, t("types")[a.type] ?? nice(a.type)),
     a.amount ? h("p", { class: "amount big" }, money(a.amount, a.currency)) : "",
     rows.length ? h("div", { class: "sheet-rows" }, rows) : "",
-    routes.length > 1 ? h("details", { class: "compare" }, h("summary", {}, t("compare", { n: routes.length })), h("div", { class: "routes" }, routes)) : "",
+    routes.length > 1 ? h("details", { class: "compare" }, h("summary", {}, h("span", {}, t("compare", { n: routes.length })), icon("chev")), h("div", { class: "routes" }, routes)) : "",
     h("div", { class: "warn" }, icon("alert"), h("span", {}, t("warnings")[c.warning_key] ?? t("checkFirst"))),
     yes, h("div", { style: "text-align:center" }, no));
 }
@@ -399,7 +401,7 @@ function sos() {
     const doNow = r.rescue?.do_now;
     if (doNow === "answer_identity_question") {
       // The answer is sent once and not kept anywhere in the app.
-      const ans = typed(h("input", { class: "field", type: "text", autocomplete: "off", "aria-label": t("yourAnswer") }));
+      const ans = typed(h("input", { class: "field", type: "text", autocomplete: "off", placeholder: t("yourAnswer"), "aria-label": t("yourAnswer") }));
       card.append(ans, h("button", { class: "btn", onclick: async (ev) => { ev.currentTarget.disabled = true; await step({ text: ans.value }); } }, t("sendAnswer")));
     } else if (doNow === "choose_card") {
       card.append(h("h2", {}, t("whichCard")), ...(r.rescue.card_names || []).map((n) => h("button", { class: "choice", onclick: () => step({ text: n }) }, icon("card"), n)));
@@ -505,14 +507,14 @@ async function activity() {
 // ---------- Help and the roadmap ----------
 function help() {
   view.append(h("h1", {}, t("help")),
-    h("section", { class: "card" }, t("faq").map(([q, a]) => h("details", { class: "faq" }, h("summary", {}, q), h("p", {}, a)))),
-    h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), h("span", { "aria-hidden": "true" }, "›")));
+    h("section", { class: "card" }, t("faq").map(([q, a]) => h("details", { class: "faq" }, h("summary", {}, h("span", {}, q), icon("chev")), h("p", {}, a)))),
+    h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), icon("chev", "chev-r")));
 }
 // Planned, not built: each line says what exists today, so nothing on this screen claims a feature that is not there.
 function roadmap() {
   view.append(h("h1", {}, t("roadmap")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("roadmapSub")),
-    h("section", { class: "card" }, h("ul", { class: "list" }, t("roadmapItems").map(([, what, sub]) =>
-      h("li", {}, h("span", { class: "emoji ib" }, icon("sparkle")), h("div", {}, h("div", { class: "what" }, what, tag(t("soon"))), h("div", { class: "muted small" }, sub)))))));
+    h("section", { class: "card" }, h("ul", { class: "list" }, t("roadmapItems").map(([, what, sub], i) =>
+      h("li", {}, h("span", { class: "emoji ib" }, icon(["lock", "shield", "cash", "family", "sparkle", "card", "home"][i] || "sparkle")), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))));
 }
 
 // ---------- 404: the line goes flat ----------

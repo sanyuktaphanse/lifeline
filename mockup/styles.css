@@ -536,3 +536,44 @@ button.sso-dot:hover { border-color: rgba(91, 63, 214, 0.35); }
 
 .reminders { margin-bottom: 12px; padding: 12px 16px; }
 .reminders h2 { font-size: 16px; margin: 0 0 4px; }
+
+/* ===== Detail pass ===== */
+/* Heartbeat: the whole line shows faintly, a bright beam runs along it like a monitor */
+.trace-base { fill: none; stroke: rgba(255, 255, 255, 0.38); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.mini-orb .trace-base, .thinking .mini .trace-base, .answer .mini .trace-base { stroke-width: 3.2; }
+.orb .trace, .mini .trace, .mini-orb .trace, .w-mid .orb .trace, .thinking .mini .trace { stroke-dasharray: none; animation: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .orb .trace, .thinking .mini .trace { stroke-dasharray: 26 100; stroke-dashoffset: 26; animation: travel 2.4s cubic-bezier(.45,.05,.55,.95) infinite; }
+  .thinking .mini .trace { animation-duration: 1.3s; }
+  @keyframes travel { from { stroke-dashoffset: 26; } to { stroke-dashoffset: -100; } }
+}
+.answer .mini .trace { stroke-dasharray: none; animation: none; }
+
+/* Help questions and Compare routes: a chevron that turns, no browser triangle */
+details.faq summary, details.compare summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+details.faq summary::-webkit-details-marker, details.compare summary::-webkit-details-marker { display: none; }
+details.faq summary .i, details.compare summary .i { width: 18px; height: 18px; color: var(--ink-soft); transition: transform 0.2s ease; }
+details[open] > summary .i { transform: rotate(180deg); }
+details.faq:last-child { border-bottom: 0; }
+details.faq { padding: 12px 2px; }
+details.compare summary { justify-content: flex-start; color: var(--purple); }
+details.compare summary .i { color: var(--purple); }
+
+/* Route choices: a radio dot, the name, the fee under it */
+.route { align-items: center; justify-content: flex-start; gap: 12px; padding: 10px 12px; }
+.r-dot { width: 16px; height: 16px; border-radius: 50%; border: 2px solid rgba(31, 27, 45, 0.25); flex: none; }
+.route.sel .r-dot { border-color: var(--purple); background: radial-gradient(circle, var(--purple) 45%, transparent 50%); }
+.r-main { display: grid; gap: 2px; }
+.r-name { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.route > span:first-child { display: block; }
+.link.done { text-decoration: none; color: var(--ink-soft); }
+
+/* Roadmap and plan lists: icon at the top of each line */
+.list li .emoji.ib { align-self: flex-start; margin-top: 2px; }
+
+/* New messages stop above the message box, not behind it */
+.thread > * { scroll-margin-bottom: 250px; }
+.summary { font-size: 12.5px; color: #8A8599; }
+
+.list .emoji.ib { flex: none; width: 36px; min-width: 36px; }
+.chev-r { transform: rotate(-90deg); color: var(--ink-soft); }
