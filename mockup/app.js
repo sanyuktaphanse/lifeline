@@ -5,6 +5,7 @@
 
 import { sample } from "./sample.js";
 import { LANGS, getLang, setLang, t } from "./i18n.js";
+import { icon } from "./icons.js";
 
 const API = "http://127.0.0.1:8000";
 const USER = "student_001"; // fixture: the demo student, fixtures/demo_user.yaml. There is no sign in yet.
@@ -57,6 +58,11 @@ const errorText = (e) => (typeof e?.detail === "string" ? e.detail : e?.detail?.
 const locale = () => ({ en: "en-SG", pt: "pt-BR", zh: "zh-CN" })[getLang()];
 const money = (amount, cur) => { const n = Number(amount); const d = Number.isInteger(n) ? 0 : 2; return `${n.toLocaleString(locale(), { minimumFractionDigits: d, maximumFractionDigits: 2 })} ${cur ?? ""}`.trim(); };
 const when = (iso) => new Date(iso).toLocaleString(locale(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const days = (iso) => Math.round((new Date(iso).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400e3);
+const relDay = (iso) => new Intl.RelativeTimeFormat(locale(), { numeric: "auto" }).format(days(iso), "day");
+// Route names as a student knows them. sim_pix is the simulated Pix rail (rails/sim/); bank_wire is a quoted bank transfer.
+const RAILS = { wise: "Wise", revolut: "Revolut", sim_pix: "Pix", pix: "Pix", bank_wire: "Bank transfer" };
+const rail = (r) => RAILS[r] ?? nice(r);
 const nice = (s) => String(s ?? "").replace(/_/g, " ");
 const tag = (label) => h("span", { class: "tag" }, label);
 const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden="true"><path class="trace" d="${PULSE}"/></svg>`; }; // a fixed drawing, never server text
@@ -78,6 +84,8 @@ function go(name, arg) {
   view.focus({ preventScroll: true });
 }
 tabs.forEach((b) => b.addEventListener("click", () => go(b.dataset.tab)));
+const TAB_ICONS = { home: "home", chat: "chat", sos: "buoy", activity: "history", help: "help" };
+tabs.forEach((b) => b.querySelector(".ic").replaceChildren(icon(TAB_ICONS[b.dataset.tab])));
 function paintChrome() {
   const names = { home: "tabHome", chat: "tabChat", sos: "tabSos", activity: "tabActivity", help: "tabHelp" };
   tabs.forEach((b) => { const label = t(names[b.dataset.tab]); b.setAttribute("aria-label", label); b.lastElementChild.textContent = label; });
@@ -114,9 +122,9 @@ function welcome() {
 // After Try the demo: the demo plan in fixtures/demo_user.yaml as docs/api.md, "Rescue", states it. Nothing is asked.
 function hello() {
   view.append(
-    h("div", { class: "hello" }, h("span", { class: "wave", "aria-hidden": "true" }, "👋"), h("h1", {}, t("helloTitle")), h("p", {}, t("helloSub"))),
+    h("div", { class: "hello" }, (() => { const o = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(o); return o; })(), h("h1", {}, t("helloTitle")), h("p", {}, t("helloSub"))),
     h("section", { class: "card" }, h("h2", {}, t("safetyNet")), h("p", { class: "muted small" }, t("safetyIntro")),
-      h("ul", { class: "list" }, t("plan").map(([e, what, sub]) => h("li", {}, h("span", { class: "emoji", "aria-hidden": "true" }, e), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
+      h("ul", { class: "list" }, t("plan").map(([, what, sub], i) => h("li", {}, h("span", { class: "emoji ib" }, icon(["card", "buoy", "lock", "cash"][i])), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
     h("p", { class: "muted small", style: "text-align:center" }, t("ownPlanSoon")),
     slider(t("slideStart"), t("getStarted"), () => go("home")),
   );
@@ -156,7 +164,11 @@ async function home() {
   const rentSub = h("span", { class: "sub" }, t("cRentSub"));
   const badge = h("span", { class: "badge" }, t("checking"));
   const count = h("span", { class: "count", hidden: true });
-  const card = (cls, icon, title, sub, onclick) => h("button", { class: `tile ${cls}`, onclick }, h("span", { class: "ico", "aria-hidden": "true" }, icon), h("span", { class: "ttl" }, title), sub);
+  const card = (cls, ic, title, sub, onclick) => h("button", { class: `tile ${cls}`, onclick }, h("span", { class: "ico" }, icon(ic)), h("span", { class: "ttl" }, title), sub);
+  const balance = balanceCard();
+  const remindList = h("ul", { class: "list" }, h("li", {}, h("span", { class: "muted small" }, t("nothingScheduled"))));
+  const remindBox = h("section", { class: "card reminders", hidden: true }, h("h2", {}, t("comingUp")), remindList,
+    h("button", { class: "link", onclick: () => go("chat", { prompt: t("more")[1] }) }, t("setReminder")));
   const [q0, q1, q2, q3] = t("quick");
   const ask = h("textarea", { class: "msg", rows: "2", placeholder: t("askPh"), "aria-label": t("yourMessage") });
   const sendIt = () => { const v = ask.value.trim(); if (v) go("chat", { prompt: v, send: true }); else ask.focus(); };
@@ -165,25 +177,50 @@ async function home() {
   ask.addEventListener("paste", (e) => { const v = e.clipboardData?.getData("text") ?? ""; if (!v) return; e.preventDefault(); go("chat", { prompt: ask.value, pasted: v }); });
   view.append(
     h("div", { class: "home-hero" },
-      h("button", { class: "bell", "aria-label": t("reminders"), onclick: () => go("chat", { prompt: t("more")[1] }) }, "🔔", count), orb, h("p", { class: "muted" }, t("homeHello")),
+      h("button", { class: "bell", "aria-label": t("reminders"), "aria-expanded": "false", onclick: (ev) => { const open = remindBox.hidden; remindBox.hidden = !open; ev.currentTarget.setAttribute("aria-expanded", String(open)); } }, icon("bell"), count), orb, h("p", { class: "muted" }, t("homeHello")),
       h("h1", {}, t("homeHead")[0], h("br"), h("span", { class: "soft" }, t("homeHead")[1]))),
+    remindBox,
+    balance,
     h("div", { class: "tiles" },
-      card("rent", "🏠", t("cRent"), rentSub, () => go("chat", q0)),
-      card("lost", "🛟", t("cLost"), h("span", { class: "sub" }, t("cLostSub")), () => go("sos")),
-      card("home", "📦", t("cHome"), h("span", { class: "sub" }, t("cHomeSub")), () => go("chat", q1)),
-      card("scam", "🛡️", t("cScam"), h("span", { class: "sub" }, t("cScamSub")), () => go("chat", q2))),
+      card("rent", "home", t("cRent"), rentSub, () => go("chat", { ...q0, send: true })),
+      card("lost", "buoy", t("cLost"), h("span", { class: "sub" }, t("cLostSub")), () => go("sos")),
+      card("home", "inbound", t("cHome"), h("span", { class: "sub" }, t("cHomeSub")), () => go("chat", { ...q1, send: true })),
+      card("scam", "shield", t("cScam"), h("span", { class: "sub" }, t("cScamSub")), () => go("chat", q2))),
     h("div", { class: "glow-box" }, ask,
-      h("div", { class: "glow-actions" }, h("button", { class: "iconbtn", "aria-label": t("attach"), onclick: () => go("chat", { prompt: ask.value, attach: true }) }, "📎"),
-        h("span", { style: "flex:1" }), h("button", { class: "iconbtn send", "aria-label": t("send"), onclick: sendIt }, "➤"))),
+      h("div", { class: "glow-actions" }, h("button", { class: "iconbtn", "aria-label": t("attach"), onclick: () => go("chat", { prompt: ask.value, attach: true }) }, icon("clip")),
+        h("span", { style: "flex:1" }), h("button", { class: "iconbtn send", "aria-label": t("send"), onclick: sendIt }, icon("send")))),
     h("div", { class: "home-foot" }, h("button", { class: "link", onclick: () => go("activity") }, badge), h("button", { class: "link", onclick: () => go("roadmap") }, t("whatsNext"))),
   );
   try {
     const r = await call("GET", `/reminders/${USER}`);
     const items = [...(r.due || []), ...(r.upcoming || [])];
-    if (items.length) rentSub.textContent = t("dueIn", { text: items[0].text, when: when(items[0].due) });
+    if (items.length) rentSub.textContent = t("dueIn", { text: items[0].text, when: relDay(items[0].due) });
+    if (items.length) remindList.replaceChildren(...items.map((it) => h("li", {}, h("span", { class: "a-ic" }, icon("clock")), h("div", { class: "a-main" }, h("div", { class: "what" }, it.text), h("div", { class: "muted small" }, relDay(it.due))))));
     if ((r.due || []).length) { count.textContent = String(r.due.length); count.hidden = false; count.setAttribute("aria-label", t("due", { n: r.due.length })); }
   } catch { /* the card keeps its plain subtitle */ }
   try { setBadge(badge, await call("GET", `/ledger/${USER}/verify`)); } catch { badge.remove(); }
+}
+
+// The balance, from the demo fixture. The API has no balance endpoint yet, so when it does not answer the card shows the
+// fixture figures labelled Sample. A tap on the eye hides the figures, for checking the app in public.
+function balanceCard() {
+  let hidden = false;
+  const figs = h("div", { class: "bal-figs" });
+  const label = h("span", { class: "muted small" }, t("balance"));
+  const eye = h("button", { class: "eye", "aria-label": t("hideBal"), onclick: () => { hidden = !hidden; paint(); } });
+  let data = null, isSample = false;
+  function paint() {
+    eye.replaceChildren(icon(hidden ? "eyeOff" : "eye")); eye.setAttribute("aria-label", hidden ? t("showBal") : t("hideBal"));
+    figs.replaceChildren(...(data ? Object.entries(data).map(([cur, amt], i) => h("span", { class: i ? "bal-sub" : "bal-main" }, hidden ? `•••• ${cur}` : money(amt, cur))) : []));
+  }
+  const box = h("section", { class: "card balance" }, h("div", { class: "bal-head" }, h("span", { class: "bal-ic" }, icon("wallet")), label, h("span", { style: "flex:1" }), eye), figs);
+  (async () => {
+    try { data = await call("GET", `/balances/${USER}`); } catch { data = sample("GET", `/balances/${USER}`); isSample = true; }
+    if (isSample || usingSample) label.after(tag(t("sample")));
+    paint();
+  })();
+  paint();
+  return box;
 }
 
 // ---------- Chat ----------
@@ -195,8 +232,9 @@ function chat(seed) {
   const attached = h("div", { class: "attached", hidden: true },
     h("span", { class: "label" }, t("received")), pasteBox,
     h("button", { class: "link", onclick: () => { pasteBox.value = ""; attached.hidden = true; } }, t("remove")));
-  const send = h("button", { class: "iconbtn send", "aria-label": t("send"), onclick: () => submit() }, "➤");
-  const clip = h("button", { class: "iconbtn", "aria-label": t("attach"), title: t("attach"), onclick: () => { attached.hidden = false; pasteBox.focus(); } }, "📎");
+  const send = h("button", { class: "iconbtn send", "aria-label": t("send"), onclick: () => submit() }, icon("send"));
+  const clip = h("button", { class: "iconbtn", "aria-label": t("attach"), title: t("attach"), onclick: () => { attached.hidden = false; pasteBox.focus(); } }, icon("clip"));
+  const QICONS = ["home", "inbound", "shield", "wallet"];
   // A paste into the message box is someone else's words, so it moves to the attached message.
   msg.addEventListener("paste", (ev) => {
     const text = ev.clipboardData?.getData("text") ?? "";
@@ -206,7 +244,7 @@ function chat(seed) {
     attached.hidden = false;
   });
   const chips = h("div", { class: "chips" },
-    t("quick").map((q) => h("button", { class: "chip top", onclick: () => use(q) }, `${q.emoji} ${q.label}`)),
+    t("quick").map((q, i) => h("button", { class: "chip top", onclick: () => use(q) }, icon(QICONS[i]), q.label)),
     h("button", { class: "chip", onclick: (ev) => { ev.currentTarget.remove(); t("more").forEach((p) => chips.append(h("button", { class: "chip", onclick: () => use({ prompt: p }) }, p))); } }, t("moreIdeas")));
   function use(q) {
     msg.value = q.prompt || "";
@@ -218,6 +256,7 @@ function chat(seed) {
     const text = msg.value.trim();
     const pasted = attached.hidden ? "" : pasteBox.value.trim();
     if (!text) { push(h("div", { class: "error" }, pasted ? t("typeOwn") : t("typeFirst"))); return; }
+    starters.remove(); chips.hidden = false;
     push(h("div", { class: "bubble me" }, text));
     push(h("div", { class: "stamp" }, new Date().toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })));
     if (pasted) push(h("div", { class: "bubble quoted" }, h("span", { class: "label" }, t("received")), pasted));
@@ -237,40 +276,44 @@ function chat(seed) {
   function push(node) { thread.push(node); list.append(node); node.scrollIntoView({ block: "end", behavior: "smooth" }); }
   function showReply(r) { replyNodes(r, showReply).forEach(push); }
 
+  // An empty chat offers four starting questions in the middle, so the screen is never blank.
+  const starters = h("div", { class: "starters" }, h("p", { class: "muted small" }, t("tryAsking")),
+    t("quick").map((q, i) => h("button", { class: "starter", onclick: () => { use(q); if (!q.attach) submit(); } }, h("span", { class: "s-ic" }, icon(QICONS[i])), h("span", {}, q.label), icon("arrowUp", "s-go"))));
   view.classList.add("chatting");
   view.append(h("h1", {}, t("chat")), list, h("div", { class: "composer" }, chips, attached, h("div", { class: "line" }, clip, msg, send)));
   list.append(...thread);
-  if (thread.length === 0) list.append(answer(t("hello"), false));
+  if (thread.length === 0) { list.append(answer(t("hello"), false), starters); chips.hidden = true; }
   if (seed) { use(seed); if (seed.send) submit(); }
 }
 
 // Turns an AgentReply into nodes, in the order docs/api.md "Reading an AgentReply" gives.
-function replyNodes(r, onReply) {
+function replyNodes(r, onReply, inRescue = false) {
   const out = [];
   let body = r.text || "";
-  for (const s of r.blocked || []) { out.push(h("div", { class: "blocked" }, t("blocked"), s)); body = body.replace(s, ""); }
+  for (const s of r.blocked || []) { out.push(h("div", { class: "blocked" }, icon("ban"), h("span", {}, t("blocked"), s))); body = body.replace(s, ""); }
   if (r.turn_summary) body = body.replace(r.turn_summary, "");
   body = body.trim();
   if (body) out.push(answer(body, r.sample));
   if (r.receipt) out.push(receiptCard(r.receipt));
   if (r.freeze) out.push(h("div", { class: "bubble bot" }, t("freeze", { s: nice(r.freeze.status) }), r.freeze.deep_link ? h("a", { href: r.freeze.deep_link, target: "_blank", rel: "noopener" }, t("openCardApp")) : ""));
   if (r.cancel) out.push(h("div", { class: "bubble bot" }, t("cancel", { s: nice(r.cancel.status) }), r.cancel.reason ? `. ${r.cancel.reason}` : ""));
-  if (r.confirmation) out.push(paymentSheet(r.confirmation, onReply));
+  // In a rescue the step has its own Freeze or Send button, which goes to /rescue/step, so no payment sheet is drawn.
+  if (r.confirmation && !inRescue) out.push(paymentSheet(r.confirmation, onReply));
   if (r.turn_summary) out.push(h("div", { class: "summary" }, "✓ ", r.turn_summary));
   return out;
 }
 function answer(text, isSample) {
   const mini = h("span", { class: "mini", "aria-hidden": "true" }); drawTrace(mini);
-  const copy = h("button", { class: "chipbtn", onclick: async () => { try { await navigator.clipboard.writeText(text); copy.textContent = t("copied"); } catch { /* the text stays selectable */ } } }, "⧉ ", t("copy"));
+  const copy = h("button", { class: "chipbtn", onclick: async () => { try { await navigator.clipboard.writeText(text); copy.lastChild.textContent = t("copied"); } catch { /* the text stays selectable */ } } }, icon("copy"), h("span", {}, t("copy")));
   return h("div", { class: "answer" },
     h("div", { class: "who" }, mini, h("span", {}, t("answer")), isSample ? tag(t("sample")) : ""),
     h("p", {}, text), h("div", { class: "answer-actions" }, copy));
 }
 function receiptCard(rc) {
   return h("div", { class: "card sheet" },
-    h("h2", {}, rc.status === "completed" ? t("sent") : t("transferStatus", { s: nice(rc.status) })),
+    h("h2", { class: "sent-h" }, rc.status === "completed" ? icon("check") : icon("clock"), h("span", {}, rc.status === "completed" ? t("sent") : t("transferStatus", { s: nice(rc.status) }))),
     h("p", { class: "amount" }, money(rc.amount, rc.currency)),
-    h("p", { class: "muted" }, t("via", { rail: rc.rail, id: rc.receipt_id }), rc.simulated ? tag(t("simulated")) : ""));
+    h("p", { class: "muted" }, t("via", { rail: rail(rc.rail), id: rc.receipt_id }), rc.simulated ? tag(t("simulated")) : ""));
 }
 
 // The payment sheet: what moves, to whom, by which route and at what cost, then one clear confirm.
@@ -285,7 +328,7 @@ function paymentSheet(c, onReply) {
   if (a.purpose) rows.push(line(t("forWhat"), t("purposes")[a.purpose] ?? nice(a.purpose)));
   if (sel) {
     const fee = Number(sel.fee || 0), fx = Number(sel.spread_cost || 0);
-    rows.push(line(t("viaLabel"), sel.rail, sel.simulated ? tag(t("simulated")) : ""));
+    rows.push(line(t("viaLabel"), rail(sel.rail), sel.simulated ? tag(t("simulated")) : ""));
     rows.push(line(t("fee"), money(fee, sel.currency_from)));
     if (fx) rows.push(line(t("fx"), money(fx, sel.currency_from)));
     rows.push(line(t("arrives"), arrive(sel.arrival_hours)));
@@ -295,7 +338,7 @@ function paymentSheet(c, onReply) {
     const on = sel && rt.rail === sel.rail;
     const off = rt.blocked_reason || rt.limit_ok === false || rt.status === "down";
     return h("div", { class: `route${on ? " sel" : ""}${off ? " off" : ""}` },
-      h("span", {}, on ? "● " : "○ ", rt.rail, rt.simulated ? tag(t("simulated")) : ""),
+      h("span", {}, on ? "● " : "○ ", rail(rt.rail), rt.simulated ? tag(t("simulated")) : ""),
       h("span", { class: "muted" }, off ? t("blockedRoute") : t("feeShort", { fee: money(rt.fee, rt.currency_from), t: arrive(rt.arrival_hours) })));
   });
   const timer = h("span", {});
@@ -319,7 +362,7 @@ function paymentSheet(c, onReply) {
     a.amount ? h("p", { class: "amount big" }, money(a.amount, a.currency)) : "",
     rows.length ? h("div", { class: "sheet-rows" }, rows) : "",
     routes.length > 1 ? h("details", { class: "compare" }, h("summary", {}, t("compare", { n: routes.length })), h("div", { class: "routes" }, routes)) : "",
-    h("div", { class: "warn" }, "⚠️ ", t("warnings")[c.warning_key] ?? t("checkFirst")),
+    h("div", { class: "warn" }, icon("alert"), h("span", {}, t("warnings")[c.warning_key] ?? t("checkFirst"))),
     yes, h("div", { style: "text-align:center" }, no));
 }
 
@@ -331,8 +374,8 @@ function sos() {
   start();
   function start() {
     let trigger = "card_lost";
-    const lost = h("button", { class: "choice", "aria-pressed": "true", onclick: () => pick("card_lost") }, t("isLost"));
-    const stolen = h("button", { class: "choice", "aria-pressed": "false", onclick: () => pick("card_stolen") }, t("isStolen"));
+    const lost = h("button", { class: "choice", "aria-pressed": "true", onclick: () => pick("card_lost") }, icon("card"), t("isLost"));
+    const stolen = h("button", { class: "choice", "aria-pressed": "false", onclick: () => pick("card_stolen") }, icon("alert"), t("isStolen"));
     function pick(tr) { trigger = tr; lost.setAttribute("aria-pressed", tr === "card_lost"); stolen.setAttribute("aria-pressed", tr === "card_stolen"); }
     const words = typed(h("textarea", { class: "field", rows: "3", placeholder: t("whatHappenedPh"), "aria-label": t("whatHappened") }));
     const begin = h("button", { class: "btn danger", onclick: async () => {
@@ -352,14 +395,14 @@ function sos() {
     const card = h("div", { class: "card" },
       h("div", { class: "steps", "aria-hidden": "true" }, ORDER.map((_, i) => h("span", { class: i <= at ? "on" : "" }))),
       h("p", { class: "muted small" }, t("step", { s: t("steps")[st] ?? t("starting") })));
-    replyNodes(r, render).forEach((n) => card.append(n));
+    replyNodes(r, render, true).forEach((n) => card.append(n));
     const doNow = r.rescue?.do_now;
     if (doNow === "answer_identity_question") {
       // The answer is sent once and not kept anywhere in the app.
       const ans = typed(h("input", { class: "field", type: "text", autocomplete: "off", "aria-label": t("yourAnswer") }));
       card.append(ans, h("button", { class: "btn", onclick: async (ev) => { ev.currentTarget.disabled = true; await step({ text: ans.value }); } }, t("sendAnswer")));
     } else if (doNow === "choose_card") {
-      card.append(h("h2", {}, t("whichCard")), ...(r.rescue.card_names || []).map((n) => h("button", { class: "choice", onclick: () => step({ text: n }) }, "💳 ", n)));
+      card.append(h("h2", {}, t("whichCard")), ...(r.rescue.card_names || []).map((n) => h("button", { class: "choice", onclick: () => step({ text: n }) }, icon("card"), n)));
     } else if (doNow === "confirm_freeze" || doNow === "confirm_transfer_or_skip") {
       const token = r.confirmation?.confirmation_token;
       const actions = h("div", { class: "row" });
@@ -381,35 +424,62 @@ function sos() {
 function typed(el) { el.addEventListener("paste", (ev) => ev.preventDefault()); el.addEventListener("drop", (ev) => ev.preventDefault()); return el; }
 
 // ---------- Activity ----------
-// Ledger entries in plain words. Only what the entries say; anything else stays in the technical view.
+// Ledger entries in plain words, the way a banking app lists them. Only what the entries say; the raw entries stay
+// under Advanced. A receipt finds what it paid for through the proposal with the same idempotency key.
 function friendly(entries) {
   const out = [];
+  const actions = {};
+  for (const e of entries) { const a = e.payload?.action; if (a?.idempotency_key) actions[a.idempotency_key] = a; }
   const add = (o, group) => out.push({ ...o, group });
   for (const e of entries) {
     const p = e.payload || {};
     if (e.kind === "receipt" && p.receipt) {
-      const rc = p.receipt;
-      add({ emoji: rc.status === "completed" ? "✅" : "⏳", what: t("aPaid", { amount: money(rc.amount, rc.currency), rail: rc.rail }), sub: `${nice(rc.status)}${rc.simulated ? " · " + t("isSimulated") : ""}`, ts: e.ts }, "pay");
+      const rc = p.receipt; const a = actions[rc.idempotency_key] || {};
+      const done = rc.status === "completed";
+      add({ ic: done ? "check" : "clock", tone: done ? "ok" : "", what: t("aSent", { purpose: t("purposes")[a.purpose] ?? t("aTransfer") }),
+        sub: [a.payee_id ? t("aSentTo", { payee: t("payees")[a.payee_id] ?? nice(a.payee_id) }) : "", done ? "" : t("aPending"), rc.simulated ? t("simNote") : ""].filter(Boolean).join(" · "),
+        amount: `−${money(rc.amount, rc.currency)}`, ts: e.ts }, "pay");
     } else if (e.kind === "decision" && p.decision && p.decision.allowed === false) {
-      add({ emoji: "⛔", what: t("aBlocked", { what: t("types")[p.action?.type] ?? t("aRequest") }), sub: t("rules", { r: (p.decision.rule_ids || []).join(", ") }), ts: e.ts }, "blocked");
+      const paste = (p.decision.rule_ids || []).includes("R01");
+      add({ ic: "ban", tone: "bad", what: paste ? t("aBlockedPaste") : t("aBlockedRule", { what: t("types")[p.action?.type] ?? t("aRequest") }),
+        sub: paste ? t("aBlockedPasteSub") : t("aBlockedRuleSub"), ts: e.ts }, "blocked");
     } else if (e.kind === "note" && p.kind === "family_notice") {
-      add({ emoji: "👪", what: t("aFamily"), sub: t("aFamilySub"), ts: e.ts }, "rescue");
-    } else if (e.kind === "note" && /^rescue_/.test(p.kind || "")) {
-      add({ emoji: "🛟", what: t("aRescue", { what: nice(p.kind.replace("rescue_", "")) }), sub: "", ts: e.ts }, "rescue");
+      add({ ic: "family", what: t("aFamilyTold"), sub: p.to?.channel ? t("aFamilyBy", { channel: p.to.channel === "whatsapp" ? "WhatsApp" : nice(p.to.channel) }) : "", ts: e.ts }, "rescue");
+    } else if (e.kind === "note" && p.kind === "rescue_started") {
+      // Only the start shows; each step between states is a rescue_transition note, kept under Advanced.
+      add({ ic: "buoy", what: t("aRescueStarted"), sub: "", ts: e.ts }, "rescue");
+    } else if (e.kind === "note" && p.kind === "rescue_replacement") {
+      add({ ic: "card", what: t("aReplace"), sub: t("aReplaceSub"), ts: e.ts }, "rescue");
     } else if (e.kind === "execution" && p.result?.freeze) {
-      add({ emoji: "🧊", what: t("aFreeze"), sub: nice(p.result.freeze.status), ts: e.ts }, "rescue");
+      add({ ic: "snow", what: t("aFrozen"), sub: t("aFrozenSub"), ts: e.ts }, "rescue");
     }
   }
   return out.reverse();
 }
-function row(it) { return h("li", {}, h("span", { class: "emoji", "aria-hidden": "true" }, it.emoji), h("div", {}, h("div", { class: "what" }, it.what), h("div", { class: "muted small" }, [it.sub, when(it.ts)].filter(Boolean).join(" · ")))); }
+function row(it) {
+  const time = new Date(it.ts).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" });
+  return h("li", {}, h("span", { class: `a-ic ${it.tone || ""}` }, icon(it.ic)),
+    h("div", { class: "a-main" }, h("div", { class: "what" }, it.what), h("div", { class: "muted small" }, [it.sub, time].filter(Boolean).join(" · "))),
+    it.amount ? h("span", { class: "a-amt" }, it.amount) : "");
+}
+// Groups the rows under Today, Yesterday or the date, newest first.
+function byDay(items) {
+  const groups = [];
+  for (const it of items) {
+    const d = days(it.ts);
+    const label = d === 0 ? t("dayToday") : d === -1 ? t("dayYesterday") : new Date(it.ts).toLocaleDateString(locale(), { day: "numeric", month: "short" });
+    if (!groups.length || groups[groups.length - 1].label !== label) groups.push({ label, rows: [] });
+    groups[groups.length - 1].rows.push(row(it));
+  }
+  return groups.map((g) => h("section", { class: "day" }, h("h3", { class: "day-h" }, g.label), h("ul", { class: "list card" }, g.rows)));
+}
 function setBadge(el, v) {
   const ok = v.first_broken_seq === null || v.first_broken_seq === undefined;
   el.className = ok ? "badge" : "badge warn";
-  el.textContent = ok ? t("verified") : t("tampered", { n: v.first_broken_seq });
+  el.replaceChildren(icon(ok ? "lock" : "alert"), h("span", {}, ok ? t("verified") : t("tampered", { n: v.first_broken_seq })));
 }
 async function activity() {
-  const list = h("ul", { class: "list" }, h("li", {}, h("span", { class: "muted" }, t("loading"))));
+  const list = h("div", { class: "feed" }, h("p", { class: "muted" }, t("loading")));
   const badge = h("span", { class: "badge" }, t("checking"));
   const tech = h("div", { hidden: true });
   let items = [];
@@ -417,9 +487,9 @@ async function activity() {
   function draw(which) {
     filters.replaceChildren(...t("filters").map(([k, label]) => h("button", { "aria-pressed": k === which ? "true" : "false", onclick: () => draw(k) }, label)));
     const shown = which === "all" ? items : items.filter((i) => i.group === which);
-    list.replaceChildren(...(shown.length ? shown.map(row) : [h("li", {}, h("span", { class: "muted" }, which === "all" ? t("nothingYet") : t("nothingHere")))]));
+    list.replaceChildren(...(shown.length ? byDay(shown) : [h("section", { class: "card" }, h("p", { class: "muted" }, which === "all" ? t("nothingYet") : t("nothingHere")))]));
   }
-  view.append(h("h1", {}, t("activity")), h("p", {}, badge), filters, h("section", { class: "card" }, list),
+  view.append(h("h1", {}, t("activity")), h("p", {}, badge), filters, list,
     h("button", { class: "link", onclick: () => { tech.hidden = !tech.hidden; } }, t("advanced")), tech);
   draw("all");
   try {
@@ -429,20 +499,20 @@ async function activity() {
     setBadge(badge, verify);
     tech.replaceChildren(h("section", { class: "card" }, h("p", { class: "muted small" }, t("entries", { n: entries.length })),
       h("ul", { class: "list" }, entries.slice().reverse().map((e) => h("li", {}, h("span", { class: "tech" }, `#${e.seq} ${e.kind}${e.payload?.kind ? ": " + e.payload.kind : ""} · ${e.hash.slice(0, 10)}…`))))));
-  } catch (e) { list.replaceChildren(h("li", {}, h("span", { class: "muted" }, errorText(e)))); badge.remove(); }
+  } catch (e) { list.replaceChildren(h("p", { class: "muted" }, errorText(e))); badge.remove(); }
 }
 
 // ---------- Help and the roadmap ----------
 function help() {
   view.append(h("h1", {}, t("help")),
     h("section", { class: "card" }, t("faq").map(([q, a]) => h("details", { class: "faq" }, h("summary", {}, q), h("p", {}, a)))),
-    h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, h("span", { "aria-hidden": "true" }, "🗺️"), h("span", {}, t("roadmapLink")), h("span", { "aria-hidden": "true" }, "›")));
+    h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), h("span", { "aria-hidden": "true" }, "›")));
 }
 // Planned, not built: each line says what exists today, so nothing on this screen claims a feature that is not there.
 function roadmap() {
   view.append(h("h1", {}, t("roadmap")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("roadmapSub")),
-    h("section", { class: "card" }, h("ul", { class: "list" }, t("roadmapItems").map(([e, what, sub]) =>
-      h("li", {}, h("span", { class: "emoji", "aria-hidden": "true" }, e), h("div", {}, h("div", { class: "what" }, what, tag(t("soon"))), h("div", { class: "muted small" }, sub)))))));
+    h("section", { class: "card" }, h("ul", { class: "list" }, t("roadmapItems").map(([, what, sub]) =>
+      h("li", {}, h("span", { class: "emoji ib" }, icon("sparkle")), h("div", {}, h("div", { class: "what" }, what, tag(t("soon"))), h("div", { class: "muted small" }, sub)))))));
 }
 
 // ---------- 404: the line goes flat ----------
@@ -459,5 +529,7 @@ function lost() {
 const asked = new URLSearchParams(location.search).get("lang");
 setLang(LANGS.some(([c]) => c === asked) ? asked : "en");
 paintChrome();
+// Ask the API once whether it is there, so the pill says the same thing on every screen.
+fetch(API + "/health").catch(() => { usingSample = true; paintPill(); });
 const first = location.hash.slice(1);
 go(first === "" ? "welcome" : first in screens ? first : "lost");

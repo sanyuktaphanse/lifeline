@@ -6,6 +6,7 @@
 export const LANGS = [["en", "EN", "English"], ["pt", "PT", "Português"], ["zh", "中", "中文"]];
 
 const en = {
+  balance: "Your balance", hideBal: "Hide balance", showBal: "Show balance", tryAsking: "Try asking", dayToday: "Today", dayYesterday: "Yesterday", aSent: "{purpose}", aSentTo: "{payee}", aReplace: "Replacement card", aReplaceSub: "Order it in your card app", aTransfer: "Transfer", aPending: "On its way", aBlockedPaste: "Stopped a payment from a pasted message", aBlockedPasteSub: "Only your own words can move money", aBlockedRule: "Stopped: {what}", aBlockedRuleSub: "It didn't fit your safety rules", aFamilyTold: "Your family was told", aFamilyBy: "By {channel}", aRescueStarted: "Lost card rescue started", aRescueStep: "Lost card rescue: {what}", aFrozen: "Card frozen", aFrozenSub: "Payments on it are stopped", simNote: "Simulated, no real money",
   homeHello: "Hi! I'm Lifeline, your money's safety net", homeHead: ["Ask about money,", "rent or a lost card."], askPh: "Ask Lifeline…",
   cRent: "Pay rent", cRentSub: "1,200 SGD to your landlord", cLost: "Lost card", cLostSub: "Freeze it and get help", cHome: "Money from home", cHomeSub: "Trace a transfer", cScam: "Is this a scam?", cScamSub: "Check a message",
   dueIn: "{text} · {when}", answer: "Lifeline", copy: "Copy", copied: "Copied",
@@ -20,8 +21,8 @@ const en = {
   // home
   hi: "Hi there 👋", helpToday: "How can Lifeline help today?", reminders: "Reminders", due: "{n} due",
   lostTitle: "Lost your card?", lostSub: "Freeze it and get emergency money, step by step.",
-  comingUp: "📅  Coming up", nothingScheduled: "Nothing scheduled. Ask Lifeline to remind you before rent is due.",
-  recent: "Recent activity", seeAll: "See all activity", noActivity: "No activity yet.", loading: "Loading…", checking: "🔒 Checking your history…",
+  comingUp: "Coming up", setReminder: "Set a reminder", nothingScheduled: "Nothing scheduled. Ask Lifeline to remind you before rent is due.",
+  recent: "Recent activity", seeAll: "See all activity", noActivity: "No activity yet.", loading: "Loading…", checking: "Checking your history…",
   whatsNext: "What's coming next →",
   quick: [
     { emoji: "🏠", label: "Pay rent", prompt: "Pay this month's rent of 1,200 SGD to my landlord in Brazil" },
@@ -36,9 +37,9 @@ const en = {
   more: ["Set up my rent to pay automatically every month", "Remind me 3 days before rent is due", "Send 300 SGD emergency money to my own account", "Before I set up Pix, what will they ask?", "How much cash can I still take out on my Chinese cards?", "Show my monthly summary"],
   typeOwn: "Type your own question too. A message someone sent you is never sent on its own.", typeFirst: "Type what you need first.",
   thinking: "Lifeline is thinking…", noAi: "Lifeline's AI is not set up on this computer yet, so nothing was done.",
-  blocked: "⛔ Blocked: ", sample: "Sample", simulated: "Simulated",
+  blocked: "Blocked: ", sample: "Sample", simulated: "Simulated",
   freeze: "Card freeze: {s}", openCardApp: " Open your card app", cancel: "Cancel: {s}",
-  sent: "✅ Sent", transferStatus: "Transfer {s}", via: "via {rail} · receipt {id}",
+  sent: "Sent", transferStatus: "Transfer {s}", via: "via {rail} · receipt {id}",
   // payment sheet
   review: "Review and confirm", to: "To", forWhat: "For", viaLabel: "Via", fee: "Fee", fx: "Exchange cost", arrives: "Arrives", total: "Total cost",
   instant: "Instantly", hours: "In about {n} hours", compare: "Compare {n} routes", blockedRoute: "Blocked", feeShort: "fee {fee} · {t}",
@@ -53,10 +54,10 @@ const en = {
   },
   types: { transfer: "Transfer", add_payee: "New payee", freeze_card: "Freeze card", create_standing_mandate: "Monthly payment", cancel_transfer: "Cancel transfer" },
   payees: { landlord_sp: "Your landlord in São Paulo", self_sg: "Your own Singapore account" },
-  purposes: { rent: "Rent", emergency: "Emergency" },
+  purposes: { rent: "Rent", emergency: "Emergency money" },
   // lost card
   sosTitle: "Lost card", sosIntro: "Lifeline walks you through it, one step at a time. Nothing moves until you confirm.",
-  isLost: "😟 My card is lost", isStolen: "🚨 My card was stolen", whatHappened: "What happened?", whatHappenedPh: "e.g. I lost my Wise card on the bus",
+  isLost: "My card is lost", isStolen: "My card was stolen", whatHappened: "What happened?", whatHappenedPh: "e.g. I lost my Wise card on the bus",
   noPaste: "Type this yourself. Pasting is off here, because only your own words can move a rescue.", startRescue: "Start the rescue",
   step: "Step: {s}", starting: "Starting", yourAnswer: "Your answer", sendAnswer: "Send answer", whichCard: "Which card?",
   freezeMine: "Freeze my card", sendMoney: "Send me the money", noMoney: "Continue without money",
@@ -65,7 +66,7 @@ const en = {
   // activity
   activity: "Activity", filters: [["all", "All"], ["pay", "Payments"], ["blocked", "Blocked"], ["rescue", "Rescue"]], show: "Show",
   nothingYet: "Nothing yet. Payments, blocks and rescues show here.", nothingHere: "Nothing here yet.", advanced: "Advanced: technical ledger",
-  entries: "{n} entries, each chained to the one before by its hash.", verified: "🔒 Verified: this history can't be secretly changed", tampered: "⚠️ Entry {n} was changed. Payments are paused.",
+  entries: "{n} entries, each chained to the one before by its hash.", verified: "Verified: this history can't be secretly changed", tampered: "Entry {n} was changed. Payments are paused.",
   aPaid: "{amount} via {rail}", aBlocked: "Blocked: {what}", aRequest: "a request", rules: "rules {r}", aFamily: "Family notice written", aFamilySub: "for the app to deliver",
   aRescue: "Rescue: {what}", aFreeze: "Card freeze", isSimulated: "simulated",
   // help and roadmap
@@ -94,6 +95,7 @@ const en = {
 };
 
 const pt = {
+  balance: "Seu saldo", hideBal: "Ocultar saldo", showBal: "Mostrar saldo", tryAsking: "Experimente perguntar", dayToday: "Hoje", dayYesterday: "Ontem", aSent: "{purpose}", aSentTo: "{payee}", aReplace: "Cartão novo", aReplaceSub: "Peça no app do seu cartão", aTransfer: "Transferência", aPending: "A caminho", aBlockedPaste: "Bloqueou um pagamento vindo de uma mensagem colada", aBlockedPasteSub: "Só suas próprias palavras movem dinheiro", aBlockedRule: "Bloqueado: {what}", aBlockedRuleSub: "Não cabia nas suas regras de segurança", aFamilyTold: "Sua família foi avisada", aFamilyBy: "Por {channel}", aRescueStarted: "Resgate do cartão iniciado", aRescueStep: "Resgate do cartão: {what}", aFrozen: "Cartão bloqueado", aFrozenSub: "Os pagamentos nele estão parados", simNote: "Simulado, sem dinheiro real",
   homeHello: "Oi! Eu sou o Lifeline, a rede de segurança do seu dinheiro", homeHead: ["Pergunte sobre dinheiro,", "aluguel ou cartão perdido."], askPh: "Pergunte ao Lifeline…",
   cRent: "Pagar aluguel", cRentSub: "1.200 SGD para seu locador", cLost: "Cartão perdido", cLostSub: "Bloqueie e peça ajuda", cHome: "Dinheiro de casa", cHomeSub: "Acompanhe uma transferência", cScam: "Isto é golpe?", cScamSub: "Confira uma mensagem",
   dueIn: "{text} · {when}", answer: "Lifeline", copy: "Copiar", copied: "Copiado",
@@ -106,8 +108,8 @@ const pt = {
   ownPlanSoon: "Criar seu próprio plano chega em breve.", getStarted: "Começar",
   hi: "Olá 👋", helpToday: "Como o Lifeline pode ajudar hoje?", reminders: "Lembretes", due: "{n} vencidos",
   lostTitle: "Perdeu o cartão?", lostSub: "Bloqueie e receba dinheiro de emergência, passo a passo.",
-  comingUp: "📅  Em breve", nothingScheduled: "Nada agendado. Peça ao Lifeline para lembrar você antes do aluguel.",
-  recent: "Atividade recente", seeAll: "Ver toda a atividade", noActivity: "Nenhuma atividade ainda.", loading: "Carregando…", checking: "🔒 Conferindo seu histórico…",
+  comingUp: "Próximos", setReminder: "Criar um lembrete", nothingScheduled: "Nada agendado. Peça ao Lifeline para lembrar você antes do aluguel.",
+  recent: "Atividade recente", seeAll: "Ver toda a atividade", noActivity: "Nenhuma atividade ainda.", loading: "Carregando…", checking: "Conferindo seu histórico…",
   whatsNext: "O que vem por aí →",
   quick: [
     { emoji: "🏠", label: "Pagar aluguel", prompt: "Pagar o aluguel deste mês de 1.200 SGD para meu locador no Brasil" },
@@ -121,9 +123,9 @@ const pt = {
   more: ["Pagar meu aluguel automaticamente todo mês", "Me lembrar 3 dias antes do aluguel", "Enviar 300 SGD de emergência para minha conta", "O que pedem antes de eu ativar o Pix?", "Quanto ainda posso sacar com meus cartões chineses?", "Mostrar meu resumo do mês"],
   typeOwn: "Escreva também sua pergunta. Uma mensagem de outra pessoa nunca é enviada sozinha.", typeFirst: "Escreva primeiro o que você precisa.",
   thinking: "O Lifeline está pensando…", noAi: "A IA do Lifeline ainda não está configurada neste computador, então nada foi feito.",
-  blocked: "⛔ Bloqueado: ", sample: "Exemplo", simulated: "Simulado",
+  blocked: "Bloqueado: ", sample: "Exemplo", simulated: "Simulado",
   freeze: "Bloqueio do cartão: {s}", openCardApp: " Abrir o app do cartão", cancel: "Cancelamento: {s}",
-  sent: "✅ Enviado", transferStatus: "Transferência {s}", via: "via {rail} · recibo {id}",
+  sent: "Enviado", transferStatus: "Transferência {s}", via: "via {rail} · recibo {id}",
   review: "Revise e confirme", to: "Para", forWhat: "Motivo", viaLabel: "Via", fee: "Tarifa", fx: "Custo de câmbio", arrives: "Chega", total: "Custo total",
   instant: "Na hora", hours: "Em cerca de {n} horas", compare: "Comparar {n} rotas", blockedRoute: "Bloqueada", feeShort: "tarifa {fee} · {t}",
   confirmSend: "Confirmar e enviar", confirmBtn: "Confirmar", notNow: "Agora não", notSent: "Não enviado", sending: "Enviando…", confirmed: "Confirmado",
@@ -137,9 +139,9 @@ const pt = {
   },
   types: { transfer: "Transferência", add_payee: "Novo destinatário", freeze_card: "Bloquear cartão", create_standing_mandate: "Pagamento mensal", cancel_transfer: "Cancelar transferência" },
   payees: { landlord_sp: "Seu locador em São Paulo", self_sg: "Sua conta em Singapura" },
-  purposes: { rent: "Aluguel", emergency: "Emergência" },
+  purposes: { rent: "Aluguel", emergency: "Dinheiro de emergência" },
   sosTitle: "Perdi o cartão", sosIntro: "O Lifeline guia você, um passo de cada vez. Nada se move sem sua confirmação.",
-  isLost: "😟 Perdi meu cartão", isStolen: "🚨 Roubaram meu cartão", whatHappened: "O que aconteceu?", whatHappenedPh: "ex.: perdi meu cartão Wise no ônibus",
+  isLost: "Perdi meu cartão", isStolen: "Roubaram meu cartão", whatHappened: "O que aconteceu?", whatHappenedPh: "ex.: perdi meu cartão Wise no ônibus",
   noPaste: "Digite você mesmo. Colar está desativado aqui, porque só suas palavras podem conduzir o resgate.", startRescue: "Iniciar o resgate",
   step: "Etapa: {s}", starting: "Começando", yourAnswer: "Sua resposta", sendAnswer: "Enviar resposta", whichCard: "Qual cartão?",
   freezeMine: "Bloquear meu cartão", sendMoney: "Enviar o dinheiro", noMoney: "Continuar sem dinheiro",
@@ -147,7 +149,7 @@ const pt = {
   steps: { S1: "Confirmar que é você", S2: "Bloquear o cartão", S3: "Carteira do celular", S4: "Usar o reserva", S5: "Dinheiro de emergência", S6: "Sem reserva", S7: "Novo cartão", S8: "Atualizar o plano", S9: "Avisar a família", done: "Pronto" },
   activity: "Atividade", filters: [["all", "Tudo"], ["pay", "Pagamentos"], ["blocked", "Bloqueados"], ["rescue", "Resgate"]], show: "Mostrar",
   nothingYet: "Nada ainda. Pagamentos, bloqueios e resgates aparecem aqui.", nothingHere: "Nada aqui ainda.", advanced: "Avançado: registro técnico",
-  entries: "{n} registros, cada um encadeado ao anterior pelo seu hash.", verified: "🔒 Verificado: este histórico não pode ser alterado em segredo", tampered: "⚠️ O registro {n} foi alterado. Pagamentos pausados.",
+  entries: "{n} registros, cada um encadeado ao anterior pelo seu hash.", verified: "Verificado: este histórico não pode ser alterado em segredo", tampered: "O registro {n} foi alterado. Pagamentos pausados.",
   aPaid: "{amount} via {rail}", aBlocked: "Bloqueado: {what}", aRequest: "um pedido", rules: "regras {r}", aFamily: "Aviso à família escrito", aFamilySub: "para o app entregar",
   aRescue: "Resgate: {what}", aFreeze: "Bloqueio do cartão", isSimulated: "simulado",
   help: "Ajuda",
@@ -174,6 +176,7 @@ const pt = {
 };
 
 const zh = {
+  balance: "您的余额", hideBal: "隐藏余额", showBal: "显示余额", tryAsking: "试着问问", dayToday: "今天", dayYesterday: "昨天", aSent: "{purpose}", aSentTo: "{payee}", aReplace: "补办新卡", aReplaceSub: "请在发卡机构的应用中申请", aTransfer: "转账", aPending: "在途中", aBlockedPaste: "拦截了一笔来自粘贴消息的付款", aBlockedPasteSub: "只有您自己的话才能动用资金", aBlockedRule: "已拦截：{what}", aBlockedRuleSub: "不符合您的安全规则", aFamilyTold: "已通知您的家人", aFamilyBy: "通过 {channel}", aRescueStarted: "已启动丢卡救援", aRescueStep: "丢卡救援：{what}", aFrozen: "卡片已冻结", aFrozenSub: "此卡的付款已停止", simNote: "模拟，不涉及真实资金",
   homeHello: "您好！我是 Lifeline，您资金的安全网", homeHead: ["问问资金、", "房租或丢卡的事。"], askPh: "问问 Lifeline…",
   cRent: "交房租", cRentSub: "1,200 SGD 给您的房东", cLost: "卡片丢失", cLostSub: "冻结卡片并获取帮助", cHome: "家里汇的钱", cHomeSub: "追踪一笔转账", cScam: "这是诈骗吗？", cScamSub: "核查一条消息",
   dueIn: "{text} · {when}", answer: "Lifeline", copy: "复制", copied: "已复制",
@@ -186,8 +189,8 @@ const zh = {
   ownPlanSoon: "设置您自己的计划即将推出。", getStarted: "开始",
   hi: "您好 👋", helpToday: "今天 Lifeline 能帮您什么？", reminders: "提醒", due: "{n} 项到期",
   lostTitle: "卡丢了？", lostSub: "冻结卡片并获得应急资金，一步一步来。",
-  comingUp: "📅  即将到来", nothingScheduled: "暂无安排。可以让 Lifeline 在交房租前提醒您。",
-  recent: "最近记录", seeAll: "查看全部记录", noActivity: "暂无记录。", loading: "加载中…", checking: "🔒 正在核对您的记录…",
+  comingUp: "即将到来", setReminder: "设置提醒", nothingScheduled: "暂无安排。可以让 Lifeline 在交房租前提醒您。",
+  recent: "最近记录", seeAll: "查看全部记录", noActivity: "暂无记录。", loading: "加载中…", checking: "正在核对您的记录…",
   whatsNext: "即将推出 →",
   quick: [
     { emoji: "🏠", label: "交房租", prompt: "把本月房租 1,200 SGD 付给我在巴西的房东" },
@@ -201,9 +204,9 @@ const zh = {
   more: ["设置每月自动交房租", "交房租前 3 天提醒我", "转 300 SGD 应急资金到我自己的账户", "开通 Pix 之前，他们会要求什么？", "我的中国银行卡还能在境外取多少现金？", "显示我的月度总结"],
   typeOwn: "请同时输入您自己的问题。别人发来的消息不会单独发送。", typeFirst: "请先输入您需要什么。",
   thinking: "Lifeline 正在思考…", noAi: "此电脑尚未配置 Lifeline 的 AI，因此未执行任何操作。",
-  blocked: "⛔ 已拦截：", sample: "示例", simulated: "模拟",
+  blocked: "已拦截：", sample: "示例", simulated: "模拟",
   freeze: "冻结卡片：{s}", openCardApp: " 打开发卡应用", cancel: "取消：{s}",
-  sent: "✅ 已发送", transferStatus: "转账{s}", via: "经由 {rail} · 回执 {id}",
+  sent: "已发送", transferStatus: "转账{s}", via: "经由 {rail} · 回执 {id}",
   review: "核对并确认", to: "收款方", forWhat: "用途", viaLabel: "渠道", fee: "手续费", fx: "汇率成本", arrives: "到账", total: "总成本",
   instant: "即时", hours: "约 {n} 小时", compare: "比较 {n} 条路线", blockedRoute: "已拦截", feeShort: "手续费 {fee} · {t}",
   confirmSend: "确认并发送", confirmBtn: "确认", notNow: "暂不", notSent: "未发送", sending: "发送中…", confirmed: "已确认",
@@ -217,9 +220,9 @@ const zh = {
   },
   types: { transfer: "转账", add_payee: "新收款人", freeze_card: "冻结卡片", create_standing_mandate: "每月付款", cancel_transfer: "取消转账" },
   payees: { landlord_sp: "您在圣保罗的房东", self_sg: "您自己的新加坡账户" },
-  purposes: { rent: "房租", emergency: "应急" },
+  purposes: { rent: "房租", emergency: "应急资金" },
   sosTitle: "卡片丢失", sosIntro: "Lifeline 会一步一步带您处理。未经您确认，资金不会转出。",
-  isLost: "😟 我的卡丢了", isStolen: "🚨 我的卡被偷了", whatHappened: "发生了什么？", whatHappenedPh: "例如：我在公交上丢了 Wise 卡",
+  isLost: "我的卡丢了", isStolen: "我的卡被偷了", whatHappened: "发生了什么？", whatHappenedPh: "例如：我在公交上丢了 Wise 卡",
   noPaste: "请自己输入。此处不能粘贴，因为只有您自己的话才能推进救援。", startRescue: "开始救援",
   step: "步骤：{s}", starting: "开始", yourAnswer: "您的答案", sendAnswer: "发送答案", whichCard: "哪张卡？",
   freezeMine: "冻结我的卡", sendMoney: "给我转钱", noMoney: "不转钱，继续",
@@ -227,7 +230,7 @@ const zh = {
   steps: { S1: "确认是您", S2: "冻结卡片", S3: "手机钱包", S4: "改用备用卡", S5: "应急资金", S6: "没有备用卡", S7: "补办新卡", S8: "更新计划", S9: "通知家人", done: "完成" },
   activity: "记录", filters: [["all", "全部"], ["pay", "付款"], ["blocked", "已拦截"], ["rescue", "救援"]], show: "显示",
   nothingYet: "暂无内容。付款、拦截和救援会显示在这里。", nothingHere: "暂无内容。", advanced: "高级：技术账本",
-  entries: "{n} 条记录，每条都通过哈希与上一条相连。", verified: "🔒 已验证：此记录无法被暗中更改", tampered: "⚠️ 第 {n} 条记录被更改，付款已暂停。",
+  entries: "{n} 条记录，每条都通过哈希与上一条相连。", verified: "已验证：此记录无法被暗中更改", tampered: "第 {n} 条记录被更改，付款已暂停。",
   aPaid: "{amount} 经由 {rail}", aBlocked: "已拦截：{what}", aRequest: "一项请求", rules: "规则 {r}", aFamily: "已写好家人通知", aFamilySub: "由应用发送",
   aRescue: "救援：{what}", aFreeze: "冻结卡片", isSimulated: "模拟",
   help: "帮助",

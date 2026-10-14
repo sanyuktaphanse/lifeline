@@ -466,3 +466,73 @@ button.sso-dot:hover { border-color: rgba(91, 63, 214, 0.35); }
 }
 .aura { width: 440px; height: 440px; background: radial-gradient(circle, rgba(124, 92, 240, 0.75) 0%, rgba(167, 139, 250, 0.55) 30%, rgba(255, 186, 160, 0.35) 50%, rgba(250, 247, 242, 0) 70%); filter: blur(18px); }
 .sso-dot img[src$="mail.png"] { width: 30px; height: 30px; }
+
+/* ===== Line icons in place of emoji ===== */
+.i { display: inline-grid; place-items: center; width: 20px; height: 20px; flex: none; }
+.i svg { width: 100%; height: 100%; }
+.tabs .ic { display: grid; place-items: center; height: 22px; }
+.tabs .ic .i { width: 22px; height: 22px; }
+.tile .ico .i { width: 22px; height: 22px; }
+.tile.rent .ico { color: #B4561F; } .tile.lost .ico { color: #B02525; } .tile.home .ico { color: #12704F; } .tile.scam .ico { color: #4F35C4; }
+.bell { display: grid; place-items: center; color: var(--ink); }
+.bell .i { width: 21px; height: 21px; }
+.iconbtn { display: grid; place-items: center; color: var(--ink-soft); }
+.iconbtn .i { width: 20px; height: 20px; }
+.iconbtn.send { color: #FFFFFF; }
+.chip { display: inline-flex; align-items: center; gap: 7px; }
+.chip .i { width: 16px; height: 16px; color: var(--purple); }
+.chipbtn { display: inline-flex; align-items: center; gap: 6px; }
+.chipbtn .i { width: 14px; height: 14px; }
+.choice { display: flex; align-items: center; gap: 10px; }
+.choice .i { width: 20px; height: 20px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; }
+.badge .i { width: 15px; height: 15px; }
+.warn, .blocked { display: flex; gap: 8px; align-items: flex-start; }
+.warn .i, .blocked .i { width: 18px; height: 18px; margin-top: 2px; }
+.roadmap-link .i { width: 20px; height: 20px; color: var(--purple); }
+.emoji.ib { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; background: var(--purple-soft); color: var(--purple); }
+.emoji.ib .i { width: 19px; height: 19px; }
+.hello .mini-orb { margin: 0 auto 10px; }
+
+/* Balance card */
+.balance { padding: 14px 16px; margin-bottom: 12px; }
+.bal-head { display: flex; align-items: center; gap: 8px; }
+.bal-ic { width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; background: var(--purple-soft); color: var(--purple); }
+.bal-ic .i { width: 16px; height: 16px; }
+.eye { border: 0; background: none; color: var(--ink-soft); width: 36px; height: 36px; display: grid; place-items: center; cursor: pointer; border-radius: 50%; }
+.bal-figs { display: flex; align-items: baseline; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+.bal-main { font-family: Montserrat, Inter, system-ui, sans-serif; font-size: 28px; font-weight: 700; letter-spacing: -0.01em; }
+.bal-sub { color: var(--ink-soft); font-weight: 500; }
+
+/* Empty chat starters */
+.starters { display: grid; gap: 8px; margin-top: 18px; }
+.starters > p { margin: 0 2px 2px; }
+.starter { display: flex; align-items: center; gap: 12px; text-align: left; padding: 12px 14px; border-radius: 16px; border: 1px solid var(--edge); background: #FFFFFF; color: var(--ink); font: inherit; font-weight: 500; cursor: pointer; box-shadow: 0 2px 10px rgba(60, 40, 120, 0.05); }
+.starter > span:nth-child(2) { flex: 1; }
+.s-ic { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; background: var(--purple-soft); color: var(--purple); flex: none; }
+.s-ic .i { width: 18px; height: 18px; }
+.s-go { width: 16px; height: 16px; color: var(--ink-soft); }
+.starter:hover { border-color: rgba(91, 63, 214, 0.35); }
+.chips[hidden] { display: none !important; }
+
+/* Activity feed, grouped by day */
+.feed { display: grid; gap: 14px; margin-bottom: 10px; }
+.day-h { font-size: 13px; font-weight: 600; color: var(--ink-soft); margin: 0 4px 6px; text-transform: none; }
+.day .list.card { padding: 4px 14px; margin: 0; }
+.list li { align-items: center; }
+.a-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: rgba(31, 27, 45, 0.05); color: var(--ink-soft); flex: none; }
+.a-ic.ok { background: var(--green-soft); color: var(--green-ink); }
+.a-ic.bad { background: var(--red-soft); color: var(--red-ink); }
+.a-ic .i { width: 19px; height: 19px; }
+.a-main { flex: 1; min-width: 0; }
+.a-amt { font-weight: 600; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.sent-h { display: flex; align-items: center; gap: 8px; }
+.sent-h .i { width: 22px; height: 22px; color: var(--green-ink); }
+.route > span:first-child { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+
+/* Rescue choices stack, so long labels never squeeze */
+#view .card > .row { display: grid; grid-template-columns: 1fr; gap: 8px; }
+
+.reminders { margin-bottom: 12px; padding: 12px 16px; }
+.reminders h2 { font-size: 16px; margin: 0 0 4px; }
