@@ -653,3 +653,7 @@ body.signin #view[data-screen="plan"], body.signin #view[data-screen="setup"] { 
 .info-card h3 .i { width: 17px; height: 17px; }
 .info-card ul { margin: 0 0 8px; padding-left: 18px; display: grid; gap: 6px; font-size: 14.5px; }
 .info-card p { margin: 0; }
+
+/* Countries without checked rules can be picked too; only the weight differs */
+.cp-item.cp-soon { color: var(--ink); cursor: pointer; }
+.cp-item.cp-soon .cp-flag { opacity: 1; filter: none; }

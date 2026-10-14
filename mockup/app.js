@@ -226,8 +226,9 @@ function netItems() {
   ];
 }
 
-// Every country, named in the page language by the browser. Only those with checked rules in rails/knowledge can be
-// picked today: China, Brazil and India as home, Singapore as the place of study. The rest show as coming soon.
+// Every country, named in the page language by the browser. Any can be picked. Those with checked rules in
+// rails/knowledge (China, Brazil and India as home, Singapore as the place of study) are listed first in bold and get
+// route tips; for the rest the tips card says the rules are not checked yet.
 const COUNTRIES = "AF AX AL DZ AS AD AO AI AG AR AM AW AU AT AZ BS BH BD BB BY BE BZ BJ BM BT BO BA BW BR VG BN BG BF BI CV KH CM CA KY CF TD CL CN CO KM CG CD CK CR CI HR CU CW CY CZ DK DJ DM DO EC EG SV GQ ER EE SZ ET FK FO FJ FI FR GF PF GA GM GE DE GH GI GR GL GD GP GU GT GG GN GW GY HT HN HK HU IS IN ID IR IQ IE IM IL IT JM JP JE JO KZ KE KI XK KW KG LA LV LB LS LR LY LI LT LU MO MG MW MY MV ML MT MH MQ MR MU YT MX FM MD MC MN ME MS MA MZ MM NA NR NP NL NC NZ NI NE NG NU KP MK MP NO OM PK PW PS PA PG PY PE PH PL PT PR QA RE RO RU RW WS SM ST SA SN RS SC SL SG SX SK SI SB SO ZA KR SS ES LK SD SR SE CH SY TW TJ TZ TH TL TG TO TT TN TR TM TC TV UG UA AE GB US UY UZ VU VA VE VN WF EH YE ZM ZW".split(" ");
 const HOME_READY = ["CN", "BR", "IN"], STUDY_READY = ["SG"];
 const flag = (code) => String.fromCodePoint(...[...code].map((ch) => 0x1F1E6 + ch.charCodeAt(0) - 65));
@@ -246,7 +247,7 @@ function countryPicker(current, ready, onPick) {
     const q = search.value.trim().toLowerCase();
     const all = sorted().filter((x) => !q || x.name.toLowerCase().includes(q) || x.c.toLowerCase() === q);
     const open = all.filter((x) => ready.includes(x.c)), soon = all.filter((x) => !ready.includes(x.c));
-    const item = (x, ok) => h("button", { type: "button", class: `cp-item${ok ? "" : " cp-soon"}${x.c === chosen ? " on" : ""}`, role: "option", "aria-selected": String(x.c === chosen), "aria-disabled": ok ? "false" : "true", disabled: !ok,
+    const item = (x, ok) => h("button", { type: "button", class: `cp-item${ok ? "" : " cp-soon"}${x.c === chosen ? " on" : ""}`, role: "option", "aria-selected": String(x.c === chosen), 
       onclick: () => { chosen = x.c; onPick(x.c.toLowerCase()); paintBtn(); close(); btn.focus(); } }, h("span", { class: "cp-flag", "aria-hidden": "true" }, flag(x.c)), h("span", {}, x.name));
     list.replaceChildren(
       ...(open.length ? [h("p", { class: "cp-h" }, t("availableNow")), ...open.map((x) => item(x, true))] : []),
@@ -267,9 +268,9 @@ const tripLine = () => trip && t("tripLine", { purpose: t("purposesTrip")[trip.p
 function routeTips(limit = Infinity) {
   const all = t("tips");
   const list = [...(all[trip?.home] || []), ...(all[trip?.study] || []), ...all.all].slice(0, limit);
-  const known = trip && (all[trip.home] || all[trip.study]); // every pickable country has tips, so this is a guard
+  const unchecked = trip ? [trip.home, trip.study].filter((k) => !all[k]) : [];
   return h("section", { class: "card tips" }, h("h2", {}, t("goodToKnow")),
-    trip && !known ? h("p", { class: "muted small" }, t("noRules")) : "",
+    unchecked.length ? h("p", { class: "note" }, unchecked.map((k) => `${flag(k.toUpperCase())} ${place(k)}`).join(", "), ": ", t("noRules")) : "",
     h("ul", { class: "list" }, list.map(([, text, src]) => h("li", {}, h("span", { class: "emoji ib" }, icon("sparkle")), h("div", {}, h("div", {}, text), h("div", { class: "muted small" }, t("source", { s: src })))))));
 }
 
