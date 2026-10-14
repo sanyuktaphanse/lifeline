@@ -577,3 +577,19 @@ details.compare summary .i { color: var(--purple); }
 
 .list .emoji.ib { flex: none; width: 36px; min-width: 36px; }
 .chev-r { transform: rotate(-90deg); color: var(--ink-soft); }
+
+/* Welcome: one line on what Lifeline does */
+.w-sub { margin: 12px auto 0; max-width: 300px; color: var(--ink-soft); font-size: 15px; line-height: 1.5; }
+/* Where the balance is */
+.bal-where { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 12.5px; color: var(--ink-soft); }
+.bal-where .i { width: 13px; height: 13px; }
+/* Me button in the header */
+.me-btn { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--edge); background: rgba(255,255,255,0.85); color: var(--ink); display: grid; place-items: center; cursor: pointer; flex: none; }
+.me-btn .i { width: 19px; height: 19px; }
+/* Routes: a tick on the one Lifeline picked */
+.r-tick { width: 18px; height: 18px; color: var(--purple); }
+.r-gap { width: 18px; flex: none; }
+.route-why { margin: 0 2px 4px; }
+/* Lost card quick answers wrap onto lines */
+.chips.wrap { flex-wrap: wrap; overflow: visible; margin: 4px 0 8px; }
+.chips.wrap .chip { white-space: normal; text-align: left; }

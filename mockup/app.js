@@ -70,7 +70,7 @@ const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden
 // ---------- navigation and language ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { welcome, hello, soon, home, chat, sos, activity, help, roadmap, lost };
+const screens = { welcome, hello, soon, home, chat, sos, activity, help, roadmap, lost, me };
 const FULL = new Set(["welcome", "hello", "soon", "lost"]);
 let currentScreen = "welcome";
 function go(name, arg) {
@@ -90,6 +90,7 @@ function paintChrome() {
   const names = { home: "tabHome", chat: "tabChat", sos: "tabSos", activity: "tabActivity", help: "tabHelp" };
   tabs.forEach((b) => { const label = t(names[b.dataset.tab]); b.setAttribute("aria-label", label); b.lastElementChild.textContent = label; });
   paintPill();
+  document.querySelector(".me-btn")?.setAttribute("aria-label", t("me"));
   document.querySelectorAll(".lang").forEach((sel) => { sel.value = getLang(); sel.setAttribute("aria-label", t("language")); });
 }
 function langPicker(extraClass = "") {
@@ -98,7 +99,8 @@ function langPicker(extraClass = "") {
   sel.value = getLang();
   return sel;
 }
-document.querySelector(".top").append(langPicker());
+const meBtn = h("button", { class: "me-btn", "aria-label": t("me"), onclick: () => go("me") }, icon("user"));
+document.querySelector(".top").append(langPicker(), meBtn);
 
 // ---------- Welcome: a line at the top, the heartbeat in the middle, one action at the bottom ----------
 // The API has no sign in (docs/api.md, "Security"; self assessment, open item 37), so only "Try the demo" works and
@@ -110,7 +112,7 @@ function welcome() {
   drawTrace(orb);
   view.append(
     langPicker("float"),
-    h("div", { class: "w-top" }, h("h1", {}, a, h("em", {}, b), c)),
+    h("div", { class: "w-top" }, h("h1", {}, a, h("em", {}, b), c), h("p", { class: "w-sub" }, t("wSub"))),
     h("div", { class: "w-mid" }, h("span", { class: "aura", "aria-hidden": "true" }), orb),
     h("div", { class: "w-bottom" },
       h("button", { class: "btn", onclick: () => go("hello") }, t("tryDemo")),
@@ -213,7 +215,8 @@ function balanceCard() {
     eye.replaceChildren(icon(hidden ? "eyeOff" : "eye")); eye.setAttribute("aria-label", hidden ? t("showBal") : t("hideBal"));
     figs.replaceChildren(...(data ? Object.entries(data).map(([cur, amt], i) => h("span", { class: i ? "bal-sub" : "bal-main" }, hidden ? `•••• ${cur}` : money(amt, cur))) : []));
   }
-  const box = h("section", { class: "card balance" }, h("div", { class: "bal-head" }, h("span", { class: "bal-ic" }, icon("wallet")), label, h("span", { style: "flex:1" }), eye), figs);
+  const box = h("section", { class: "card balance" }, h("div", { class: "bal-head" }, h("span", { class: "bal-ic" }, icon("wallet")), label, h("span", { style: "flex:1" }), eye), figs,
+    h("p", { class: "bal-where" }, icon("lock"), h("span", {}, t("balWhere"))));
   (async () => {
     try { data = await call("GET", `/balances/${USER}`); } catch { data = sample("GET", `/balances/${USER}`); isSample = true; }
     if (isSample || usingSample) label.after(tag(t("sample")));
@@ -339,7 +342,7 @@ function paymentSheet(c, onReply) {
     const on = sel && rt.rail === sel.rail;
     const off = rt.blocked_reason || rt.limit_ok === false || rt.status === "down";
     return h("div", { class: `route${on ? " sel" : ""}${off ? " off" : ""}` },
-      h("span", { class: "r-dot", "aria-hidden": "true" }),
+      on ? icon("check", "r-tick") : h("span", { class: "r-gap", "aria-hidden": "true" }),
       h("span", { class: "r-main" }, h("span", { class: "r-name" }, rail(rt.rail), rt.simulated ? tag(t("simulated")) : ""),
         h("span", { class: "muted small" }, off ? t("blockedRoute") : t("feeShort", { fee: money(rt.fee, rt.currency_from), t: arrive(rt.arrival_hours) }))));
   });
@@ -363,7 +366,7 @@ function paymentSheet(c, onReply) {
     h("p", { class: "muted" }, t("types")[a.type] ?? nice(a.type)),
     a.amount ? h("p", { class: "amount big" }, money(a.amount, a.currency)) : "",
     rows.length ? h("div", { class: "sheet-rows" }, rows) : "",
-    routes.length > 1 ? h("details", { class: "compare" }, h("summary", {}, h("span", {}, t("compare", { n: routes.length })), icon("chev")), h("div", { class: "routes" }, routes)) : "",
+    routes.length > 1 ? h("details", { class: "compare" }, h("summary", {}, h("span", {}, t("compare", { n: routes.length })), icon("chev")), h("div", { class: "routes" }, h("p", { class: "muted small route-why" }, t("routeWhy")), routes)) : "",
     h("div", { class: "warn" }, icon("alert"), h("span", {}, t("warnings")[c.warning_key] ?? t("checkFirst"))),
     yes, h("div", { style: "text-align:center" }, no));
 }
@@ -378,8 +381,12 @@ function sos() {
     let trigger = "card_lost";
     const lost = h("button", { class: "choice", "aria-pressed": "true", onclick: () => pick("card_lost") }, icon("card"), t("isLost"));
     const stolen = h("button", { class: "choice", "aria-pressed": "false", onclick: () => pick("card_stolen") }, icon("alert"), t("isStolen"));
-    function pick(tr) { trigger = tr; lost.setAttribute("aria-pressed", tr === "card_lost"); stolen.setAttribute("aria-pressed", tr === "card_stolen"); }
-    const words = typed(h("textarea", { class: "field", rows: "3", placeholder: t("whatHappenedPh"), "aria-label": t("whatHappened") }));
+    const quick = h("div", { class: "chips wrap" });
+    function pick(tr) {
+      trigger = tr; lost.setAttribute("aria-pressed", tr === "card_lost"); stolen.setAttribute("aria-pressed", tr === "card_stolen");
+      quick.replaceChildren(...t(tr === "card_lost" ? "quickLost" : "quickStolen").map((q) => h("button", { class: "chip", onclick: () => { words.value = q; begin.focus(); } }, q)));
+    }
+    const words = typed(h("textarea", { class: "field", rows: "2", placeholder: t("whatHappenedPh"), "aria-label": t("whatHappened") }));
     const begin = h("button", { class: "btn danger", onclick: async () => {
       if (!words.value.trim()) { words.focus(); return; }
       begin.disabled = true;
@@ -388,8 +395,9 @@ function sos() {
     } }, t("startRescue"));
     box.replaceChildren(h("div", { class: "card" },
       h("p", { class: "muted" }, t("sosIntro")),
-      lost, stolen, h("h2", { style: "margin-top:10px" }, t("whatHappened")), words,
-      h("p", { class: "muted small" }, t("noPaste")), begin));
+      lost, stolen, h("h2", { style: "margin-top:10px" }, t("whatHappened")), quick, words,
+      h("p", { class: "muted small" }, t("tapOrType")), begin));
+    pick("card_lost");
   }
   function render(r) {
     const st = r.rescue?.state_after;
@@ -502,6 +510,18 @@ async function activity() {
     tech.replaceChildren(h("section", { class: "card" }, h("p", { class: "muted small" }, t("entries", { n: entries.length })),
       h("ul", { class: "list" }, entries.slice().reverse().map((e) => h("li", {}, h("span", { class: "tech" }, `#${e.seq} ${e.kind}${e.payload?.kind ? ": " + e.payload.kind : ""} · ${e.hash.slice(0, 10)}…`))))));
   } catch (e) { list.replaceChildren(h("p", { class: "muted" }, errorText(e))); badge.remove(); }
+}
+
+// ---------- Me: the safety net, findable after onboarding ----------
+// The plan is the demo one in fixtures/demo_user.yaml (cards, identity check, emergency money, trusted contact Ana).
+function me() {
+  const item = (ic, what, sub) => h("li", {}, h("span", { class: "emoji ib" }, icon(ic)), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)));
+  view.append(h("h1", {}, t("meTitle")), h("p", { class: "muted", style: "margin:-6px 2px 14px" }, t("meSub")),
+    h("section", { class: "card" }, h("ul", { class: "list" },
+      t("plan").map(([, what, sub], i) => item(["card", "buoy", "lock", "cash"][i], what, sub)),
+      item("family", t("trusted"), t("trustedSub")))),
+    h("section", { class: "card" }, h("h2", {}, t("account")), h("ul", { class: "list" }, item("user", t("signedInAs"), t("signedInSub")))),
+    h("button", { class: "card roadmap-link", onclick: () => go("roadmap") }, icon("map"), h("span", {}, t("roadmapLink")), icon("chev", "chev-r")));
 }
 
 // ---------- Help and the roadmap ----------
