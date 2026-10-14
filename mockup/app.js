@@ -32,7 +32,11 @@ function h(tag, attrs = {}, ...kids) {
   for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
   return el;
 }
+let noAi = false;
 async function call(method, path, body) {
+  // With no AI key on this computer, every call after the first answers from the labelled samples, so a sample
+  // payment never meets the real API.
+  if (noAi) { const fake = sample(method, path, body); if (fake !== null) return structuredClone(fake); }
   let res;
   try {
     res = await fetch(API + path, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -43,6 +47,9 @@ async function call(method, path, body) {
   }
   let data = null;
   try { data = await res.json(); } catch { data = null; }
+  if (!res.ok && (res.status === 503 || /API_KEY/.test(String(data?.detail ?? ""))) && sample(method, path, body) !== null) {
+    noAi = true; usingSample = true; paintPill(); return structuredClone(sample(method, path, body));
+  }
   if (!res.ok) throw { status: res.status, detail: data?.detail ?? res.statusText };
   return data;
 }
@@ -57,8 +64,8 @@ const drawTrace = (el) => { el.innerHTML = `<svg viewBox="0 0 48 24" aria-hidden
 // ---------- navigation and language ----------
 const view = document.getElementById("view");
 const tabs = [...document.querySelectorAll(".tabs button")];
-const screens = { welcome, hello, home, chat, sos, activity, help, roadmap, lost };
-const FULL = new Set(["welcome", "hello", "lost"]);
+const screens = { welcome, hello, soon, home, chat, sos, activity, help, roadmap, lost };
+const FULL = new Set(["welcome", "hello", "soon", "lost"]);
 let currentScreen = "welcome";
 function go(name, arg) {
   currentScreen = name;
@@ -89,17 +96,17 @@ document.querySelector(".top").append(langPicker());
 // The API has no sign in (docs/api.md, "Security"; self assessment, open item 37), so only "Try the demo" works and
 // the sign in icons say coming soon. Nothing is remembered: a reload shows this again.
 function welcome() {
-  const icon = (label, glyph) => h("span", { class: "sso-dot", role: "img", "aria-label": `${label}, ${t("soon")}`, title: `${label}: ${t("soon")}` }, glyph);
+  const icon = (label, src) => h("button", { class: "sso-dot", "aria-label": `${label}, ${t("soon")}`, onclick: () => go("soon", label) }, h("img", { src, alt: "" }));
   const [a, b, c] = t("wTitle");
   const orb = h("div", { class: "orb", role: "img", "aria-label": t("orb") });
   drawTrace(orb);
   view.append(
     langPicker("float"),
     h("div", { class: "w-top" }, h("h1", {}, a, h("em", {}, b), c)),
-    h("div", { class: "w-mid" }, orb),
+    h("div", { class: "w-mid" }, h("span", { class: "aura", "aria-hidden": "true" }), orb),
     h("div", { class: "w-bottom" },
       h("button", { class: "btn", onclick: () => go("hello") }, t("tryDemo")),
-      h("div", { class: "sso-row" }, icon("Face ID", "🙂"), icon("Apple", h("img", { src: "icons/apple.png", alt: "" })), icon("Google", h("img", { src: "icons/google.png", alt: "" }))),
+      h("div", { class: "sso-row" }, icon("Email", "icons/mail.png"), icon("Apple", "icons/apple.png"), icon("Google", "icons/google.png")),
       h("p", { class: "fine" }, t("signinSoon"))),
   );
 }
@@ -108,12 +115,39 @@ function welcome() {
 function hello() {
   view.append(
     h("div", { class: "hello" }, h("span", { class: "wave", "aria-hidden": "true" }, "👋"), h("h1", {}, t("helloTitle")), h("p", {}, t("helloSub"))),
-    h("section", { class: "card" }, h("h2", {}, t("safetyNet")),
+    h("section", { class: "card" }, h("h2", {}, t("safetyNet")), h("p", { class: "muted small" }, t("safetyIntro")),
       h("ul", { class: "list" }, t("plan").map(([e, what, sub]) => h("li", {}, h("span", { class: "emoji", "aria-hidden": "true" }, e), h("div", {}, h("div", { class: "what" }, what), h("div", { class: "muted small" }, sub)))))),
     h("p", { class: "muted small", style: "text-align:center" }, t("ownPlanSoon")),
-    h("div", { class: "go-pill" }, h("button", { class: "btn", onclick: () => go("home") }, t("getStarted")),
-      h("span", { class: "arrows", "aria-hidden": "true" }, h("span", {}, "›"), h("span", {}, "›"), h("span", {}, "›"))),
+    slider(t("slideStart"), t("getStarted"), () => go("home")),
   );
+}
+
+// Slide to start. Dragging the knob past most of the track starts; Enter or Space on the knob does too, for keyboards.
+function slider(label, a11y, done) {
+  const fill = h("span", { class: "fill", "aria-hidden": "true" });
+  const knob = h("button", { class: "knob", "aria-label": a11y }, "›");
+  const text = h("span", { class: "slider-label", "aria-hidden": "true" }, label);
+  const track = h("div", { class: "slider" }, fill, text, knob);
+  let startX = null, x = 0, moved = false;
+  const max = () => track.clientWidth - knob.offsetWidth - 12;
+  const paint = () => { knob.style.transform = `translateX(${x}px)`; fill.style.width = `${x + knob.offsetWidth + 6}px`; text.style.opacity = String(1 - x / max()); };
+  knob.addEventListener("pointerdown", (e) => { startX = e.clientX - x; moved = false; knob.setPointerCapture(e.pointerId); track.classList.add("dragging"); });
+  knob.addEventListener("pointermove", (e) => { if (startX === null) return; x = Math.max(0, Math.min(max(), e.clientX - startX)); if (x > 4) moved = true; paint(); });
+  const release = () => {
+    if (startX === null) return; startX = null; track.classList.remove("dragging");
+    if (x > max() * 0.8) { x = max(); paint(); setTimeout(done, 180); } else { x = 0; paint(); if (!moved) { track.classList.remove("hint"); void track.offsetWidth; track.classList.add("hint"); } }
+  };
+  knob.addEventListener("pointerup", release); knob.addEventListener("pointercancel", release);
+  knob.addEventListener("click", (e) => { if (e.detail === 0) done(); }); // a keyboard press, not a tap
+  return track;
+}
+
+// ---------- Coming soon: where the sign in icons lead ----------
+function soon(name) {
+  const orb = h("div", { class: "orb mini-orb", "aria-hidden": "true" }); drawTrace(orb);
+  view.append(h("div", { class: "soon" }, orb, h("h1", {}, t("soonTitle")), h("p", {}, t("soonBody", { name: name || "" })),
+    h("button", { class: "btn", onclick: () => go("hello") }, t("tryDemo")),
+    h("button", { class: "link center", onclick: () => go("welcome") }, t("soonBack"))));
 }
 
 // ---------- Home: a calm assistant home, four live cards and the message box ----------
