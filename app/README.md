@@ -42,6 +42,7 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 15. Chat polish. An empty chat offers starters that send at once: the agreed rent sentence, the money from home question when the trip names a home, and how to spot a scam. They go once a message is sent. Routes on the confirmation card have friendly names, Wise, Pix and Bank transfer, with the Simulated tag kept and the rail id kept on the page; any other rail shows its id. The chosen route has a tick, and the card says how the route was chosen: Lifeline picks the cheapest route not marked Simulated, and simulated routes follow a real rail's rules, for practice. A Copy button sits under a reply only when it holds the model's words, and it copies only those words, never the sentences code wrote.
 16. The Lost card start has one tap answers: three for a lost card and two for a stolen one. A tap fills the box with those words, which the student can change; nothing is sent until Start, pasting stays refused, and each step still has one confirm.
 17. The Activity tab: the ledger in plain words, grouped under Today, Yesterday or the date, newest first. A line is written only for a payment, a refusal, a freeze, a plan update, a rescue start, the replacement card steps, the family notice and a provider check, and says only what its entry says, with the entry's number. Every entry is under Advanced, with the chain check.
+18. Book and pay safely, from a card on Home: four checks before booking or paying, a rent deposit checklist whose ticks live only in the page, and apps to start from, by name only, in alphabetical order within each group: Singapore Airlines, Skyscanner and Trip.com for flights, Trip.com and Trivago for places to stay, HeyMax and YouTrip for paying abroad. It has no links, logos, prices or ratings, and it says Lifeline isn't partnered with or paid by any of these apps. Check a message opens Chat with the question typed and the paste box open, so the message goes in `pasted_text`, and nothing is sent until the student taps Send.
 
 A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
 
@@ -338,6 +339,38 @@ The labels of Home, Activity, the chat polish and the Lost card one tap answers,
 | `payee_self_sg` | your own Singapore account | a sua própria conta em Singapura | 您自己的新加坡账户 |
 | `payee_student_001` | the student | o estudante | 学生 |
 | `payee_unknown` | a payee | um destinatário | 收款人 |
+
+### Book and pay safely
+
+The labels of Book and pay safely, as `src/i18n-book.js` holds them, wait for a native speaker too. `tests/unit/book.test.js` fails when this table no longer holds the words the app shows. The app names are not translated.
+
+| Key | English | Portuguese | Chinese |
+| --- | --- | --- | --- |
+| `home_book` | Booking flights or a place to stay? | Vai reservar voo ou hospedagem? | 要订机票或住处吗？ |
+| `home_book_open` | Book and pay safely | Reserve e pague com segurança | 安全预订与付款 |
+| `book_title` | Book and pay safely | Reserve e pague com segurança | 安全预订与付款 |
+| `book_intro` | Flights, places to stay and rent abroad: where to start, and what to check before you pay. | Voos, hospedagem e aluguel no exterior: por onde começar e o que conferir antes de pagar. | 海外机票、住宿和租房：从哪里开始，以及付款前要核对什么。 |
+| `book_checks_title` | Before you book or pay | Antes de reservar ou pagar | 预订或付款之前 |
+| `book_check_1` | Open the booking app or website yourself. Do not book from a link someone sent you. | Abra você mesmo o app ou o site de reservas. Não reserve por um link que alguém mandou. | 请自己打开预订应用或网站，不要通过别人发来的链接预订。 |
+| `book_check_2` | If a host or landlord asks you to pay outside the booking app, by bank transfer or in a chat, stop and check first. | Se um anfitrião ou locador pedir pagamento fora do app de reservas, por transferência ou no chat, pare e confira antes. | 如果房东或民宿主人要求您在预订应用之外付款，比如银行转账或在聊天中付款，请先停下来核实。 |
+| `book_check_3` | Pay by card or by a transfer you can trace. Do not pay by gift card or crypto. | Pague com cartão ou com uma transferência rastreável. Não pague com vale presente nem com cripto. | 请用银行卡或可追踪的转账付款，不要用礼品卡或加密货币付款。 |
+| `book_check_4` | Not sure about a message? Paste it into Chat and ask Lifeline before you pay. | Na dúvida sobre uma mensagem? Cole no Chat e pergunte ao Lifeline antes de pagar. | 不确定某条消息？付款前请把它粘贴到对话中，问问 Lifeline。 |
+| `book_check_button` | Check a message in Chat | Conferir uma mensagem no Chat | 在对话中核查一条消息 |
+| `book_check_words` | Is this booking message a scam? | Esta mensagem de reserva é golpe? | 这条预订消息是诈骗吗？ |
+| `book_deposit_title` | Before you pay a rent deposit | Antes de pagar o depósito do aluguel | 支付租房押金之前 |
+| `book_deposit_intro` | Tick each one as you go. This page keeps nothing, so the ticks are gone when you close it. | Marque cada item conforme avança. Esta página não guarda nada, então as marcas somem quando você a fecha. | 逐项勾选。本页不保存任何内容，关闭页面后勾选就会消失。 |
+| `book_deposit_1` | You have seen the place, in person or on a live video call. | Você viu o lugar, pessoalmente ou numa chamada de vídeo ao vivo. | 您已经亲自或通过实时视频看过房子。 |
+| `book_deposit_2` | The landlord's name matches the agreement. | O nome do locador é o mesmo do contrato. | 房东姓名与合同一致。 |
+| `book_deposit_3` | You have a written agreement with the rent, the deposit and the dates. | Você tem um contrato escrito com o aluguel, o depósito e as datas. | 您有书面合同，写明租金、押金和日期。 |
+| `book_deposit_4` | You are paying an account you can trace, and you will get a receipt. | Você paga para uma conta rastreável e vai receber um recibo. | 您付款到可追踪的账户，并会收到收据。 |
+| `book_apps_title` | Apps to start from | Apps para começar | 可以从这些应用开始 |
+| `book_apps_order` | Names only, in alphabetical order within each group. No links, prices or ratings. | Só os nomes, em ordem alfabética dentro de cada grupo. Sem links, preços ou avaliações. | 只列名称，每组按字母顺序排列。没有链接、价格或评分。 |
+| `book_apps_note` | Lifeline isn't partnered with or paid by any of these apps. | O Lifeline não tem parceria com nenhum desses apps e não recebe nada deles. | Lifeline 与这些应用均无合作，也不从中获得任何报酬。 |
+| `book_group_flights` | Flights | Voos | 机票 |
+| `book_group_stays` | Places to stay | Hospedagem | 住宿 |
+| `book_group_paying` | Paying abroad | Pagar no exterior | 海外付款 |
+| `book_flights_hint` | Or any airline's own app, to book direct. | Ou o app da própria companhia aérea, para reservar direto. | 也可以用任何航空公司自己的应用直接预订。 |
+| `book_close` | Back to Home | Voltar ao Início | 返回首页 |
 
 ## Known gaps
 
