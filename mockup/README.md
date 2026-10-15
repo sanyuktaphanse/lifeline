@@ -34,3 +34,15 @@ When no Lifeline API answers at all, as on a Netlify link, the screens fill with
 ## Rules it keeps
 
 Server text is only ever set as text, never as HTML. A confirmation token lives in memory inside its card and is sent back once. Nothing is kept in browser storage. Everything is English for now; the API's replies follow the student's language, the labels do not yet.
+
+## Credits
+
+The line icons in `icons.js` are derived from Lucide (https://lucide.dev), used under its ISC licence, whose notice is at the top of that file.
+
+## Look
+
+The page is light: cream and white with one indigo leaning violet. `styles.css` grew from an earlier dark version, so its first `:root` block holds dark values; the "Light theme" block near the end overrides every token and is what renders.
+
+## Knowledge in the demo
+
+Route tips restate `rails/knowledge` entries. Rule 2 of `rails/knowledge/README.md` keeps an entry out of a demo until its `second_check_by` is filled, so `SECOND_CHECKED` in `app.js` lists only second checked ids, and today it is empty: no tip shows until the second checks land.

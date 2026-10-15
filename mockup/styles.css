@@ -1,4 +1,5 @@
-/* Lifeline mockup: phone first, black and purple frosted glass. Montserrat for headings, Inter for text.
+/* Lifeline mockup styles. The page is light: the "Light theme" block near the end overrides every token of the first :root block, which is from an earlier dark version. */
+/* Lifeline mockup: phone first, first drawn as black and purple frosted glass. Montserrat for headings, Inter for text.
    Body text keeps at least 4.5:1 contrast on its card; colours that carry meaning also say it in words. */
 :root {
   --bg: #07050D;

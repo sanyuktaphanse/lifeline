@@ -176,7 +176,7 @@ function plan(arg = {}) {
     ok = () => !!draft.card;
   } else if (i === 1) {
     const which = h("div", {});
-    const paintWhich = () => which.replaceChildren(draft.backup === null ? h("p", { class: "note" }, t("backupNoNote"), draft.card === "wise" && trip?.study === "sg" ? " " + t("wiseWait") : "")
+    const paintWhich = () => which.replaceChildren(draft.backup === null ? h("p", { class: "note" }, t("backupNoNote"), draft.card === "wise" && trip?.study === "sg" && SECOND_CHECKED.has("sg_card_replacement_002") ? " " + t("wiseWait") : "")
       : draft.backup !== undefined ? h("div", {}, h("h3", {}, t("qBackupWhich")), chips(Object.fromEntries(cardKeys.filter((k) => k !== draft.card && k !== "unsure").map((k) => [k, card[k]])), draft.backup === "yes" ? null : draft.backup, (k) => { draft.backup = k; ready(); })) : "");
     body = [h("h2", {}, t("qBackup")), h("p", { class: "muted small" }, t("qBackupWhy")),
       chips({ yes: t("yes"), no: t("noJustOne") }, draft.backup === undefined ? null : draft.backup === null ? "no" : "yes", (k) => { draft.backup = k === "no" ? null : "yes"; paintWhich(); ready(); }), which];
@@ -278,9 +278,13 @@ function countryPicker(current, ready, onPick) {
 }
 const tripLine = () => trip && t("tripLine", { purpose: t("purposesTrip")[trip.purpose], home: place(trip.home), study: place(trip.study) });
 // The sourced tips for the route: the home country's, the study country's, then one for everyone.
+// rails/knowledge/README.md, rule 2: an entry whose second_check_by is empty must not appear in a demo. Add an entry id
+// here only once its second check is in the repository. None has one on 15 October 2026, so no tip shows yet.
+const SECOND_CHECKED = new Set([]);
 function routeTips(limit = Infinity) {
   const all = t("tips");
-  const list = [...(all[trip?.home] || []), ...(all[trip?.study] || []), ...all.all].slice(0, limit);
+  const list = [...(all[trip?.home] || []), ...(all[trip?.study] || []), ...all.all].filter(([id]) => SECOND_CHECKED.has(id)).slice(0, limit);
+  if (!list.length) return "";
   const unchecked = trip ? [trip.home, trip.study].filter((k) => !all[k]) : [];
   return h("section", { class: "card tips" }, h("h2", {}, t("goodToKnow")),
     unchecked.length ? h("p", { class: "note" }, unchecked.map((k) => `${flag(k.toUpperCase())} ${place(k)}`).join(", "), ": ", t("noRules")) : "",
