@@ -233,3 +233,6 @@ optgroup.on-file, option.on-file { font-weight: 700; }
 .me .card ul { margin: 0; padding-inline-start: 1.2em; }
 .me-check-block { display: flex; flex-direction: column; gap: 8px; }
 .btn-link + .btn-link { margin-inline-start: 0; }
+.onb-message { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.onb-read-only { border-inline-start: 3px solid var(--line); padding-inline-start: 12px; }
+.onb-on-file { font-weight: 600; color: var(--text); }

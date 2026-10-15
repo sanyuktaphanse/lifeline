@@ -1,52 +1,62 @@
 // The Me page, opened from the header: the trip, the safety net with Change, how routes are chosen, the checks a
 // provider may run for this trip, and sign in, which is not built. Nothing on this page is sent to the server
-// except a check the student taps, because POST /precheck writes an entry to the ledger (docs/api.md).
+// except a check the student taps, because POST /precheck writes an entry to the ledger (docs/api.md). The plan on
+// file is read from GET /ledger, a read.
 import { el, errorText, label } from "../dom.js";
 import { t } from "../i18n.js";
 import { countryName } from "../countries.js";
-import { SAMPLE_PLAN, cardChoices, planContact } from "../onboarding.js";
 import { precheckFor } from "../tailoring.js";
+import { CASH_CHOICES } from "../onboarding.js";
 
-function row(ctx, key, ...value) {
-  return [label(ctx, "dt", key), el("dd", {}, ...value)];
+// One field of the plan in plain words, for Me and for "On file" in the onboarding steps.
+export function fieldText(lang, plan, field) {
+  const cardName = (id) => plan.cards.find((card) => card.instrument_id === id)?.name ?? id ?? t(lang, "me_none");
+  const named = (key, fallback) => (t(lang, key) === key ? fallback : t(lang, key));
+  switch (field) {
+    case "primary_instrument":
+    case "backup_instrument":
+      return cardName(plan[field]);
+    case "backup_route":
+      return plan.backup_route ? named(`rail_${plan.backup_route}`, plan.backup_route) : t(lang, "me_none");
+    case "wallet_token_present":
+      return t(lang, plan.wallet_token_present ? "me_yes" : "me_no");
+    case "cash_plan":
+    {
+      // A cash plan the steps offer is named in words, with its entry id; any other is listed by its ids.
+      const choice = CASH_CHOICES.find((item) => JSON.stringify(item.ids) === JSON.stringify(plan.cash_plan));
+      return choice ? t(lang, `onb_cash_${choice.id}`) : plan.cash_plan.join(", ");
+    }
+    case "channel":
+      return named(`channel_${plan.trusted_contact.channel}`, plan.trusted_contact.channel);
+    default:
+      return "";
+  }
 }
 
-// The plan as facts, for the Me page and for the onboarding's summary. With no plan it is the sample plan.
-export function planFacts(ctx, plan) {
+// The plan on file as facts. Every value comes from the plan the server holds: the sample plan with the updates
+// the ledger records. The answer to the safety question is never shown.
+function planFacts(ctx, plan) {
   const lang = ctx.lang();
-  if (!plan) {
-    return el(
-      "dl",
-      { class: "facts" },
-      row(ctx, "me_card", SAMPLE_PLAN.cards[0]),
-      row(ctx, "me_backup", SAMPLE_PLAN.cards[1]),
-      row(ctx, "me_question", label(ctx, "span", "safety_q_pass")),
-      row(ctx, "me_contact", t(lang, "me_contact_line", { name: SAMPLE_PLAN.contact.name, channel: t(lang, `channel_${SAMPLE_PLAN.contact.channel}`) })),
-      row(ctx, "me_money", t(lang, "onb_money_amount", { amount: SAMPLE_PLAN.money, currency: SAMPLE_PLAN.currency })),
-    );
-  }
-  const card = cardChoices(null).find((choice) => choice.id === plan.card);
-  const contact = planContact(plan.contact);
-  const onPage = [plan.contact.phone, plan.contact.email].map((value) => value?.trim()).filter(Boolean);
+  const row = (key, value) => [label(ctx, "dt", key), el("dd", {}, value)];
   return el(
     "dl",
     { class: "facts" },
-    row(ctx, "me_card", card.key ? label(ctx, "span", card.key) : card.name),
-    row(ctx, "me_backup", label(ctx, "span", plan.backup ? "onb_yes" : "onb_no")),
-    row(ctx, "me_question", label(ctx, "span", plan.question), " ", label(ctx, "span", "me_question_set", null, { class: "hint" })),
-    row(
-      ctx,
-      "me_contact",
-      t(lang, "me_contact_line", { name: contact.name, channel: t(lang, `channel_${contact.channel}`) }),
-      onPage.length ? el("div", { class: "hint" }, t(lang, "me_on_device", { details: onPage.join(", ") })) : null,
-    ),
-    row(ctx, "me_money", plan.money === "none" ? label(ctx, "span", "onb_money_none") : t(lang, "onb_money_amount", { amount: plan.money, currency: SAMPLE_PLAN.currency })),
+    row("me_card", fieldText(lang, plan, "primary_instrument")),
+    row("me_backup_card", fieldText(lang, plan, "backup_instrument")),
+    row("me_backup_route", fieldText(lang, plan, "backup_route")),
+    row("me_wallet", fieldText(lang, plan, "wallet_token_present")),
+    row("me_cash", fieldText(lang, plan, "cash_plan")),
+    row("me_contact", t(lang, "me_contact_line", { name: plan.trusted_contact.name, channel: fieldText(lang, plan, "channel") })),
+    row("me_money", `${plan.emergency_allowance} ${plan.currency}`),
+    row("me_question", t(lang, "sample_question")),
   );
 }
 
 export function meView(ctx, root, { onChange, onClose }) {
   // The answers to checks already tapped, kept so a language change does not ask the server again.
   const results = new Map();
+  let plan = null;
+  let failure = null;
 
   function tripSection() {
     const trip = ctx.profile.trip;
@@ -63,15 +73,13 @@ export function meView(ctx, root, { onChange, onClose }) {
   }
 
   function netSection() {
-    const sample = !ctx.profile.plan;
+    const body = failure ? el("p", { class: "error", role: "alert" }, errorText(ctx, failure)) : plan ? planFacts(ctx, plan) : null;
     return el(
       "section",
       { class: "card", id: "me-net" },
-      el("h3", {}, label(ctx, "span", "me_net"), " ", sample ? label(ctx, "span", "me_sample", null, { class: "badge" }) : null),
-      sample ? label(ctx, "p", "me_sample_note", null, { class: "hint" }) : null,
-      planFacts(ctx, ctx.profile.plan),
-      // The sample plan already shows its question; a plan set here does not reach the rescue, so it says so.
-      sample ? null : label(ctx, "p", "onb_rescue_note", null, { class: "hint" }),
+      el("h3", {}, label(ctx, "span", "me_net"), " ", label(ctx, "span", "me_sample", null, { class: "badge" })),
+      label(ctx, "p", "me_sample_note", null, { class: "hint" }),
+      body,
       label(ctx, "button", "me_change", null, { type: "button", class: "btn", id: "me-change-net", onclick: () => onChange("plan") }),
     );
   }
@@ -127,5 +135,16 @@ export function meView(ctx, root, { onChange, onClose }) {
     );
   }
 
-  return { shown: draw, relang: draw };
+  async function load() {
+    draw();
+    try {
+      plan = await ctx.loadPlan();
+      failure = null;
+    } catch (error) {
+      failure = error;
+    }
+    draw();
+  }
+
+  return { shown: load, relang: draw };
 }
