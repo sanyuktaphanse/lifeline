@@ -12,16 +12,19 @@ import { welcomeView } from "./views/welcome.js";
 import { onboardingView } from "./views/onboarding.js";
 import { meView } from "./views/me.js";
 import { logo } from "./logo.js";
+import { planOnFile } from "./onboarding.js";
 
 const VIEWS = {};
 
 const state = { lang: "en", languages: [] };
 const ctx = {
   // What the onboarding gave, in page memory only: never sent and never stored, so a reload starts again.
-  profile: { trip: null, plan: null },
+  profile: { trip: null },
   api: makeApi(apiBase(location.search)),
   userId: USER_ID,
   lang: () => state.lang,
+  // The plan the server holds: the sample plan with each update GET /ledger records. A read; nothing is written.
+  loadPlan: async () => planOnFile(await ctx.api.ledger(USER_ID)),
 };
 
 async function loadLanguages() {
@@ -124,7 +127,12 @@ VIEWS.guide = guideView(ctx, document.getElementById("view-guide"), (words) => {
   ctx.fillMessage(words);
 });
 VIEWS.welcome = welcomeView(ctx, document.getElementById("view-welcome"), () => showOnboarding("all"));
-VIEWS.onboarding = onboardingView(ctx, document.getElementById("view-onboarding"), (next) => (next === "me" ? showMe() : showTab("home")));
+VIEWS.onboarding = onboardingView(ctx, document.getElementById("view-onboarding"), (next, words) => {
+  if (next === "me") return showMe();
+  showTab(words ? "chat" : "home");
+  // The plan message goes in the message box for the student to read and send; it is never sent for them.
+  if (words) ctx.fillMessage(words);
+});
 VIEWS.me = meView(ctx, document.getElementById("view-me"), { onChange: showOnboarding, onClose: () => showTab(currentTab) });
 if (new URLSearchParams(location.search).get("welcome") === "off") showTab("chat");
 else showWelcome();

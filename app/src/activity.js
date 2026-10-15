@@ -1,5 +1,5 @@
 // The ledger in plain words, the way a banking app lists what happened. Each line says only what its entry says;
-// every entry, these and the rest, stays under Advanced. A receipt finds what it paid for through the proposal
+// every entry, these and the rest, stays under Advanced. A plan update names the fields it changed. A receipt finds what it paid for through the proposal
 // with the same idempotency key. Nothing here writes: the entries come from GET /ledger/{user_id}.
 
 // fixture: the payees of the demo mandates (fixtures/demo_user.yaml and fixtures/demo_parent.yaml), by plain name.
@@ -29,6 +29,8 @@ export function friendlyEntries(entries) {
       const status = payload.result.freeze.status;
       if (status === "done") add(entry, "act_frozen", {}, { tone: "ok" });
       else add(entry, "act_freeze_status", { status });
+    } else if (entry.kind === "execution" && payload.result?.plan_updated) {
+      add(entry, "act_plan_updated", { fields: Object.keys(payload.result.plan_updated) });
     } else if (entry.kind === "execution" && payload.action?.type === "precheck") {
       add(entry, "act_precheck");
     } else if (entry.kind === "note" && payload.kind === "rescue_started") {

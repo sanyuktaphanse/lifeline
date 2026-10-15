@@ -1,8 +1,5 @@
 import { test, expect, documented } from "./fixtures.js";
 
-const PHONE = "+86 138 0013 8000";
-const EMAIL = "mei.test@example.com";
-const ANSWER = "ZEBRA42";
 
 // Records every call to the API with its body, so a test can prove what was and was not sent.
 function recordCalls(page, backend) {
@@ -26,7 +23,11 @@ async function fillTrip(page, home, study, purpose = "exchange") {
   await page.locator("#onb-continue").click();
 }
 
-test("Continue on the welcome opens the trip questions, and Skip keeps the sample plan", async ({ page, backend }) => {
+const MESSAGE =
+  "Please update my plan: my backup route is Bank transfer (bank_wire); no phone wallet holds my card; my cash plan is empty.";
+
+test("LIVE: Continue on the welcome opens the trip questions, and Skip keeps the sample plan, read from the ledger", async ({ page, backend }) => {
+  const calls = recordCalls(page, backend);
   await openWelcome(page, backend);
   await expect(page.locator("#view-onboarding")).toBeVisible();
   await expect(page.locator("#view-onboarding h2")).toHaveText("Your trip");
@@ -39,9 +40,17 @@ test("Continue on the welcome opens the trip questions, and Skip keeps the sampl
   await expect(page.locator("#me-trip")).toContainText("No trip set");
   const net = page.locator("#me-net");
   await expect(net.locator(".badge")).toHaveText("Sample");
-  for (const words of ["Wise debit card", "Revolut card", "Ana, by WhatsApp", "300 SGD", "What are the last four characters of your student pass number?"]) {
-    await expect(net).toContainText(words);
-  }
+  await expect(net.locator("dd")).toHaveText([
+    "Wise debit card",
+    "Revolut card",
+    "Wise",
+    "Yes",
+    "A cash pickup in Singapore, knowledge entry sg_cash_pickup_001",
+    "Ana, by WhatsApp",
+    "300 SGD",
+    "What are the last four characters of your student pass number?",
+  ]);
+  expect(calls.filter((call) => call.path === "/ledger/student_001").map((call) => call.method)).toEqual(["GET"]);
 });
 
 test("the four countries with rules on file come first and bold, and any other country says it has none", async ({ page, backend }) => {
@@ -62,69 +71,92 @@ test("the four countries with rules on file come first and bold, and any other c
   await expect(page.locator("#onb-continue")).toBeEnabled();
 });
 
-test("the five steps keep the answer, the phone and the email off the server and out of storage", async ({ page, backend, storageCalls }) => {
+test("LIVE: the four plan steps end in one message the student sends in text; nothing else leaves the page", async ({ page, backend, storageCalls }) => {
   const calls = recordCalls(page, backend);
   await openWelcome(page, backend);
   await fillTrip(page, "CN", "SG");
 
   const step = page.locator("#onb-step");
-  await expect(step).toHaveAttribute("data-step", "card");
-  await expect(step).toContainText("Lifeline recommends none of them and is not paid by any of them.");
-  await expect(page.locator("#onb-next")).toBeDisabled();
-  await page.locator('input[name="onb-card"][value="dbs_posb"]').check();
+  await expect(page.locator("#onb-plan-intro")).toContainText("Four parts of your plan can change in chat");
+  await expect(step).toHaveAttribute("data-step", "backup_card");
+  await expect(step).toContainText("On file: Revolut card");
+  await expect(step).toContainText("never the main card, Wise debit card");
+  await expect(page.locator('input[name="onb-backup_card"]')).toHaveCount(1);
+  await expect(page.locator('input[name="onb-backup_card"][value="revolut:card_02"]')).toBeChecked();
   await page.locator("#onb-next").click();
 
-  await expect(step).toHaveAttribute("data-step", "backup");
-  await expect(step).toContainText("Most students carry one");
-  await page.locator('input[name="onb-backup"][value="yes"]').check();
+  await expect(step).toHaveAttribute("data-step", "backup_route");
+  await expect(step).toContainText("On file: Wise");
+  await expect(page.locator('input[name="onb-backup_route"]')).toHaveCount(2);
+  await page.locator('input[name="onb-backup_route"][value="bank_wire"]').check();
   await page.locator("#onb-next").click();
 
-  await expect(step).toHaveAttribute("data-step", "question");
-  await expect(step).toContainText("In this demo the live rescue asks the sample plan's question");
-  await page.selectOption("#onb-question", "safety_q_school");
-  await expect(page.locator("#onb-next")).toBeDisabled();
-  await page.locator("#onb-answer").fill(ANSWER);
-  await page.locator("#onb-next").click();
-  await expect(page.locator("#onb-answer")).toHaveCount(0);
-
-  await expect(step).toHaveAttribute("data-step", "contact");
-  await page.locator("#onb-contact-name").fill("Mei");
-  await page.selectOption("#onb-contact-rel", "parent");
-  await page.locator("#onb-contact-phone").fill(PHONE);
-  await page.locator("#onb-contact-email").fill(EMAIL);
-  await page.selectOption("#onb-contact-channel", "wechat");
-  await expect(step).toContainText("The phone and email stay on this page and are never sent");
+  await expect(step).toHaveAttribute("data-step", "wallet");
+  await page.locator('input[name="onb-wallet"][value="no"]').check();
   await page.locator("#onb-next").click();
 
-  await expect(step).toHaveAttribute("data-step", "money");
-  await expect(page.locator('input[name="onb-money"]')).toHaveCount(4);
-  await page.locator('input[name="onb-money"][value="200"]').check();
+  await expect(step).toHaveAttribute("data-step", "cash_plan");
+  await expect(step).toContainText("On file: A cash pickup in Singapore, knowledge entry sg_cash_pickup_001");
+  await page.locator('input[name="onb-cash_plan"][value="none"]').check();
   await page.locator("#onb-next").click();
 
-  const summary = page.locator("#onb-summary");
-  await expect(summary).toContainText("Nothing you set here was sent to Lifeline's server.");
-  await expect(summary).toContainText("DBS / POSB");
-  await expect(summary).toContainText("Mei, by WeChat");
-  await page.locator("#onb-done").click();
-
-  await expect(page.locator("#view-home")).toBeVisible();
-  await expect(page.locator("#home-greeting")).toHaveText("Hello. Lifeline is ready for your time in Singapore.");
-  await page.locator("#tab-chat").click();
-  await expect(page.locator("#chat-greeting")).toHaveText("Hello. Lifeline is ready for your time in Singapore.");
-  await page.locator("#open-me").click();
-  await expect(page.locator("#me-trip")).toContainText("Exchange, from China to Singapore");
-  await expect(page.locator("#me-net .badge")).toHaveCount(0);
-  await expect(page.locator("#me-net")).toContainText("200 SGD");
-  await expect(page.locator("#me-net")).toContainText("Set. The answer is not stored.");
-  await expect(page.locator("#me-net")).toContainText(`On this page only: ${PHONE}, ${EMAIL}`);
-
-  expect(await page.content()).not.toContain(ANSWER);
-  for (const call of calls) {
-    // Home reads the reminders once it opens; that read writes nothing and carries no body.
-    expect(["GET /health", "GET /reminders/student_001"]).toContain(`${call.method} ${call.path}`);
-    for (const secret of [PHONE, EMAIL, ANSWER, "Mei"]) expect(call.body).not.toContain(secret);
+  for (const [name, words] of [
+    ["contact", "On file: Ana, by WhatsApp. Lifeline holds only a name and a channel, never a phone number or an email."],
+    ["money", "Changing a limit is never done in chat: it is tier 3 by design."],
+    ["question", "On file: What are the last four characters of your student pass number?"],
+  ]) {
+    await expect(step).toHaveAttribute("data-step", name);
+    await expect(step).toContainText(words);
+    await expect(step).toContainText("rule R04");
+    await expect(step.locator("input, select, textarea")).toHaveCount(0);
+    await page.locator("#onb-next").click();
   }
+
+  await expect(page.locator("#onb-message")).toHaveText(MESSAGE);
+  await expect(page.locator("#view-onboarding input, #view-onboarding textarea")).toHaveCount(0);
+  for (const call of calls) expect(["GET /health", "GET /ledger/student_001", "GET /reminders/student_001"]).toContain(`${call.method} ${call.path}`);
+  for (const call of calls) expect(call.path).not.toMatch(/CN|SG|exchange/);
   expect(await storageCalls()).toEqual([]);
+
+  await page.locator("#onb-put-in-chat").click();
+  await expect(page.locator("#view-chat")).toBeVisible();
+  await expect(page.locator("#chat-text")).toHaveValue(MESSAGE);
+  await expect(page.locator("#chat-paste")).toHaveValue("");
+  expect(calls.filter((call) => call.method === "POST")).toEqual([]);
+
+  await page.locator("#chat-send").click();
+  // The real /chat answers 503 here, as it does without a model key in .env (tests/e2e/backend.py).
+  await expect(page.locator("#chat-error")).not.toBeEmpty();
+  const sent = calls.filter((call) => call.method === "POST");
+  expect(sent.map((call) => [call.path, JSON.parse(call.body)])).toEqual([["/chat", { user_id: "student_001", text: MESSAGE, lang: "en" }]]);
+});
+
+test("keeping everything as it is on file leaves nothing to send", async ({ page, backend }) => {
+  const calls = recordCalls(page, backend);
+  await openWelcome(page, backend);
+  await fillTrip(page, "BR", "SG");
+  for (let i = 0; i < 7; i += 1) await page.locator("#onb-next").click();
+  await expect(page.locator("#onb-message-none")).toHaveText("Everything is as it is on file, so there is nothing to send.");
+  await expect(page.locator("#onb-put-in-chat")).toHaveCount(0);
+  await page.locator("#onb-done").click();
+  await expect(page.locator("#view-home")).toBeVisible();
+  await page.locator("#tab-chat").click();
+  await expect(page.locator("#chat-text")).toHaveValue("");
+  expect(calls.filter((call) => call.method === "POST")).toEqual([]);
+});
+
+test("SCHEMA SHAPE: a plan update the ledger executed shows on Me and as on file in the steps", async ({ page, backend }) => {
+  const entries = [{ seq: 3, ts: "2026-10-15T09:00:00Z", kind: "execution", actor: "agent", hash: "h", prev_hash: "", payload: { action: { type: "update_plan" }, result: { plan_updated: { backup_route: "bank_wire", wallet_token_present: false } } } }];
+  await page.route(`${backend.url}/ledger/student_001`, (route) => route.fulfill({ json: entries }));
+  await openWelcome(page, backend);
+  await page.locator("#onb-skip").click();
+  await page.locator("#open-me").click();
+  await expect(page.locator("#me-net dd").nth(2)).toHaveText("Bank transfer");
+  await expect(page.locator("#me-net dd").nth(3)).toHaveText("No");
+  await page.locator("#me-change-net").click();
+  await page.locator("#onb-next").click();
+  await expect(page.locator("#onb-step")).toContainText("On file: Bank transfer");
+  await expect(page.locator('input[name="onb-backup_route"][value="bank_wire"]')).toBeChecked();
 });
 
 test("Change on Me goes back to the trip questions with the trip kept, and returns to Me", async ({ page, backend }) => {

@@ -58,6 +58,14 @@ test("a refusal names the action type, and the family notice names the contact a
   assert.equal(rows.find((row) => row.seq === 43).tone, "bad");
 });
 
+test("a plan update the ledger executed names the fields it changed, and a failed one is left out", () => {
+  const rows = friendlyEntries([
+    { seq: 3, ts: at(9), kind: "execution", payload: { action: { type: "update_plan" }, result: { plan_updated: { backup_route: "bank_wire", cash_plan: [] } } } },
+    { seq: 6, ts: at(9), kind: "execution", payload: { action: { type: "update_plan" }, result: { error: "The plan was not changed" } } },
+  ]);
+  assert.deepEqual(rows.map((row) => [row.seq, row.key, row.values]), [[3, "act_plan_updated", { fields: ["backup_route", "cash_plan"] }]]);
+});
+
 test("a freeze that did not finish says its status", () => {
   const rows = friendlyEntries([{ seq: 5, ts: at(9), kind: "execution", payload: { result: { freeze: { status: "not_supported" } } } }]);
   assert.deepEqual(rows.map((row) => [row.key, row.values]), [["act_freeze_status", { status: "not_supported" }]]);

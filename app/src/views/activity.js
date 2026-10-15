@@ -5,6 +5,8 @@ import { t } from "../i18n.js";
 import { friendlyEntries, groupByDay, payeeKey } from "../activity.js";
 import { ledgerView } from "./ledger.js";
 
+const FIELD_KEYS = { backup_instrument: "me_backup_card", backup_route: "me_backup_route", wallet_token_present: "me_wallet", cash_plan: "me_cash" };
+
 function typeLabel(lang, type) {
   const key = `type_${type}`;
   const text = t(lang, key);
@@ -15,6 +17,8 @@ function rowText(lang, row) {
   const values = { ...row.values };
   if ("payee" in values) values.payee = values.payee ? (payeeKey(values.payee) ? t(lang, payeeKey(values.payee)) : values.payee) : t(lang, "payee_unknown");
   if ("type" in values) values.type = typeLabel(lang, values.type);
+  // A plan update lists its fields by the names Me uses for them.
+  if (Array.isArray(values.fields)) values.fields = values.fields.map((name) => t(lang, FIELD_KEYS[name] ?? name)).join(", ");
   if ("channel" in values && values.channel) {
     const key = `channel_${values.channel}`;
     values.channel = t(lang, key) === key ? values.channel : t(lang, key);

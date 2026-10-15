@@ -2,11 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
-  CHANNELS, EMERGENCY_CHOICES, PLAN_STEPS, PURPOSES, RELATIONSHIPS, SAFETY_QUESTIONS, SAMPLE_PLAN,
-  cardChoices, planContact, setAnswer, stepReady, tripReady,
+  CASH_CHOICES, PLAN_STEPS, PURPOSES, READ_ONLY_STEPS, ROUTE_CHOICES, SAMPLE_PLAN, UPDATABLE_FIELDS,
+  backupChoices, composeMessage, planChanges, planOnFile, tripReady,
 } from "../../src/onboarding.js";
 
 const fixture = readFileSync(new URL("../../../fixtures/demo_user.yaml", import.meta.url), "utf-8");
+const schemas = readFileSync(new URL("../../../contracts/schemas.py", import.meta.url), "utf-8");
+const router = readFileSync(new URL("../../../rails/fake_router.py", import.meta.url), "utf-8");
+const knowledge = readFileSync(new URL("../../../rails/knowledge/singapore.yaml", import.meta.url), "utf-8");
 
 test("the trip is ready only with a home, a place of study and a purpose", () => {
   assert.ok(!tripReady(null));
@@ -16,54 +19,68 @@ test("the trip is ready only with a home, a place of study and a purpose", () =>
   assert.deepEqual(PURPOSES, ["exchange", "degree", "internship", "leisure", "family", "work"]);
 });
 
-test("the safety net has five steps in order", () => {
-  assert.deepEqual(PLAN_STEPS, ["card", "backup", "question", "contact", "money"]);
+test("the steps that change the plan are exactly the four fields update_plan accepts", () => {
+  const fields = schemas.match(/PLAN_UPDATE_FIELDS = \(([^)]+)\)/)[1].match(/"(\w+)"/g).map((name) => name.slice(1, -1));
+  assert.deepEqual(UPDATABLE_FIELDS, fields);
+  assert.deepEqual(PLAN_STEPS, ["backup_card", "backup_route", "wallet", "cash_plan", "contact", "money", "question"]);
+  assert.deepEqual([...READ_ONLY_STEPS], ["contact", "money", "question"]);
 });
 
-test("the Singapore cards are offered only for study in Singapore, and never ranked", () => {
-  const names = (trip) => cardChoices(trip).map((card) => card.id);
-  assert.deepEqual(names({ study: "SG" }), ["wise", "revolut", "youtrip", "dbs_posb", "ocbc", "uob", "home_card", "unsure"]);
-  assert.deepEqual(names({ study: "BR" }), ["wise", "revolut", "home_card", "unsure"]);
-  assert.deepEqual(names(null), ["wise", "revolut", "youtrip", "dbs_posb", "ocbc", "uob", "home_card", "unsure"]);
-  assert.equal(cardChoices(null).find((card) => card.id === "dbs_posb").name, "DBS / POSB");
-});
-
-test("each step is ready only when it is answered", () => {
-  assert.ok(!stepReady("card", {}));
-  assert.ok(stepReady("card", { card: "unsure" }));
-  assert.ok(!stepReady("card", { card: "visa_gold" }));
-  assert.ok(!stepReady("backup", {}));
-  assert.ok(stepReady("backup", { backup: false }));
-  assert.ok(!stepReady("question", { question: SAFETY_QUESTIONS[0] }));
-  assert.ok(stepReady("question", { question: SAFETY_QUESTIONS[0], answerSet: true }));
-  assert.ok(!stepReady("contact", { contact: { name: "  ", relationship: "parent", channel: "whatsapp" } }));
-  assert.ok(stepReady("contact", { contact: { name: "Mei", relationship: "parent", channel: "whatsapp" } }));
-  assert.ok(!stepReady("contact", { contact: { name: "Mei", relationship: "parent", channel: "carrier_pigeon" } }));
-  assert.ok(stepReady("money", { money: "none" }));
-  assert.ok(stepReady("money", { money: "300" }));
-  assert.ok(!stepReady("money", { money: "5000" }));
-});
-
-test("the typed answer is never kept, only that one was set", () => {
-  const draft = setAnswer({ question: SAFETY_QUESTIONS[0] }, "  7Q2K ");
-  assert.equal(draft.answerSet, true);
-  assert.ok(!JSON.stringify(draft).includes("7Q2K"));
-  assert.equal(setAnswer({}, "   ").answerSet, false);
-});
-
-test("the plan's trusted contact holds only a name and a channel; phone and email stay apart", () => {
-  const contact = { name: "Mei", relationship: "parent", channel: "wechat", phone: "+86 138 0000 0000", email: "mei@example.com" };
-  assert.deepEqual(planContact(contact), { name: "Mei", channel: "wechat" });
-  assert.ok(RELATIONSHIPS.length >= 4 && CHANNELS.includes("whatsapp"));
-});
-
-test("the sample plan is the one in fixtures/demo_user.yaml, which the live rescue reads", () => {
-  assert.equal(SAMPLE_PLAN.question, fixture.match(/question: (.+)\n/)[1]);
-  assert.equal(SAMPLE_PLAN.contact.name, fixture.match(/trusted_contact:\n\s+name: (\S+)/)[1]);
-  assert.equal(SAMPLE_PLAN.contact.channel, fixture.match(/trusted_contact:\n\s+name: \S+\n\s+channel: (\S+)/)[1]);
-  assert.equal(SAMPLE_PLAN.money, fixture.match(/emergency_allowance: "(\d+)"/)[1]);
+test("the sample plan is the plan in fixtures/demo_user.yaml", () => {
+  const plan = fixture.slice(fixture.indexOf("\nplan:"));
+  assert.deepEqual(SAMPLE_PLAN.cards, [...plan.matchAll(/- name: (.+)\n\s+instrument_id: "([^"]+)"/g)].map((m) => ({ name: m[1], instrument_id: m[2] })));
+  assert.equal(SAMPLE_PLAN.primary_instrument, plan.match(/primary_instrument: "([^"]+)"/)[1]);
+  assert.equal(SAMPLE_PLAN.backup_instrument, plan.match(/backup_instrument: "([^"]+)"/)[1]);
+  assert.equal(SAMPLE_PLAN.backup_route, plan.match(/backup_route: (\w+)/)[1]);
+  assert.equal(SAMPLE_PLAN.wallet_token_present, plan.match(/wallet_token_present: (\w+)/)[1] === "true");
+  assert.deepEqual(SAMPLE_PLAN.cash_plan, plan.match(/cash_plan: \[([^\]]*)\]/)[1].split(", "));
+  assert.deepEqual(SAMPLE_PLAN.trusted_contact, { name: plan.match(/name: (\w+)\n\s+channel/)[1], channel: plan.match(/channel: (\w+)/)[1] });
+  assert.equal(SAMPLE_PLAN.emergency_allowance, plan.match(/emergency_allowance: "(\d+)"/)[1]);
+  assert.equal(SAMPLE_PLAN.question, plan.match(/question: (.+)\n/)[1]);
   assert.equal(SAMPLE_PLAN.currency, fixture.match(/currency: (\w+)/)[1]);
-  assert.deepEqual(SAMPLE_PLAN.cards, [...fixture.matchAll(/- name: (.+)\n\s+instrument_id/g)].map((match) => match[1]));
-  assert.ok(EMERGENCY_CHOICES.includes(SAMPLE_PLAN.money));
-  assert.deepEqual(EMERGENCY_CHOICES, ["100", "200", "300", "none"]);
+});
+
+test("a backup can only be another of the plan's own cards, never the main card", () => {
+  assert.deepEqual(backupChoices(SAMPLE_PLAN).map((card) => card.instrument_id), ["revolut:card_02"]);
+});
+
+test("the route and cash choices are ones the server can hold", () => {
+  for (const rail of ROUTE_CHOICES) assert.ok(router.includes(`"${rail}"`), rail);
+  assert.ok(!ROUTE_CHOICES.includes("sim_pix"));
+  for (const choice of CASH_CHOICES) for (const id of choice.ids) assert.match(knowledge, new RegExp(`id: ${id}\\n`));
+  assert.deepEqual(CASH_CHOICES.map((choice) => choice.ids), [["sg_cash_pickup_001"], []]);
+});
+
+test("the plan on file is the sample plan with every update the ledger executed, in order", () => {
+  const ledger = [
+    { seq: 3, kind: "execution", payload: { action: { type: "update_plan" }, result: { plan_updated: { backup_route: "bank_wire", wallet_token_present: false } } } },
+    { seq: 6, kind: "execution", payload: { action: { type: "update_plan" }, result: { error: "The plan was not changed" } } },
+    { seq: 9, kind: "execution", payload: { action: { type: "update_plan" }, result: { plan_updated: { backup_route: "wise", cash_plan: [] } } } },
+    { seq: 10, kind: "proposal", payload: { result: { plan_updated: { wallet_token_present: true } } } },
+  ];
+  const plan = planOnFile(ledger);
+  assert.equal(plan.backup_route, "wise");
+  assert.equal(plan.wallet_token_present, false);
+  assert.deepEqual(plan.cash_plan, []);
+  assert.equal(plan.backup_instrument, "revolut:card_02");
+  assert.deepEqual(planOnFile([]), SAMPLE_PLAN);
+});
+
+test("only the fields the student changed are kept", () => {
+  assert.deepEqual(planChanges(SAMPLE_PLAN, { backup_instrument: "revolut:card_02", backup_route: "wise", wallet_token_present: true, cash_plan: ["sg_cash_pickup_001"] }), {});
+  assert.deepEqual(planChanges(SAMPLE_PLAN, { backup_route: "bank_wire", cash_plan: [] }), { backup_route: "bank_wire", cash_plan: [] });
+});
+
+test("the message names every change in plain words with the ids the plan holds, in each language", () => {
+  const changes = { backup_instrument: "revolut:card_02", backup_route: "bank_wire", wallet_token_present: false, cash_plan: ["sg_cash_pickup_001"] };
+  assert.equal(
+    composeMessage("en", changes, SAMPLE_PLAN),
+    "Please update my plan: my backup card is my Revolut card (revolut:card_02); my backup route is Bank transfer (bank_wire); no phone wallet holds my card; my cash plan is the cash pickup in Singapore (sg_cash_pickup_001).",
+  );
+  assert.equal(composeMessage("en", { cash_plan: [] }, SAMPLE_PLAN), "Please update my plan: my cash plan is empty.");
+  for (const lang of ["pt", "zh"]) {
+    const words = composeMessage(lang, changes, SAMPLE_PLAN);
+    for (const id of ["revolut:card_02", "bank_wire", "sg_cash_pickup_001"]) assert.ok(words.includes(id), `${id} in ${lang}`);
+  }
+  assert.equal(composeMessage("en", {}, SAMPLE_PLAN), null);
 });

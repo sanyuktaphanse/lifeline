@@ -267,3 +267,6 @@ optgroup.on-file, option.on-file { font-weight: 700; }
 .act-bad > span:first-child { color: var(--danger-line); }
 #activity-advanced summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
 .activity-ledger { display: flex; flex-direction: column; gap: 12px; }
+.onb-message { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
+.onb-read-only { border-inline-start: 3px solid var(--line); padding-inline-start: 12px; }
+.onb-on-file { font-weight: 600; color: var(--text); }
