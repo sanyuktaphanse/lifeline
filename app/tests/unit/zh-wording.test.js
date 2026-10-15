@@ -51,3 +51,11 @@ test("the other five trigger labels are unchanged", () => {
     },
   );
 });
+
+// Joanne's approval on pull request 56: the corridor label on the confirmation card names the route to a country or
+// region, as the corridor trigger does, and leaves 通道 to mean a rail.
+test("the confirmation card's corridor label reads 汇往国家或地区, matching the corridor trigger", () => {
+  assert.equal(STRINGS.zh.field_corridor, "汇往国家或地区");
+  assert.ok(STRINGS.zh.trigger_first_transfer_on_corridor.includes(STRINGS.zh.field_corridor.replace("国家", "该国家")));
+  assert.ok(!STRINGS.zh.field_corridor.includes("通道"));
+});

@@ -448,7 +448,7 @@ const zh = {
   field_type: "操作",
   field_amount: "金额",
   field_payee: "收款人",
-  field_corridor: "通道",
+  field_corridor: "汇往国家或地区",
   field_purpose: "用途",
   field_card: "卡片",
   field_receipt: "回执",
