@@ -23,7 +23,7 @@ Open pull requests: #55 (passphrase lock, Sanyukta), #56 (app follow ups, Pearli
 
 ## Everyone
 
-- [ ] **Registration.** It shares the 20 October deadline. Fill `international-registration-form-en.xlsx` outside the repository, never in it, and email it with each member's proof of enrolment to fintechathon@ican-x.com, subject "International Track Registration, team name, team leader name". Confirm who sends it, and that it was sent.
+- [x] **Registration.** Sent by Joanne on 15 October 2026. It shares the 20 October deadline. Fill `international-registration-form-en.xlsx` outside the repository, never in it, and email it with each member's proof of enrolment to fintechathon@ican-x.com, subject "International Track Registration, team name, team leader name". Confirm who sends it, and that it was sent.
 - [ ] Confirm at least 60% of the team are not Chinese nationals, as the rules require.
 - [ ] Ask the organisers how the submission is delivered, since the rules do not say, and whether a FISCO BCOS anchor counts toward the on chain bonus for Topic C.
 - [ ] Two people each tick `docs/release_checklist.md` independently, the submission gate.
