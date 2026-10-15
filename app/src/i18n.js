@@ -4,6 +4,8 @@
 // Which languages exist is never decided here: the picker reads GET /health. A language with no labels here
 // gets English labels around replies in its own language.
 
+import { ONBOARDING_STRINGS } from "./i18n-onboarding.js";
+
 const en = {
   app_title: "Lifeline",
   demo_banner: "Demo only. No real money moves on any route.",
@@ -589,7 +591,11 @@ const zh = {
   guide_verify_title: "您的账本现状",
 };
 
-export const STRINGS = { en, pt, zh };
+export const STRINGS = {
+  en: { ...en, ...ONBOARDING_STRINGS.en },
+  pt: { ...pt, ...ONBOARDING_STRINGS.pt },
+  zh: { ...zh, ...ONBOARDING_STRINGS.zh },
+};
 
 export function t(code, key, values = {}) {
   const table = Object.hasOwn(STRINGS, code) ? STRINGS[code] : STRINGS.en;

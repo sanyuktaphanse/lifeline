@@ -2,7 +2,7 @@ import { test, expect } from "./fixtures.js";
 import { STRINGS } from "../../src/i18n.js";
 import { GUIDE_SECTIONS, PROTECT_SECTIONS } from "../../src/guide-content.js";
 
-test("the welcome shows its three cards first, and Continue opens Chat", async ({ page, backend }) => {
+test("the welcome shows its three cards first, and Continue opens the trip questions", async ({ page, backend }) => {
   await page.goto(`/?api=${encodeURIComponent(backend.url)}`);
   await expect(page.locator("#view-welcome")).toBeVisible();
   await expect(page.locator(".tabs")).toBeHidden();
@@ -18,6 +18,9 @@ test("the welcome shows its three cards first, and Continue opens Chat", async (
   await expect(page.locator("#view-welcome input")).toHaveCount(0);
   await page.locator("#welcome-continue").click();
   await expect(page.locator("#view-welcome")).toBeHidden();
+  await expect(page.locator("#view-onboarding")).toBeVisible();
+  await expect(page.locator(".tabs")).toBeHidden();
+  await page.locator("#onb-skip").click();
   await expect(page.locator(".tabs")).toBeVisible();
   await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("#view-chat")).toBeVisible();
