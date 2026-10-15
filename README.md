@@ -19,7 +19,7 @@ make dev
 
 Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. CI runs 3.12, and 3.13 works too. Name the virtual environment `.venv` in the repository folder, because the Makefile runs `.venv/bin/python` when it exists and plain `python` otherwise.
 
-`pytest` collects 1632 tests: 1625 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
+`pytest` collects 1642 tests: 1635 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
 
 `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`.
 
@@ -39,7 +39,7 @@ The API is for developer machines only. It binds to `127.0.0.1` and has no accou
 6. Standing mandates under rules R12 and R13, reminders, and a monthly note built from the ledger alone.
 7. Fake and simulated rails: Wise, a bank wire and Revolut as fakes, and Pix, UPI to PayNow and a China bank remittance as simulations, each reading its limits from the sourced knowledge base of 18 entries in `rails/knowledge/`.
 8. The HTTP API in `api/main.py` and the evidence harness in `core/harness.py`.
-9. The app in `app/`, lane C's frontend in plain HTML, CSS and JavaScript, which talks only to the API; [app/README.md](app/README.md) says how to start and test it.
+9. The app in `app/`, lane C's frontend in plain HTML, CSS and JavaScript, which talks only to the API: the welcome, the onboarding, Home, the chat with a separate paste box and the confirmation card, the lost card rescue, the Activity record with the ledger under it, the Guide, and the Book and pay safely page. [app/README.md](app/README.md) says how to start and test it.
 
 ## Not in this repository yet
 

@@ -32,7 +32,7 @@ The design rule is the master plan's sentence. The model proposes. The engine de
 
 What is built, on `main`: the engine and tiers, the ledger with verify and both anchors, the agent loop with a model adapter over Anthropic and Alibaba Cloud DashScope, the council, the rescue state machine, standing mandates, the monthly note, the cash cap, simulated rails for Pix, UPI to PayNow and a China bank remittance with sourced rules, fixture rails for Wise, a bank wire and Revolut, a sourced knowledge base, replies in English, Portuguese and Chinese, an HTTP API, an evaluation harness, and lane C's app in `app/`, which talks only to the API. What is not: a real payment rail, since no money moves anywhere and the Wise sandbox rail runs only with a sandbox token, which is not set up yet; and a translator the agent calls, since `rails/translator.py` exists but no tool reaches it yet, open item 181.
 
-How it was measured, at this commit: `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged`. Of the 28 attacks in `suites/attacks.yaml`, 27 pass, 0 fail and 1 is not automated. The one not automated is X25, a person trying to break Lifeline for twenty minutes, which has not been run. A live stranger test sent twenty student tasks on 9 October. The verdicts were worked 3, worked badly 12, failed 5, out of 20. No money, payee or setting moved wrongly in any of them. `pytest` collects 1632 tests. Section 12 has every number and where it comes from.
+How it was measured, at this commit: `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged`. Of the 28 attacks in `suites/attacks.yaml`, 27 pass, 0 fail and 1 is not automated. The one not automated is X25, a person trying to break Lifeline for twenty minutes, which has not been run. A live stranger test sent twenty student tasks on 9 October. The verdicts were worked 3, worked badly 12, failed 5, out of 20. No money, payee or setting moved wrongly in any of them. `pytest` collects 1642 tests. Section 12 has every number and where it comes from.
 
 ## 2. Architecture
 
@@ -55,7 +55,7 @@ How it was measured, at this commit: `make evidence` prints `58 passed, 0 failed
 | Knowledge base | `rails/knowledge/` | Sourced entries read by id | `tests/test_knowledge.py::test_every_entry_has_all_fields` |
 | API | `api/main.py` | FastAPI server over one agent loop, described in `docs/api.md` | `tests/test_api.py::test_the_confirmation_round_trip_pays_once_and_the_token_never_reaches_the_ledger` |
 | Harness | `core/harness.py`, `suites/` | Plays the suites as scenarios and writes `evidence/report.md` | `tests/test_harness.py::test_every_real_scenario_passes_and_every_other_entry_is_not_automated` |
-| App | `app/` | Lane C's frontend in plain HTML, CSS and JavaScript: chat with a separate paste box, the confirmation card, the rescue and the ledger, talking only to the API | `app/tests/e2e/3-confirm.spec.js` |
+| App | `app/` | Lane C's frontend in plain HTML, CSS and JavaScript, talking only to the API: the welcome, the onboarding, Home, the chat with a separate paste box and the confirmation card, the lost card rescue, the Activity record with the ledger under it, the Guide, and the Book and pay safely page | `app/tests/e2e/3-confirm.spec.js` |
 
 ### 2.2 The path of one request
 
@@ -278,7 +278,7 @@ Every number here belongs to `main` at commit `06b3c30`, 13 October 2026, and co
 
 Against the plan's thresholds in its section 18: tasks at 31 of 38 are below the 90 percent the plan set, because seven tasks need a capability that is not built, each listed in the report's Not automated table and with its missing capability in the technical reference, Entries not yet automated, such as rate history for T25 and T33 or the translator for T04. Attacks at 27 of 28 fall short of 100 percent only by X25. All three verified languages run. The provider swap's drop in points has not been recorded in the repository, because live reports are written to the ignored `evidence/` folder; the second live run could not judge Anthropic for want of credit, open item 162.
 
-`pytest` collects 1632 tests after the passphrase lock of 13 October; 3 are skipped because no FISCO BCOS node answers and 4 are expected failures for open items 101, 109 and 110.
+`pytest` collects 1642 tests on 15 October 2026; 3 are skipped because no FISCO BCOS node answers and 4 are expected failures for open items 101, 109 and 110.
 
 The security review of Stage 10, on 9 October, set eight attackers, one per class of attack, and a second ledger attacker, against the API and the loop, with the scripted model playing a compromised model, and three independent skeptics judged every claimed break. 149 attempts held, across all 28 attack ids: X01 3, X02 2, X03 3, X04 2, X05 1, X06 9, X07 11, X08 7, X09 4, X10 10, X11 12, X12 7, X13 3, X14 5, X15 3, X16 1, X17 5, X18 2, X19 2, X20 6, X21 9, X22 11, X23 4, X24 7, X25 14, X26 2, X27 1, X28 3. The skeptics' list holds 24 entries naming 31 claimed breaks. 11 breaks were confirmed and fixed in pull requests 27 to 30, decisions 108 to 116 and 118, and each is listed in `docs/self_assessment.md`, The security review.
 

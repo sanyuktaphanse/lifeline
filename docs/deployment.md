@@ -20,7 +20,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 13 October 2026 it gave 1575 passed, 3 skipped and 4 expected failures on `main`.
+The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 15 October 2026 it gave 1635 passed, 3 skipped and 4 expected failures, 1642 collected, on branch `lane-a/final-docs`.
 
 ```bash
 make evidence
