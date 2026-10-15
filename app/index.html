@@ -25,18 +25,20 @@
   </header>
   <div id="health-error" class="banner banner-error" role="alert" hidden></div>
   <nav class="tabs" role="tablist" hidden>
+    <button role="tab" id="tab-home" aria-controls="view-home" aria-selected="false" data-i18n="tab_home">Home</button>
     <button role="tab" id="tab-chat" aria-controls="view-chat" aria-selected="true" data-i18n="tab_chat">Chat</button>
     <button role="tab" id="tab-rescue" aria-controls="view-rescue" aria-selected="false" data-i18n="tab_rescue">Lost card</button>
-    <button role="tab" id="tab-ledger" aria-controls="view-ledger" aria-selected="false" data-i18n="tab_ledger">Ledger</button>
+    <button role="tab" id="tab-activity" aria-controls="view-activity" aria-selected="false" data-i18n="tab_activity">Activity</button>
     <button role="tab" id="tab-guide" aria-controls="view-guide" aria-selected="false" data-i18n="tab_guide">Guide</button>
   </nav>
   <main>
     <section id="view-welcome" class="welcome" aria-labelledby="welcome-tagline" hidden></section>
     <section id="view-onboarding" class="onboarding" hidden></section>
     <section id="view-me" class="me" hidden></section>
+    <section id="view-home" role="tabpanel" aria-labelledby="tab-home" hidden></section>
     <section id="view-chat" role="tabpanel" aria-labelledby="tab-chat" hidden></section>
     <section id="view-rescue" role="tabpanel" aria-labelledby="tab-rescue" hidden></section>
-    <section id="view-ledger" role="tabpanel" aria-labelledby="tab-ledger" hidden></section>
+    <section id="view-activity" role="tabpanel" aria-labelledby="tab-activity" hidden></section>
     <section id="view-guide" role="tabpanel" aria-labelledby="tab-guide" hidden></section>
   </main>
 </body>

@@ -3,9 +3,11 @@
 // message sent as text would count as the student's own (rule 1 of "Rules the app must keep"). The identity
 // answer is cleared from its box as soon as it is sent and is never kept anywhere.
 import { el, errorText, label } from "../dom.js";
+import { t } from "../i18n.js";
 import { rescueStartBody, rescueStepBody } from "../requests.js";
 import { stepFor } from "../rescue-steps.js";
 import { issuerLink, renderReply } from "./reply.js";
+import { QUICK_ANSWERS } from "../rescue-quick.js";
 
 // Source: docs/api.md, POST /rescue/start: text is 1 to 4,000 characters.
 const MAX_TEXT = 4000;
@@ -135,6 +137,23 @@ export function rescueView(ctx, root) {
       ),
     );
     const start = label(ctx, "button", "rescue_start", null, { type: "submit", class: "btn btn-primary", id: "rescue-start" });
+    // A tap fills the box with the app's own words; the student may change them, and nothing is sent until Start.
+    const quick = el("div", { class: "quick-answers" });
+    const drawQuick = (trigger) =>
+      quick.replaceChildren(
+        ...QUICK_ANSWERS[trigger].map((key) =>
+          label(ctx, "button", key, null, {
+            type: "button",
+            class: "chip quick-answer",
+            onclick: () => {
+              words.value = t(ctx.lang(), key);
+              start.focus();
+            },
+          }),
+        ),
+      );
+    drawQuick("card_lost");
+    for (const choice of choices) choice.querySelector("input").addEventListener("change", (event) => drawQuick(event.target.value));
     return el(
       "form",
       {
@@ -153,6 +172,8 @@ export function rescueView(ctx, root) {
       label(ctx, "p", "rescue_intro", null, { class: "intro" }),
       el("fieldset", { class: "choices" }, label(ctx, "legend", "rescue_trigger_label"), choices),
       el("label", { class: "field" }, label(ctx, "span", "rescue_words_label"), words),
+      label(ctx, "p", "rescue_quick_label", null, { class: "hint" }),
+      quick,
       label(ctx, "p", "rescue_no_paste", null, { class: "hint" }),
       local,
       start,

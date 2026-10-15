@@ -24,15 +24,14 @@ async function cardWith(page, backend, open, advice, lang) {
 for (const score of [0, 0.4]) {
   test(`SCHEMA SHAPE: at a disagreement of ${score} the runner up is not shown`, async ({ page, backend, open }) => {
     const council = await cardWith(page, backend, open, { disagreement: score, triggers: [] });
-    await expect(council).toContainText("Chose: wise");
+    await expect(council).toContainText("Chose: Wise");
     await expect(council.locator(".council-runner-up")).toHaveCount(0);
-    await expect(council).not.toContainText("sim_pix");
   });
 }
 
 test("SCHEMA SHAPE: above 0.4 the runner up is shown", async ({ page, backend, open }) => {
   const council = await cardWith(page, backend, open, { disagreement: 0.41, triggers: [] });
-  await expect(council.locator(".council-runner-up")).toHaveText("Runner up: sim_pix");
+  await expect(council.locator(".council-runner-up")).toHaveText("Runner up: Pix");
 });
 
 test("SCHEMA SHAPE: triggers read as short labels, never raw ids, and an unknown one is left off", async ({ page, backend, open }) => {

@@ -5,7 +5,8 @@ import { el, errorText, label } from "../dom.js";
 import { t } from "../i18n.js";
 import { chatBody, confirmBody } from "../requests.js";
 import { renderReply } from "./reply.js";
-import { greeting } from "../tailoring.js";
+import { greeting, homeStarter } from "../tailoring.js";
+import { partsOf } from "../reply-text.js";
 
 // Source: docs/api.md, POST /chat: text is 1 to 4,000 characters and pasted_text 1 to 20,000.
 const MAX_TEXT = 4000;
@@ -55,6 +56,7 @@ export function chatView(ctx, root) {
     try {
       const reply = await ctx.api.chat(body);
       thread.append(yourMessage(ctx, body), lifelineMessage(ctx, reply));
+      starters.hidden = true;
       typed.value = "";
       pasted.value = "";
       pasteBox.open = false;
@@ -81,27 +83,43 @@ export function chatView(ctx, root) {
     node.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
+  // An empty chat offers starters that send at once, in text: the agreed rent sentence, a question about money from
+  // home when the trip names a home, and how to spot a scam. They go once the thread has a message.
+  const starters = el("div", { class: "starters", id: "chat-starters" });
+  ctx.refreshStarters = () => {
+    const lang = ctx.lang();
+    const words = [t(lang, "guide_ex_rent"), homeStarter(ctx.profile.trip, lang), t(lang, "starter_scam")].filter(Boolean);
+    starters.hidden = thread.childElementCount > 0;
+    starters.replaceChildren(
+      label(ctx, "p", "chat_starters_title", null, { class: "hint" }),
+      ...words.map((sentence) => el("button", { type: "button", class: "starter", onclick: () => ctx.sendNow(sentence) }, sentence)),
+    );
+  };
+
   // The greeting names the place of study from the onboarding, and is plain without a trip.
   const hello = el("p", { class: "chat-greeting", id: "chat-greeting" });
   ctx.refreshGreeting = () => {
     hello.textContent = greeting(ctx.profile.trip, ctx.lang());
   };
   ctx.refreshGreeting();
+  ctx.refreshStarters();
 
-  root.replaceChildren(
-    hello,
-    label(ctx, "p", "chat_intro", null, { class: "intro" }),
-    thread,
-    el(
-      "form",
-      { class: "composer", onsubmit: submit },
-      el("label", { class: "field" }, label(ctx, "span", "message_label"), typed),
-      pasteBox,
-      note,
-      error,
-      send,
-    ),
+  // Home's cards and the starters send their words at once. They are the app's own words, so they go in text.
+  ctx.sendNow = (words) => {
+    typed.value = words;
+    form.requestSubmit();
+  };
+
+  const form = el(
+    "form",
+    { class: "composer", onsubmit: submit },
+    el("label", { class: "field" }, label(ctx, "span", "message_label"), typed),
+    pasteBox,
+    note,
+    error,
+    send,
   );
+  root.replaceChildren(hello, label(ctx, "p", "chat_intro", null, { class: "intro" }), starters, thread, form);
 }
 
 function yourMessage(ctx, body) {
@@ -125,5 +143,22 @@ export function lifelineMessage(ctx, reply) {
     { class: "msg msg-lifeline" },
     label(ctx, "span", "lifeline", null, { class: "msg-who" }),
     renderReply(ctx, reply, { onConfirm }),
+    copyButton(ctx, partsOf(reply).body),
   );
+}
+
+// Copy is offered only when the reply holds the model's words, and copies only them, never the sentences code wrote.
+function copyButton(ctx, body) {
+  if (!body) return null;
+  const button = label(ctx, "button", "copy", null, { type: "button", class: "btn-link reply-copy" });
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      button.dataset.i18n = "copied";
+    } catch {
+      button.dataset.i18n = "copy_failed";
+    }
+    button.textContent = t(ctx.lang(), button.dataset.i18n);
+  });
+  return button;
 }

@@ -12,7 +12,8 @@ async function freezeACard(backend) {
 
 async function openLedger(page, open) {
   await open();
-  await page.locator("#tab-ledger").click();
+  await page.locator("#tab-activity").click();
+  await page.locator("#activity-advanced summary").click();
   await expect(page.locator("#ledger-status [data-part]")).not.toHaveCount(0);
 }
 

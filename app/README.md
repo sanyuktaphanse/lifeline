@@ -30,14 +30,18 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 3. A confirmation card built from the reply's `confirmation` field: the warning, the action, every route with the selected one marked, and the council's advice when present. The council's runner up is shown only when its disagreement score is above 0.4, the backend's `RUNNER_UP_DISAGREEMENT`, as the reply text does, and the reasons it was asked are shown as short labels in the chosen language; an id the app does not know is left off. A route is marked Blocked only when it has a blocked reason, its limit is not ok, or its status is down; a degraded route is still offered by the loop, so it is not marked. A route's blocked reason and the knowledge entry it cites, its `rule_id`, are shown as the server sends them; the app keeps no copy of the knowledge base. The token is kept only in memory, inside the card, and is sent back to `/confirm` exactly as it came, once. A token the server does not accept, because it expired, was used or was never issued, comes back as a normal reply that says nothing was sent, and the app shows it as one.
 4. The two sentences code writes in every reply, shown on their own lines: each blocked request sentence at the top, and the sentence that begins `This turn:`, `Neste turno:` or `本轮：` at the bottom. The app reads them from the reply's `blocked` and `turn_summary` fields. Only when a field is absent, as from a server older than those fields, does it find that sentence by its wording.
 5. The lost card rescue, driven only by `rescue.do_now`, for all seven values. Its fields take typed words only: pasting and dropping are refused. An empty identity answer is never sent, because the server would count it as a wrong one, and the answer is cleared as soon as it is sent.
-6. The ledger: every entry, newest first, with the result of verify above it: whether the chain is intact and the first broken entry, the anchor status, the integrity hold, and whether demo keys are signing.
+6. The ledger, under Advanced on the Activity tab: every entry, newest first, with the result of verify above it: whether the chain is intact and the first broken entry, the anchor status, the integrity hold, and whether demo keys are signing.
 7. A welcome screen, shown on opening before the tabs: the logo, one sentence on what Lifeline is for, three short cards to swipe or tap through, on what Lifeline does, what it never does and how it works, and one button, Continue as the demo student, with a line saying the demo runs as one demo student with demo limits, no real money moves and sign in is not built. It has no password field and no account. Continue opens the onboarding, and the Welcome button in the top bar brings it back. Nothing remembers a visit, so it shows on every opening. `?welcome=off` in the address skips it; the browser tests use that.
-8. The Guide tab, after Ledger: six sections for the moments a student meets, paying rent abroad, a message about money, a lost card, money from or to China, money from India or to Brazil, and reading the ledger, then How Lifeline protects you in six sections. Example sentences can be tapped to put their words in the message box, never in the paste box. When the tab is shown it reads `GET /ledger/{user_id}/verify` once and shows the result, with a line when development keys are signing. Its sentences are in `src/guide-content.js` and `src/i18n.js`.
+8. The Guide tab, after Activity: six sections for the moments a student meets, paying rent abroad, a message about money, a lost card, money from or to China, money from India or to Brazil, and reading the ledger, then How Lifeline protects you in six sections. Example sentences can be tapped to put their words in the message box, never in the paste box. When the tab is shown it reads `GET /ledger/{user_id}/verify` once and shows the result, with a line when development keys are signing. Its sentences are in `src/guide-content.js` and `src/i18n.js`.
 9. The logo, an original mark drawn in `src/logo.js`: one continuous line with a single heartbeat pulse, in the accent colour, beside the wordmark Lifeline. It is in the top bar, on the welcome screen, and in `index.html` as the favicon, drawn from the same path.
 10. The onboarding, after the welcome. First three questions about the trip: home, where the student will study, and the purpose. The two country lists hold every country with its flag and its name in the chosen language, from the browser's own `Intl.DisplayNames`. Brazil, China, India and Singapore come first, in bold, because `rails/knowledge` has entries for them; any other country can be chosen and the app says Lifeline has no sourced rules for it yet. The trip stays in page memory only: nothing is sent and nothing is written to browser storage. Skip keeps the plan as it is on file.
 11. Then the safety net, which collects nothing it cannot keep. Four steps are the four fields `update_plan` changes at tier 1, `PLAN_UPDATE_FIELDS` in `contracts/schemas.py`: the backup card, which can only be another of the plan's own cards and never the main card; the backup route, Wise or Bank transfer; whether a phone wallet holds the card; and the cash plan, the cash pickup entry `sg_cash_pickup_001` or none. Each shows what is on file. Three steps are read only: the trusted contact, the emergency money and the safety question say what is on file and that chat cannot change them, because the engine refuses them under rule R04, and that changing a limit is never done in chat, being tier 3 by design. They have no fields, so no phone, email or answer is ever asked for. The steps end in one message naming only what changed, with the ids the plan holds, such as "Please update my plan: my backup route is Bank transfer (bank_wire); no phone wallet holds my card; my cash plan is empty." The button puts it in the message box, where the student reads it and sends it through `/chat` as their own words; the engine checks it, and the ledger records a proposal, a decision at T1 and an execution whose `result.plan_updated` names the fields. The plan on file is the plan of `fixtures/demo_user.yaml` with every `plan_updated` that `GET /ledger` records, as the server itself rebuilds it.
-12. The trip tailors the app: the greeting at the top of Chat names the place of study, and `src/tailoring.js` also words a money from home label and a chat starter about money from home for the screens that will use them.
+12. The trip tailors the app: the greeting on Home and at the top of Chat names the place of study, the money from home card on Home names the home country, and an empty chat offers a starter about money from that country. China, India and Brazil have their own starter, because `rails/knowledge` has entries on money from them.
 13. The Me page, from the Me button in the top bar: the trip and the plan on file, each with Change, marked Sample because it is the demo student's plan with the changes the ledger records; how Lifeline chooses a route, in one sentence, Lifeline picks the cheapest route not marked Simulated, and simulated routes follow a real rail's rules, for practice; the checks of `POST /precheck` that fit the trip, money from China, arriving in China or turning on Pix, each run only when tapped because each writes a ledger entry, with the documents, the review triggers and the entry ids the server returns; and sign in, marked Coming soon.
+14. Home, the first tab after the onboarding: the greeting, a Reminders button that opens the reminders of `GET /reminders/{user_id}`, the due ones first with their count on the button, and four cards. Pay rent, Money from home and Spot a scam each show the words they send and send them to Chat at once, in `text`. Lost card opens the Lost card tab, because a rescue starts from the student's own account of what happened. There is no balance, because the API has no endpoint for one.
+15. Chat polish. An empty chat offers starters that send at once: the agreed rent sentence, the money from home question when the trip names a home, and how to spot a scam. They go once a message is sent. Routes on the confirmation card have friendly names, Wise, Pix and Bank transfer, with the Simulated tag kept and the rail id kept on the page; any other rail shows its id. The chosen route has a tick, and the card says how the route was chosen: Lifeline picks the cheapest route not marked Simulated, and simulated routes follow a real rail's rules, for practice. A Copy button sits under a reply only when it holds the model's words, and it copies only those words, never the sentences code wrote.
+16. The Lost card start has one tap answers: three for a lost card and two for a stolen one. A tap fills the box with those words, which the student can change; nothing is sent until Start, pasting stays refused, and each step still has one confirm.
+17. The Activity tab: the ledger in plain words, grouped under Today, Yesterday or the date, newest first. A line is written only for a payment, a refusal, a freeze, a plan update, a rescue start, the replacement card steps, the family notice and a provider check, and says only what its entry says, with the entry's number. Every entry is under Advanced, with the chain check.
 
 A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
 
@@ -110,7 +114,7 @@ The Portuguese and Chinese of the welcome, the Guide and the Welcome button, as 
 | `welcome_how_title` | How it works | Como funciona | 它如何运作 |
 | `welcome_how_1` | You ask in your own words. | Você pede com as suas próprias palavras. | 您用自己的话提出请求。 |
 | `welcome_how_2` | Nothing moves until you confirm. | Nada se move até você confirmar. | 您确认之前，什么都不会转出。 |
-| `welcome_how_3` | Every step is recorded where you can see it, on the Ledger tab. | Cada passo fica registrado onde você pode ver, na aba Registro. | 每一步都记录在您能看到的地方，就在账本标签页。 |
+| `welcome_how_3` | Every step is recorded where you can see it, on the Activity tab. | Cada passo fica registrado onde você pode ver, na aba Atividade. | 每一步都记录在您能看到的地方，就在「动态」标签页。 |
 | `guide_rent_title` | Paying rent abroad | Pagar o aluguel no exterior | 在海外付房租 |
 | `guide_rent_1` | Type what you need in your own words, like the example below. | Escreva o que você precisa com as suas próprias palavras, como no exemplo abaixo. | 用您自己的话写下需要做什么，就像下面的示例。 |
 | `guide_rent_2` | Lifeline answers with a confirmation card: what will be sent, to whom, and the routes it compared, each with its fee and time. A route goes through a provider, which Lifeline calls a rail, and the one it picked is marked Selected. | O Lifeline responde com um cartão de confirmação: o que será enviado, para quem, e as rotas que comparou, cada uma com a tarifa e o prazo. Uma rota passa por um provedor, que o Lifeline chama de trilho, e a escolhida aparece como Selecionada. | Lifeline 会回复一张确认卡：要转出什么、转给谁，以及它比较过的各条路线，每条都有费用和时间。路线经由一个服务商，Lifeline 称之为通道，被选中的那条标为已选。 |
@@ -138,7 +142,7 @@ The Portuguese and Chinese of the welcome, the Guide and the Welcome button, as 
 | `guide_inbr_2` | Lifeline shows a route that breaks either rule as Blocked, with the reason and its source. | O Lifeline mostra uma rota que quebra qualquer uma dessas regras como Bloqueada, com o motivo e a fonte. | 违反其中任一规则的路线，Lifeline 会标为不可用，并给出原因和来源。 |
 | `guide_inbr_3` | To Brazil, Pix pays only a payee whose Pix key is on file. A Pix key is the phone number, email or registration number a person in Brazil uses to receive Pix. | Para o Brasil, o Pix paga só um destinatário cuja chave Pix está registrada. A chave Pix é o celular, o e-mail ou o número de cadastro que uma pessoa no Brasil usa para receber Pix. | 汇往巴西时，Pix 只付给已登记 Pix 键的收款人。Pix 键是巴西人用来接收 Pix 的手机号、电子邮箱或登记号码。 |
 | `guide_ledger_title` | Reading your ledger | Como ler o seu registro | 如何阅读您的账本 |
-| `guide_ledger_1` | The Ledger tab lists every step Lifeline took, newest first. Each entry carries a hash, a fingerprint of its contents and of the entry before it. | A aba Registro lista cada passo do Lifeline, do mais novo ao mais antigo. Cada entrada leva um hash, uma impressão digital do seu conteúdo e da entrada anterior. | 账本标签页按从新到旧列出 Lifeline 的每一步。每条记录都带有一个哈希，即它的内容和上一条记录的指纹。 |
+| `guide_ledger_1` | Under Advanced, the Activity tab lists every step Lifeline took, newest first. Each entry carries a hash, a fingerprint of its contents and of the entry before it. | Em Avançado, a aba Atividade lista cada passo do Lifeline, do mais novo ao mais antigo. Cada entrada leva um hash, uma impressão digital do seu conteúdo e da entrada anterior. | 「动态」标签页的「高级」中按从新到旧列出 Lifeline 的每一步。每条记录都带有一个哈希，即它的内容和上一条记录的指纹。 |
 | `guide_ledger_2` | Intact means no entry was changed or removed since it was written. | Íntegro quer dizer que nenhuma entrada foi alterada ou removida depois de escrita. | 完好表示每条记录写入后都没有被更改或删除。 |
 | `guide_ledger_3` | Anchored means the latest fingerprint was also saved outside the ledger, in a signed file or on a FISCO BCOS chain, a blockchain on this machine, so a later change would show. | Ancorado quer dizer que a última impressão digital também foi guardada fora do registro, num arquivo assinado ou numa cadeia FISCO BCOS, um blockchain nesta máquina, então uma mudança depois apareceria. | 已锚定表示最新的指纹也保存在账本之外，在一个签名文件里，或在本机上的 FISCO BCOS 区块链上，因此之后的任何更改都会显现。 |
 | `guide_ledger_4` | The block number says where that fingerprint sits on the chain, and appears only when Lifeline uses one. | O número do bloco diz onde essa impressão digital está na cadeia, e só aparece quando o Lifeline usa uma. | 区块号说明这个指纹在链上的位置，只有 Lifeline 使用区块链时才会显示。 |
@@ -154,7 +158,7 @@ The Portuguese and Chinese of the welcome, the Guide and the Welcome button, as 
 | `protect_recorded_title` | What is recorded | O que fica registrado | 记录了什么 |
 | `protect_recorded_1` | Every proposal, decision, confirmation, execution and receipt is an entry in a hash chained ledger. | Cada proposta, decisão, confirmação, execução e recibo é uma entrada num registro encadeado por hash. | 每一次提议、决定、确认、执行和回执，都是哈希链账本中的一条记录。 |
 | `protect_recorded_2` | Its head is anchored in a signed file, or on a FISCO BCOS chain when Lifeline is set to use one, and a ledger that fails verification stops every payment until it is clean. | O topo dele é ancorado num arquivo assinado, ou numa cadeia FISCO BCOS quando o Lifeline está configurado para usar uma, e um registro que falha na verificação para todos os pagamentos até ficar íntegro. | 账本的最新哈希锚定在一个签名文件中，或在 Lifeline 设置为使用 FISCO BCOS 链时锚定在链上；账本未通过验证时，所有付款都会停止，直到它恢复完整。 |
-| `protect_recorded_3` | You can open every entry on the Ledger tab. | Você pode abrir cada entrada na aba Registro. | 您可以在账本标签页打开每一条记录。 |
+| `protect_recorded_3` | You can open every entry under Advanced on the Activity tab. | Você pode abrir cada entrada em Avançado, na aba Atividade. | 您可以在「动态」标签页的「高级」中打开每一条记录。 |
 | `protect_not_title` | What Lifeline does not do | O que o Lifeline não faz | Lifeline 不做什么 |
 | `protect_not_1` | It holds no money and is not a licensed payment institution. It gives no investment advice. It never changes your limits in chat. It never asks for your identity documents. | Não guarda dinheiro e não é uma instituição de pagamento licenciada. Não dá conselhos de investimento. Nunca muda os seus limites pelo chat. Nunca pede os seus documentos de identidade. | 它不保管资金，也不是持牌支付机构。它不提供投资建议。它从不在对话中更改您的限额。它从不索要您的身份证件。 |
 | `protect_demo_title` | What this demo is | O que é esta demonstração | 这个演示是什么 |
@@ -281,10 +285,64 @@ The labels of the onboarding, the tailoring and the Me page, as `src/i18n-onboar
 | `me_close` | Close | Fechar | 关闭 |
 | `route_source` | Source: {id} | Fonte: {id} | 来源：{id} |
 
+### Home, Activity, chat polish and Lost card
+
+The labels of Home, Activity, the chat polish and the Lost card one tap answers, as `src/i18n-home.js` holds them, wait for a native speaker too. `tests/unit/home-words.test.js` fails when this table no longer holds the words the app shows.
+
+| Key | English | Portuguese | Chinese |
+| --- | --- | --- | --- |
+| `tab_home` | Home | Início | 首页 |
+| `tab_activity` | Activity | Atividade | 动态 |
+| `home_bell` | Reminders | Lembretes | 提醒 |
+| `home_bell_due` | {count} due | {count} para agora | {count} 项到期 |
+| `home_reminders_title` | Coming up | Próximos | 即将到来 |
+| `home_reminders_none` | Nothing coming up. | Nada por vir. | 暂无提醒。 |
+| `home_due` | Due | Para agora | 已到期 |
+| `home_no_date` | No date | Sem data | 无日期 |
+| `home_cards_title` | What do you need? | Do que você precisa? | 您需要什么帮助？ |
+| `home_card_rent` | Pay rent | Pagar o aluguel | 交房租 |
+| `home_card_scam` | Spot a scam | Identificar um golpe | 识别诈骗 |
+| `home_card_lost` | Lost card | Cartão perdido | 丢卡 |
+| `home_card_lost_sub` | Opens the lost card steps. | Abre as etapas de cartão perdido. | 打开丢卡处理步骤。 |
+| `home_sends` | Sends: {words} | Envia: {words} | 发送：{words} |
+| `starter_scam` | How do I spot a scam message? | Como identifico uma mensagem de golpe? | 我怎样识别诈骗消息？ |
+| `starter_home_plain` | How can my family send me money from home? | Como minha família pode me enviar dinheiro do meu país? | 我的家人怎样从国内给我汇钱？ |
+| `chat_starters_title` | Try asking | Experimente perguntar | 试着问问 |
+| `copy` | Copy | Copiar | 复制 |
+| `copied` | Copied | Copiado | 已复制 |
+| `copy_failed` | Could not copy. Select the text instead. | Não foi possível copiar. Selecione o texto. | 无法复制，请手动选择文字。 |
+| `rescue_quick_label` | Tap one to fill in the box, or type your own words. | Toque em uma opção para preencher a caixa, ou digite com as suas palavras. | 点按一项填入输入框，或用您自己的话输入。 |
+| `quick_lost_transport` | I lost it on transport | Perdi no transporte | 在交通工具上丢了 |
+| `quick_lost_somewhere` | I left it somewhere | Esqueci em algum lugar | 落在某个地方了 |
+| `quick_lost_cant_find` | I can't find it | Não encontro | 找不到了 |
+| `quick_stolen_bag` | It was taken from my bag | Tiraram da minha bolsa | 从我包里被拿走了 |
+| `quick_stolen_phone` | My phone and card were taken | Levaram meu celular e o cartão | 手机和卡都被拿走了 |
+| `activity_intro` | What happened, in plain words. Every entry is under Advanced. | O que aconteceu, em palavras simples. Cada entrada está em Avançado. | 用简单的话说明发生了什么。每一条记录都在「高级」中。 |
+| `activity_empty` | Nothing here yet. | Nada aqui ainda. | 暂无内容。 |
+| `activity_today` | Today | Hoje | 今天 |
+| `activity_yesterday` | Yesterday | Ontem | 昨天 |
+| `activity_advanced` | Advanced: every ledger entry | Avançado: cada entrada do registro | 高级：账本中的每一条记录 |
+| `activity_seq` | Ledger entry #{seq} | Entrada #{seq} do registro | 账本记录 #{seq} |
+| `act_sent` | Sent {amount} {currency} to {payee} | {amount} {currency} enviados para {payee} | 已向{payee}发送 {amount} {currency} |
+| `act_sent_status` | {amount} {currency} to {payee}: {status} | {amount} {currency} para {payee}: {status} | 向{payee}发送 {amount} {currency}：{status} |
+| `act_refused_paste` | Lifeline refused a request that did not come from your own words | O Lifeline recusou um pedido que não veio das suas próprias palavras | Lifeline 拒绝了一个并非出自您本人话语的请求 |
+| `act_refused` | Lifeline refused a request: {type} | O Lifeline recusou um pedido: {type} | Lifeline 拒绝了一个请求：{type} |
+| `act_frozen` | Card frozen | Cartão bloqueado | 卡已冻结 |
+| `act_freeze_status` | Card freeze: {status} | Bloqueio do cartão: {status} | 冻结卡：{status} |
+| `act_rescue_started` | Lost card rescue started | Resgate de cartão perdido iniciado | 丢卡救援已启动 |
+| `act_replacement` | Replacement card steps given | Etapas para um cartão novo informadas | 已提供补办新卡的步骤 |
+| `act_family_told` | {name} was told by {channel} | Aviso enviado para {name} por {channel} | 已通过{channel}通知{name} |
+| `act_plan_updated` | Your plan changed: {fields} | O seu plano mudou: {fields} | 您的计划已更改：{fields} |
+| `act_precheck` | Lifeline checked what a provider may ask | O Lifeline verificou o que um provedor pode pedir | Lifeline 已核查服务商可能要求的内容 |
+| `payee_landlord_sp` | your landlord | o seu locador | 您的房东 |
+| `payee_self_sg` | your own Singapore account | a sua própria conta em Singapura | 您自己的新加坡账户 |
+| `payee_student_001` | the student | o estudante | 学生 |
+| `payee_unknown` | a payee | um destinatário | 收款人 |
+
 ## Known gaps
 
 1. The Portuguese and Chinese labels were written without a native speaker and wait for one.
 2. Status words from the server, such as `done` and `completed`, are shown as the server writes them.
 3. The app always acts as the demo student, `student_001`. There is no sign in, as `docs/api.md` says.
-4. Standing payments, reminders, the monthly note and trace have endpoints but no screens yet. Precheck has one, on Me, for three kinds.
-5. The trusted contact, the emergency money and the safety question cannot change from the app, because chat cannot change them and the API has no other way to. The live rescue asks the sample plan's question. The money from home label and the home country chat starter are worded but not shown yet.
+4. Standing payments, the monthly note and trace have endpoints but no screens yet. Precheck has one, on Me, for three kinds, and reminders are read on Home.
+5. The trusted contact, the emergency money and the safety question cannot change from the app, because chat cannot change them and the API has no other way to. The live rescue asks the sample plan's question.

@@ -5,6 +5,7 @@
 // gets English labels around replies in its own language.
 
 import { ONBOARDING_STRINGS } from "./i18n-onboarding.js";
+import { HOME_STRINGS } from "./i18n-home.js";
 
 const en = {
   app_title: "Lifeline",
@@ -12,7 +13,6 @@ const en = {
   language_label: "Language",
   tab_chat: "Chat",
   tab_rescue: "Lost card",
-  tab_ledger: "Ledger",
   loading: "Loading…",
   health_failed: "Lifeline's server did not answer. Start it with make dev, then try again.",
   retry: "Try again",
@@ -145,7 +145,7 @@ const en = {
   welcome_how_title: "How it works",
   welcome_how_1: "You ask in your own words.",
   welcome_how_2: "Nothing moves until you confirm.",
-  welcome_how_3: "Every step is recorded where you can see it, on the Ledger tab.",
+  welcome_how_3: "Every step is recorded where you can see it, on the Activity tab.",
   guide_intro: "Answers for the moment you are in. Tap an example to put its words in your message box.",
   guide_try: "Tap to use these words:",
   guide_rent_title: "Paying rent abroad",
@@ -175,7 +175,7 @@ const en = {
   guide_inbr_2: "Lifeline shows a route that breaks either rule as Blocked, with the reason and its source.",
   guide_inbr_3: "To Brazil, Pix pays only a payee whose Pix key is on file. A Pix key is the phone number, email or registration number a person in Brazil uses to receive Pix.",
   guide_ledger_title: "Reading your ledger",
-  guide_ledger_1: "The Ledger tab lists every step Lifeline took, newest first. Each entry carries a hash, a fingerprint of its contents and of the entry before it.",
+  guide_ledger_1: "Under Advanced, the Activity tab lists every step Lifeline took, newest first. Each entry carries a hash, a fingerprint of its contents and of the entry before it.",
   guide_ledger_2: "Intact means no entry was changed or removed since it was written.",
   guide_ledger_3: "Anchored means the latest fingerprint was also saved outside the ledger, in a signed file or on a FISCO BCOS chain, a blockchain on this machine, so a later change would show.",
   guide_ledger_4: "The block number says where that fingerprint sits on the chain, and appears only when Lifeline uses one.",
@@ -192,7 +192,7 @@ const en = {
   protect_recorded_title: "What is recorded",
   protect_recorded_1: "Every proposal, decision, confirmation, execution and receipt is an entry in a hash chained ledger.",
   protect_recorded_2: "Its head is anchored in a signed file, or on a FISCO BCOS chain when Lifeline is set to use one, and a ledger that fails verification stops every payment until it is clean.",
-  protect_recorded_3: "You can open every entry on the Ledger tab.",
+  protect_recorded_3: "You can open every entry under Advanced on the Activity tab.",
   protect_not_title: "What Lifeline does not do",
   protect_not_1: "It holds no money and is not a licensed payment institution. It gives no investment advice. It never changes your limits in chat. It never asks for your identity documents.",
   protect_demo_title: "What this demo is",
@@ -207,7 +207,6 @@ const pt = {
   language_label: "Idioma",
   tab_chat: "Conversa",
   tab_rescue: "Cartão perdido",
-  tab_ledger: "Registro",
   loading: "Carregando…",
   health_failed: "O servidor do Lifeline não respondeu. Inicie com make dev e tente de novo.",
   retry: "Tentar de novo",
@@ -340,7 +339,7 @@ const pt = {
   welcome_how_title: "Como funciona",
   welcome_how_1: "Você pede com as suas próprias palavras.",
   welcome_how_2: "Nada se move até você confirmar.",
-  welcome_how_3: "Cada passo fica registrado onde você pode ver, na aba Registro.",
+  welcome_how_3: "Cada passo fica registrado onde você pode ver, na aba Atividade.",
   guide_intro: "Respostas para o momento em que você está. Toque em um exemplo para colocar as palavras na caixa de mensagem.",
   guide_try: "Toque para usar estas palavras:",
   guide_rent_title: "Pagar o aluguel no exterior",
@@ -370,7 +369,7 @@ const pt = {
   guide_inbr_2: "O Lifeline mostra uma rota que quebra qualquer uma dessas regras como Bloqueada, com o motivo e a fonte.",
   guide_inbr_3: "Para o Brasil, o Pix paga só um destinatário cuja chave Pix está registrada. A chave Pix é o celular, o e-mail ou o número de cadastro que uma pessoa no Brasil usa para receber Pix.",
   guide_ledger_title: "Como ler o seu registro",
-  guide_ledger_1: "A aba Registro lista cada passo do Lifeline, do mais novo ao mais antigo. Cada entrada leva um hash, uma impressão digital do seu conteúdo e da entrada anterior.",
+  guide_ledger_1: "Em Avançado, a aba Atividade lista cada passo do Lifeline, do mais novo ao mais antigo. Cada entrada leva um hash, uma impressão digital do seu conteúdo e da entrada anterior.",
   guide_ledger_2: "Íntegro quer dizer que nenhuma entrada foi alterada ou removida depois de escrita.",
   guide_ledger_3: "Ancorado quer dizer que a última impressão digital também foi guardada fora do registro, num arquivo assinado ou numa cadeia FISCO BCOS, um blockchain nesta máquina, então uma mudança depois apareceria.",
   guide_ledger_4: "O número do bloco diz onde essa impressão digital está na cadeia, e só aparece quando o Lifeline usa uma.",
@@ -387,7 +386,7 @@ const pt = {
   protect_recorded_title: "O que fica registrado",
   protect_recorded_1: "Cada proposta, decisão, confirmação, execução e recibo é uma entrada num registro encadeado por hash.",
   protect_recorded_2: "O topo dele é ancorado num arquivo assinado, ou numa cadeia FISCO BCOS quando o Lifeline está configurado para usar uma, e um registro que falha na verificação para todos os pagamentos até ficar íntegro.",
-  protect_recorded_3: "Você pode abrir cada entrada na aba Registro.",
+  protect_recorded_3: "Você pode abrir cada entrada em Avançado, na aba Atividade.",
   protect_not_title: "O que o Lifeline não faz",
   protect_not_1: "Não guarda dinheiro e não é uma instituição de pagamento licenciada. Não dá conselhos de investimento. Nunca muda os seus limites pelo chat. Nunca pede os seus documentos de identidade.",
   protect_demo_title: "O que é esta demonstração",
@@ -402,7 +401,6 @@ const zh = {
   language_label: "语言",
   tab_chat: "对话",
   tab_rescue: "卡丢失",
-  tab_ledger: "账本",
   loading: "加载中…",
   health_failed: "Lifeline 服务器没有响应。请用 make dev 启动后重试。",
   retry: "重试",
@@ -535,7 +533,7 @@ const zh = {
   welcome_how_title: "它如何运作",
   welcome_how_1: "您用自己的话提出请求。",
   welcome_how_2: "您确认之前，什么都不会转出。",
-  welcome_how_3: "每一步都记录在您能看到的地方，就在账本标签页。",
+  welcome_how_3: "每一步都记录在您能看到的地方，就在「动态」标签页。",
   guide_intro: "针对您此刻的问题给出答案。点按示例，就会把这些话放进消息框。",
   guide_try: "点按使用这些话：",
   guide_rent_title: "在海外付房租",
@@ -565,7 +563,7 @@ const zh = {
   guide_inbr_2: "违反其中任一规则的路线，Lifeline 会标为不可用，并给出原因和来源。",
   guide_inbr_3: "汇往巴西时，Pix 只付给已登记 Pix 键的收款人。Pix 键是巴西人用来接收 Pix 的手机号、电子邮箱或登记号码。",
   guide_ledger_title: "如何阅读您的账本",
-  guide_ledger_1: "账本标签页按从新到旧列出 Lifeline 的每一步。每条记录都带有一个哈希，即它的内容和上一条记录的指纹。",
+  guide_ledger_1: "「动态」标签页的「高级」中按从新到旧列出 Lifeline 的每一步。每条记录都带有一个哈希，即它的内容和上一条记录的指纹。",
   guide_ledger_2: "完好表示每条记录写入后都没有被更改或删除。",
   guide_ledger_3: "已锚定表示最新的指纹也保存在账本之外，在一个签名文件里，或在本机上的 FISCO BCOS 区块链上，因此之后的任何更改都会显现。",
   guide_ledger_4: "区块号说明这个指纹在链上的位置，只有 Lifeline 使用区块链时才会显示。",
@@ -582,7 +580,7 @@ const zh = {
   protect_recorded_title: "记录了什么",
   protect_recorded_1: "每一次提议、决定、确认、执行和回执，都是哈希链账本中的一条记录。",
   protect_recorded_2: "账本的最新哈希锚定在一个签名文件中，或在 Lifeline 设置为使用 FISCO BCOS 链时锚定在链上；账本未通过验证时，所有付款都会停止，直到它恢复完整。",
-  protect_recorded_3: "您可以在账本标签页打开每一条记录。",
+  protect_recorded_3: "您可以在「动态」标签页的「高级」中打开每一条记录。",
   protect_not_title: "Lifeline 不做什么",
   protect_not_1: "它不保管资金，也不是持牌支付机构。它不提供投资建议。它从不在对话中更改您的限额。它从不索要您的身份证件。",
   protect_demo_title: "这个演示是什么",
@@ -592,9 +590,9 @@ const zh = {
 };
 
 export const STRINGS = {
-  en: { ...en, ...ONBOARDING_STRINGS.en },
-  pt: { ...pt, ...ONBOARDING_STRINGS.pt },
-  zh: { ...zh, ...ONBOARDING_STRINGS.zh },
+  en: { ...en, ...ONBOARDING_STRINGS.en, ...HOME_STRINGS.en },
+  pt: { ...pt, ...ONBOARDING_STRINGS.pt, ...HOME_STRINGS.pt },
+  zh: { ...zh, ...ONBOARDING_STRINGS.zh, ...HOME_STRINGS.zh },
 };
 
 export function t(code, key, values = {}) {

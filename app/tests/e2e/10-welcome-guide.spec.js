@@ -22,11 +22,11 @@ test("the welcome shows its three cards first, and Continue opens the trip quest
   await expect(page.locator(".tabs")).toBeHidden();
   await page.locator("#onb-skip").click();
   await expect(page.locator(".tabs")).toBeVisible();
-  await expect(page.locator("#tab-chat")).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator("#view-chat")).toBeVisible();
+  await expect(page.locator("#tab-home")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#view-home")).toBeVisible();
   await page.locator("#open-welcome").click();
   await expect(page.locator("#view-welcome")).toBeVisible();
-  await expect(page.locator("#view-chat")).toBeHidden();
+  await expect(page.locator("#view-home")).toBeHidden();
 });
 
 test("the top bar shows the logo with the wordmark", async ({ page, open }) => {

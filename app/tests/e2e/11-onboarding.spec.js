@@ -33,8 +33,8 @@ test("LIVE: Continue on the welcome opens the trip questions, and Skip keeps the
   await expect(page.locator("#view-onboarding h2")).toHaveText("Your trip");
   await expect(page.locator("#onb-skip-note")).toHaveText("Skip keeps the demo student's sample plan.");
   await page.locator("#onb-skip").click();
-  await expect(page.locator("#view-chat")).toBeVisible();
-  await expect(page.locator("#chat-greeting")).toHaveText("Hello. Lifeline is ready to help.");
+  await expect(page.locator("#view-home")).toBeVisible();
+  await expect(page.locator("#home-greeting")).toHaveText("Hello. Lifeline is ready to help.");
   await page.locator("#open-me").click();
   await expect(page.locator("#view-me")).toBeVisible();
   await expect(page.locator("#me-trip")).toContainText("No trip set");
@@ -114,7 +114,7 @@ test("LIVE: the four plan steps end in one message the student sends in text; no
 
   await expect(page.locator("#onb-message")).toHaveText(MESSAGE);
   await expect(page.locator("#view-onboarding input, #view-onboarding textarea")).toHaveCount(0);
-  for (const call of calls) expect(["GET /health", "GET /ledger/student_001"]).toContain(`${call.method} ${call.path}`);
+  for (const call of calls) expect(["GET /health", "GET /ledger/student_001", "GET /reminders/student_001"]).toContain(`${call.method} ${call.path}`);
   for (const call of calls) expect(call.path).not.toMatch(/CN|SG|exchange/);
   expect(await storageCalls()).toEqual([]);
 
@@ -139,7 +139,8 @@ test("keeping everything as it is on file leaves nothing to send", async ({ page
   await expect(page.locator("#onb-message-none")).toHaveText("Everything is as it is on file, so there is nothing to send.");
   await expect(page.locator("#onb-put-in-chat")).toHaveCount(0);
   await page.locator("#onb-done").click();
-  await expect(page.locator("#view-chat")).toBeVisible();
+  await expect(page.locator("#view-home")).toBeVisible();
+  await page.locator("#tab-chat").click();
   await expect(page.locator("#chat-text")).toHaveValue("");
   expect(calls.filter((call) => call.method === "POST")).toEqual([]);
 });
@@ -171,7 +172,7 @@ test("Change on Me goes back to the trip questions with the trip kept, and retur
   await expect(page.locator("#me-trip")).toContainText("Internship, from Brazil to China");
   await expect(page.locator("#me-net .badge")).toHaveText("Sample");
   await page.locator("#me-close").click();
-  await expect(page.locator("#view-chat")).toBeVisible();
+  await expect(page.locator("#view-home")).toBeVisible();
 });
 
 test("Me shows the true route sentence and says sign in is coming soon", async ({ page, open }) => {

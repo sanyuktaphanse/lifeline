@@ -11,7 +11,7 @@ test("the demo banner is on every tab, in every language", async ({ page, open }
   const banner = page.locator("#demo-banner");
   for (const lang of ["en", "pt", "zh"]) {
     await page.selectOption("#lang", lang);
-    for (const tab of ["chat", "rescue", "ledger"]) {
+    for (const tab of ["home", "chat", "rescue", "activity", "guide"]) {
       await page.locator(`#tab-${tab}`).click();
       await expect(banner).toBeVisible();
       await expect(banner).toHaveText(TEXT[lang]);
@@ -23,7 +23,7 @@ test("the demo banner is on every tab, in every language", async ({ page, open }
 
 test("the banner stays on screen when a long page is scrolled", async ({ page, open }) => {
   await open();
-  await page.locator("#tab-ledger").click();
+  await page.locator("#tab-activity").click();
   await page.evaluate(() => {
     document.body.style.minHeight = "4000px";
     window.scrollTo(0, 3000);
