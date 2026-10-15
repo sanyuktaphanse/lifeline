@@ -7,11 +7,13 @@ import { chatView } from "./views/chat.js";
 import { rescueView } from "./views/rescue.js";
 import { activityView } from "./views/activity.js";
 import { homeView } from "./views/home.js";
+import { bookView } from "./views/book.js";
 import { guideView } from "./views/guide.js";
 import { welcomeView } from "./views/welcome.js";
 import { onboardingView } from "./views/onboarding.js";
 import { meView } from "./views/me.js";
 import { logo } from "./logo.js";
+import { icon } from "./icons.js";
 import { planOnFile } from "./onboarding.js";
 
 const VIEWS = {};
@@ -66,7 +68,7 @@ let currentTab = "chat";
 
 // Hides every screen: the welcome, the onboarding, Me, the tabs and their panels.
 function hideAll() {
-  for (const id of ["view-welcome", "view-onboarding", "view-me"]) document.getElementById(id).hidden = true;
+  for (const id of ["view-welcome", "view-onboarding", "view-me", "view-book"]) document.getElementById(id).hidden = true;
   document.querySelector(".tabs").hidden = true;
   for (const panel of document.querySelectorAll('[role="tabpanel"]')) panel.hidden = true;
 }
@@ -103,6 +105,12 @@ function showOnboarding(mode) {
   VIEWS.onboarding.start(mode);
 }
 
+function showBook() {
+  hideAll();
+  document.getElementById("view-book").hidden = false;
+  window.scrollTo(0, 0);
+}
+
 function showMe() {
   hideAll();
   document.getElementById("view-me").hidden = false;
@@ -112,6 +120,10 @@ function showMe() {
 document.getElementById("open-welcome").addEventListener("click", showWelcome);
 document.getElementById("open-me").addEventListener("click", showMe);
 document.getElementById("brand").replaceChildren(logo(24));
+// Lucide line icons beside the words of each tab and the Me button (src/icons.js). The words stay the label.
+const TAB_ICONS = { home: "home", chat: "chat", rescue: "buoy", activity: "history", guide: "help" };
+for (const [name, glyph] of Object.entries(TAB_ICONS)) document.getElementById(`tab-${name}`).prepend(icon(glyph));
+document.getElementById("open-me").prepend(icon("user"));
 chatView(ctx, document.getElementById("view-chat"));
 rescueView(ctx, document.getElementById("view-rescue"));
 VIEWS.activity = activityView(ctx, document.getElementById("view-activity"));
@@ -121,6 +133,14 @@ VIEWS.home = homeView(ctx, document.getElementById("view-home"), {
     ctx.sendNow(words);
   },
   openTab: showTab,
+  openBook: showBook,
+});
+VIEWS.book = bookView(ctx, document.getElementById("view-book"), {
+  onCheck: () => {
+    showTab("chat");
+    ctx.askAboutPaste(t(ctx.lang(), "book_check_words"));
+  },
+  onClose: () => showTab("home"),
 });
 VIEWS.guide = guideView(ctx, document.getElementById("view-guide"), (words) => {
   showTab("chat");

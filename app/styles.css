@@ -1,39 +1,45 @@
 /* Mobile first: one column at phone width, a wider centred column on larger screens.
    Logical properties (inline, block) keep the layout right for right to left languages. */
+/* Cream and white with one indigo violet accent, after Joanne's mockup. System fonts only, so nothing loads from
+   outside and the app works offline and in China. tests/unit/look.test.js checks every text pair reaches 4.5 to 1. */
 :root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --text: #17202a;
-  --muted: #5b6673;
-  --line: #d9dee4;
-  --accent: #0b6e4f;
-  --accent-text: #ffffff;
-  --warn-bg: #fff4e0;
-  --warn-line: #e0a030;
-  --danger-bg: #fdecec;
-  --danger-line: #c0392b;
-  --ok-bg: #e8f6ef;
-  --ok-line: #2e8b57;
-  --turn-bg: #eef1f5;
-  --radius: 12px;
+  --bg: #FAF7F2;
+  --surface: #FFFFFF;
+  --text: #1F1B2D;
+  --muted: #5D5870;
+  --line: #E6E1EC;
+  --accent: #5B3FD6;
+  --accent-text: #FFFFFF;
+  --accent-soft: #EEEAFB;
+  --warn-bg: #FBF1DC;
+  --warn-line: #C08A1E;
+  --danger-bg: #FBECEC;
+  --danger-line: #C62D2D;
+  --ok-bg: #E8F4EE;
+  --ok-line: #12704F;
+  --turn-bg: #F1EEF7;
+  --radius: 16px;
+  --shadow: 0 2px 10px rgba(60, 40, 120, 0.06);
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #12161b;
-    --surface: #1b2128;
-    --text: #e8edf2;
-    --muted: #9aa6b2;
-    --line: #2e3740;
-    --accent: #3fb68b;
-    --accent-text: #08130e;
-    --warn-bg: #3a2c10;
-    --warn-line: #d59a2a;
-    --danger-bg: #3b1a1a;
-    --danger-line: #e06b5f;
-    --ok-bg: #12301f;
-    --ok-line: #4cc28a;
-    --turn-bg: #232b34;
+    --bg: #15131C;
+    --surface: #1E1B28;
+    --text: #ECE9F3;
+    --muted: #A7A1B8;
+    --line: #2F2B3B;
+    --accent: #A897FF;
+    --accent-text: #15131C;
+    --accent-soft: #2A2540;
+    --warn-bg: #3A2C10;
+    --warn-line: #D59A2A;
+    --danger-bg: #3B1A1A;
+    --danger-line: #F08A80;
+    --ok-bg: #12301F;
+    --ok-line: #5FD39C;
+    --turn-bg: #26222F;
+    --shadow: none;
   }
 }
 
@@ -67,7 +73,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   flex: 1; min-height: 48px; border: 0; background: none; cursor: pointer;
   border-block-end: 3px solid transparent; color: var(--muted);
 }
-.tabs button[aria-selected="true"] { color: var(--text); border-block-end-color: var(--accent); font-weight: 600; }
+.tabs button[aria-selected="true"] { color: var(--accent); border-block-end-color: var(--accent); font-weight: 600; background: var(--accent-soft); }
 
 main { padding: 16px; max-width: 720px; margin-inline: auto; }
 main > section { display: flex; flex-direction: column; gap: 12px; }
@@ -270,3 +276,50 @@ optgroup.on-file, option.on-file { font-weight: 700; }
 .onb-message { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
 .onb-read-only { border-inline-start: 3px solid var(--line); padding-inline-start: 12px; }
 .onb-on-file { font-weight: 600; color: var(--text); }
+
+/* Book and pay safely */
+.book { display: flex; flex-direction: column; gap: 12px; }
+.book h2 { margin: 0; font-size: 1.2rem; }
+.book-list { margin: 0; padding-inline-start: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.book-group h4 { margin: 4px 0; font-size: 0.95rem; }
+.book-group ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.book-group li { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.book-note { margin: 0; font-weight: 600; }
+.home-book { margin-block-start: 4px; min-height: 0; }
+
+/* Look and feel: line icons, the heartbeat orb and slide to start */
+.i { display: inline-flex; flex: none; }
+.i svg { width: 22px; height: 22px; }
+.tabs button { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 0.8rem; }
+#open-me { display: inline-flex; align-items: center; gap: 6px; }
+#open-me .i svg { width: 18px; height: 18px; }
+.bell .i svg { width: 18px; height: 18px; }
+.home-card-icon { color: var(--accent); }
+.card { box-shadow: var(--shadow); }
+.home-head .orb-small { flex: none; }
+
+.orb { position: relative; border-radius: 50%; overflow: hidden; margin-inline: auto;
+  background: radial-gradient(circle at 35% 30%, #C4B5FD, #7C3AED 40%, #31106E 75%, #0A0519);
+  box-shadow: 0 0 50px rgba(91, 63, 214, 0.35), inset 0 0 40px rgba(255, 255, 255, 0.12); }
+.orb-large { width: 120px; height: 120px; }
+.orb-small { width: 44px; height: 44px; margin: 0; box-shadow: 0 0 18px rgba(91, 63, 214, 0.35); }
+.orb svg { position: absolute; inset: 0; margin: auto; width: 78%; height: auto; }
+.orb .trace-base { fill: none; stroke: rgba(255, 255, 255, 0.25); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.orb .trace { fill: none; stroke: #FFFFFF; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 80 100; stroke-dashoffset: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  .orb { animation: orb-breathe 3s ease-in-out infinite; }
+  .orb .trace { animation: orb-beep 2.6s linear infinite; }
+  @keyframes orb-breathe { 0%, 100% { box-shadow: 0 0 40px rgba(91, 63, 214, 0.3), inset 0 0 40px rgba(255, 255, 255, 0.10); } 30% { box-shadow: 0 0 65px rgba(91, 63, 214, 0.5), inset 0 0 40px rgba(255, 255, 255, 0.14); } }
+  @keyframes orb-beep { 0% { stroke-dashoffset: 80; opacity: 0.55; } 45% { stroke-dashoffset: 0; opacity: 1; } 85% { opacity: 1; } 100% { stroke-dashoffset: -80; opacity: 0.35; } }
+}
+
+.slider { position: relative; height: 60px; border-radius: 999px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow);
+  display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: none; user-select: none; }
+.slider-fill { position: absolute; inset-inline-start: 0; inset-block: 0; width: 60px; border-radius: 999px; background: var(--accent-soft); }
+.slider-label { position: relative; padding-inline-start: 40px; font-weight: 600; color: var(--muted); }
+.slider-knob { position: absolute; inset-inline-start: 6px; top: 5px; width: 48px; height: 48px; border-radius: 50%; border: 0; cursor: grab;
+  background: var(--accent); color: var(--accent-text); font-size: 26px; line-height: 1; touch-action: none; }
+.slider-knob:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.slider.dragging .slider-knob { cursor: grabbing; }
+.slider:not(.dragging) .slider-knob, .slider:not(.dragging) .slider-fill { transition: transform 0.25s ease, width 0.25s ease; }
+@media (prefers-reduced-motion: reduce) { .slider-knob, .slider-fill { transition: none !important; } }

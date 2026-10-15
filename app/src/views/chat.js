@@ -77,6 +77,13 @@ export function chatView(ctx, root) {
     typed.focus();
   };
 
+  // Book's "Check a message": the question goes in the typed box and the paste box opens, empty, for the message.
+  ctx.askAboutPaste = (words) => {
+    typed.value = words;
+    pasteBox.open = true;
+    pasted.focus();
+  };
+
   // Lets the confirmation card (step 3) add Lifeline's answer to /confirm into the same thread.
   ctx.addToThread = (node) => {
     thread.append(node);
