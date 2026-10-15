@@ -2,7 +2,7 @@
 
 Lifeline is a cross border finance agent for students studying abroad, built for the 2026 Shenzhen FinTechathon. It has two jobs. It helps the student move money across borders, and it protects the student from scams, fraud, and costly mistakes. Every action that moves money passes a plain Python mandate engine first. Lifeline is instructed never to give investment advice; one sentence of the system prompt carries that rule, and no code checks the model's words, as open item 170 of the technical reference records.
 
-This README describes `main` at commit `06b3c30`, 13 October 2026, with the release pull request that adds `docs/submission/README.md`. The repository is https://github.com/sanyuktaphanse/lifeline, which is private on 13 October 2026, so a judge needs the access the submission grants. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
+This README describes `main` at commit `06b3c30`, 13 October 2026, with the release pull request that adds `docs/submission/README.md`. The repository is https://github.com/sanyuktaphanse/lifeline, which is public since 15 October 2026, so anyone can clone it. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
 
 ## Quick start
 
