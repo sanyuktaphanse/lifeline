@@ -6,6 +6,7 @@
 
 import { ONBOARDING_STRINGS } from "./i18n-onboarding.js";
 import { HOME_STRINGS } from "./i18n-home.js";
+import { BOOK_STRINGS } from "./i18n-book.js";
 
 const en = {
   app_title: "Lifeline",
@@ -590,9 +591,9 @@ const zh = {
 };
 
 export const STRINGS = {
-  en: { ...en, ...ONBOARDING_STRINGS.en, ...HOME_STRINGS.en },
-  pt: { ...pt, ...ONBOARDING_STRINGS.pt, ...HOME_STRINGS.pt },
-  zh: { ...zh, ...ONBOARDING_STRINGS.zh, ...HOME_STRINGS.zh },
+  en: { ...en, ...ONBOARDING_STRINGS.en, ...HOME_STRINGS.en, ...BOOK_STRINGS.en },
+  pt: { ...pt, ...ONBOARDING_STRINGS.pt, ...HOME_STRINGS.pt, ...BOOK_STRINGS.pt },
+  zh: { ...zh, ...ONBOARDING_STRINGS.zh, ...HOME_STRINGS.zh, ...BOOK_STRINGS.zh },
 };
 
 export function t(code, key, values = {}) {

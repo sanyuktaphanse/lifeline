@@ -270,3 +270,13 @@ optgroup.on-file, option.on-file { font-weight: 700; }
 .onb-message { font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; }
 .onb-read-only { border-inline-start: 3px solid var(--line); padding-inline-start: 12px; }
 .onb-on-file { font-weight: 600; color: var(--text); }
+
+/* Book and pay safely */
+.book { display: flex; flex-direction: column; gap: 12px; }
+.book h2 { margin: 0; font-size: 1.2rem; }
+.book-list { margin: 0; padding-inline-start: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.book-group h4 { margin: 4px 0; font-size: 0.95rem; }
+.book-group ul { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.book-group li { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); }
+.book-note { margin: 0; font-weight: 600; }
+.home-book { margin-block-start: 4px; min-height: 0; }

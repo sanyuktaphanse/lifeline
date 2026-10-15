@@ -15,7 +15,7 @@ Each line says what is checked, how it is checked, and the result of the run of 
 | 5. `make evidence` | Run in the clone; the printed line must match the README | Verified: `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged`, and `evidence/report.md` written |
 | 6. `make dev`, then `GET /health`, then stop | Run in the clone, `curl http://127.0.0.1:8000/health` | Not verified as written: `make dev` stopped with `[Errno 48] Address already in use`, because an API started from the main working folder on 11 October holds port 8000. The Makefile's same command on port 8001 answered `{"status":"ok",...}` with the three languages, and was stopped |
 | 7. `cd app`, `npm ci` | Run in the clone with Node 22.23.3 | Verified |
-| 8. `npm test` | Run in `app/` | Verified: 131 tests, 131 passed, on branch `lane-c/home` on 15 October 2026 |
+| 8. `npm test` | Run in `app/` | Verified: 137 tests, 137 passed, on branch `lane-c/book` on 15 October 2026 |
 | 9. `npx playwright test` | Run in `app/` after `npx playwright install chromium` | Not verified: 45 passed, 1 failed. `tests/e2e/4-turn-line.spec.js:36`, DOCUMENTED SHAPE: a blocked paste puts its sentence at the top, the turn line at the bottom, fails with `Expected: "reply-blocked"`, `Received: undefined`. It fails the same way on `main` at `06b3c30` |
 | 10. CI runs both jobs, `python` and `app` | The pull request's checks | Verified on pull request 53: `python` passed, and `app` passed with 70 of 70 unit tests and 46 of 46 Playwright tests on Ubuntu, the test of item 9 included |
 

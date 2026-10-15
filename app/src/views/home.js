@@ -9,7 +9,7 @@ import { reminderItems } from "../reminders.js";
 
 const LOCALES = { en: "en-GB", pt: "pt-BR", zh: "zh-CN" };
 
-export function homeView(ctx, root, { send, openTab }) {
+export function homeView(ctx, root, { send, openTab, openBook }) {
   let reminders = null;
   let failure = null;
   let open = false;
@@ -79,6 +79,12 @@ export function homeView(ctx, root, { send, openTab }) {
       el("section", { class: "card", id: "home-reminders", hidden: !open }, el("h3", {}, t(lang, "home_reminders_title")), reminderList()),
       el("h2", {}, t(lang, "home_cards_title")),
       cards(),
+      el(
+        "button",
+        { type: "button", class: "card home-card home-book", id: "open-book", onclick: openBook },
+        el("span", { class: "hint" }, t(lang, "home_book")),
+        el("strong", {}, t(lang, "home_book_open")),
+      ),
     );
   }
 

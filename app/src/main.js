@@ -7,6 +7,7 @@ import { chatView } from "./views/chat.js";
 import { rescueView } from "./views/rescue.js";
 import { activityView } from "./views/activity.js";
 import { homeView } from "./views/home.js";
+import { bookView } from "./views/book.js";
 import { guideView } from "./views/guide.js";
 import { welcomeView } from "./views/welcome.js";
 import { onboardingView } from "./views/onboarding.js";
@@ -66,7 +67,7 @@ let currentTab = "chat";
 
 // Hides every screen: the welcome, the onboarding, Me, the tabs and their panels.
 function hideAll() {
-  for (const id of ["view-welcome", "view-onboarding", "view-me"]) document.getElementById(id).hidden = true;
+  for (const id of ["view-welcome", "view-onboarding", "view-me", "view-book"]) document.getElementById(id).hidden = true;
   document.querySelector(".tabs").hidden = true;
   for (const panel of document.querySelectorAll('[role="tabpanel"]')) panel.hidden = true;
 }
@@ -103,6 +104,12 @@ function showOnboarding(mode) {
   VIEWS.onboarding.start(mode);
 }
 
+function showBook() {
+  hideAll();
+  document.getElementById("view-book").hidden = false;
+  window.scrollTo(0, 0);
+}
+
 function showMe() {
   hideAll();
   document.getElementById("view-me").hidden = false;
@@ -121,6 +128,14 @@ VIEWS.home = homeView(ctx, document.getElementById("view-home"), {
     ctx.sendNow(words);
   },
   openTab: showTab,
+  openBook: showBook,
+});
+VIEWS.book = bookView(ctx, document.getElementById("view-book"), {
+  onCheck: () => {
+    showTab("chat");
+    ctx.askAboutPaste(t(ctx.lang(), "book_check_words"));
+  },
+  onClose: () => showTab("home"),
 });
 VIEWS.guide = guideView(ctx, document.getElementById("view-guide"), (words) => {
   showTab("chat");
