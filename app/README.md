@@ -43,6 +43,7 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 16. The Lost card start has one tap answers: three for a lost card and two for a stolen one. A tap fills the box with those words, which the student can change; nothing is sent until Start, pasting stays refused, and each step still has one confirm.
 17. The Activity tab: the ledger in plain words, grouped under Today, Yesterday or the date, newest first. A line is written only for a payment, a refusal, a freeze, a plan update, a rescue start, the replacement card steps, the family notice and a provider check, and says only what its entry says, with the entry's number. Every entry is under Advanced, with the chain check.
 18. Book and pay safely, from a card on Home: four checks before booking or paying, a rent deposit checklist whose ticks live only in the page, and apps to start from, by name only, in alphabetical order within each group: Singapore Airlines, Skyscanner and Trip.com for flights, Trip.com and Trivago for places to stay, HeyMax and YouTrip for paying abroad. It has no links, logos, prices or ratings, and it says Lifeline isn't partnered with or paid by any of these apps. Check a message opens Chat with the question typed and the paste box open, so the message goes in `pasted_text`, and nothing is sent until the student taps Send.
+19. The look: cream and white with one indigo violet accent, after Joanne's mockup, in light and dark, with every text colour pair at 4.5 to 1 or more. Lucide line icons on the tabs, the Me button, the Reminders button and the Home cards, copied into `src/icons.js` with their ISC notice, as `docs/licences.md` records. The heartbeat orb, the logo's pulse beating across a violet sphere, on the welcome and on Home; it is decoration, hidden from screen readers, and holds still when the system asks for reduced motion. Slide to start on the welcome: the knob finishes past four fifths of its track, Enter or Space on it starts at once, and the plain Continue button stays as a fallback. System fonts only, and nothing is loaded from outside this machine, so the app works offline and in China.
 
 A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
 
@@ -371,6 +372,15 @@ The labels of Book and pay safely, as `src/i18n-book.js` holds them, wait for a 
 | `book_group_paying` | Paying abroad | Pagar no exterior | 海外付款 |
 | `book_flights_hint` | Or any airline's own app, to book direct. | Ou o app da própria companhia aérea, para reservar direto. | 也可以用任何航空公司自己的应用直接预订。 |
 | `book_close` | Back to Home | Voltar ao Início | 返回首页 |
+
+### Look and feel
+
+The labels of slide to start, as `src/i18n-look.js` holds them, wait for a native speaker too. `tests/unit/look.test.js` fails when this table no longer holds them.
+
+| Key | English | Portuguese | Chinese |
+| --- | --- | --- | --- |
+| `welcome_slide` | Slide to start | Deslize para começar | 滑动开始 |
+| `welcome_slide_knob` | Start as the demo student | Começar como o estudante de demonstração | 以演示学生身份开始 |
 
 ## Known gaps
 

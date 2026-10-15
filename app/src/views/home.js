@@ -6,8 +6,12 @@ import { el, errorText, label } from "../dom.js";
 import { t } from "../i18n.js";
 import { fromHome, greeting, homeStarter } from "../tailoring.js";
 import { reminderItems } from "../reminders.js";
+import { icon } from "../icons.js";
+import { orb } from "../logo.js";
 
 const LOCALES = { en: "en-GB", pt: "pt-BR", zh: "zh-CN" };
+// Lucide line icons for the cards that send words (src/icons.js).
+const CARD_ICONS = { rent: "home", home: "inbound", scam: "shield" };
 
 export function homeView(ctx, root, { send, openTab, openBook }) {
   let reminders = null;
@@ -21,6 +25,7 @@ export function homeView(ctx, root, { send, openTab, openBook }) {
       el(
         "button",
         { type: "button", class: "card home-card", "data-card": id, onclick: () => send(words) },
+        icon(CARD_ICONS[id], "home-card-icon"),
         el("strong", {}, title),
         el("span", { class: "hint home-card-sends" }, t(lang, "home_sends", { words })),
       );
@@ -33,6 +38,7 @@ export function homeView(ctx, root, { send, openTab, openBook }) {
       el(
         "button",
         { type: "button", class: "card home-card", "data-card": "lost", onclick: () => openTab("rescue") },
+        icon("buoy", "home-card-icon"),
         el("strong", {}, t(lang, "home_card_lost")),
         el("span", { class: "hint" }, t(lang, "home_card_lost_sub")),
       ),
@@ -67,6 +73,7 @@ export function homeView(ctx, root, { send, openTab, openBook }) {
     const bell = el(
       "button",
       { type: "button", class: "btn bell", id: "home-bell", "aria-expanded": String(open), "aria-controls": "home-reminders" },
+      icon("bell"),
       el("span", {}, t(lang, "home_bell")),
       dueCount ? el("span", { class: "count", "aria-label": t(lang, "home_bell_due", { count: dueCount }) }, String(dueCount)) : null,
     );
@@ -75,13 +82,14 @@ export function homeView(ctx, root, { send, openTab, openBook }) {
       draw();
     });
     root.replaceChildren(
-      el("div", { class: "home-head" }, el("p", { class: "home-greeting", id: "home-greeting" }, greeting(ctx.profile.trip, lang)), bell),
+      el("div", { class: "home-head" }, orb("small"), el("p", { class: "home-greeting", id: "home-greeting" }, greeting(ctx.profile.trip, lang)), bell),
       el("section", { class: "card", id: "home-reminders", hidden: !open }, el("h3", {}, t(lang, "home_reminders_title")), reminderList()),
       el("h2", {}, t(lang, "home_cards_title")),
       cards(),
       el(
         "button",
         { type: "button", class: "card home-card home-book", id: "open-book", onclick: openBook },
+        icon("plane", "home-card-icon"),
         el("span", { class: "hint" }, t(lang, "home_book")),
         el("strong", {}, t(lang, "home_book_open")),
       ),

@@ -29,6 +29,9 @@ export function relabel(root, code) {
     const values = node.dataset.i18nValues ? JSON.parse(node.dataset.i18nValues) : undefined;
     node.textContent = t(code, node.dataset.i18n, values);
   }
+  for (const node of root.querySelectorAll("[data-i18n-label]")) {
+    node.setAttribute("aria-label", t(code, node.dataset.i18nLabel));
+  }
   for (const node of root.querySelectorAll("[data-i18n-placeholder]")) {
     node.placeholder = t(code, node.dataset.i18nPlaceholder);
   }
