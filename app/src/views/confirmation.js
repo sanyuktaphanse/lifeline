@@ -7,6 +7,7 @@
 import { el, errorText, label } from "../dom.js";
 import { STRINGS } from "../i18n.js";
 import { routeBlocked } from "../routes.js";
+import { showRunnerUp, triggerKeys } from "../council.js";
 
 export function confirmationCard(ctx, confirmation, onConfirm) {
   let token = confirmation.confirmation_token;
@@ -136,14 +137,18 @@ function routeList(ctx, routes, selected) {
 }
 
 function councilAdvice(ctx, council) {
+  const triggers = triggerKeys(council.triggers);
   return el(
     "div",
     { class: "council" },
     label(ctx, "h3", "council_title"),
     label(ctx, "p", "council_chosen", { rail: council.chosen }),
-    label(ctx, "p", "council_runner_up", { rail: council.runner_up }),
-    el("p", {}, council.reason),
+    // Only above the threshold, as the reply text does (src/council.js).
+    showRunnerUp(council) ? label(ctx, "p", "council_runner_up", { rail: council.runner_up }, { class: "council-runner-up" }) : null,
+    el("p", { class: "council-reason" }, council.reason),
     label(ctx, "p", "council_disagreement", { score: council.disagreement }, { class: "hint" }),
-    council.triggers?.length ? el("p", { class: "hint" }, council.triggers.join(", ")) : null,
+    triggers.length
+      ? el("div", { class: "council-triggers" }, label(ctx, "p", "council_triggers", null, { class: "hint" }), el("ul", {}, triggers.map((key) => label(ctx, "li", key))))
+      : null,
   );
 }
