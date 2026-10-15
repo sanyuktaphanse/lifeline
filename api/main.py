@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 import os
 import threading
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,7 +38,7 @@ from contracts.schemas import (
     StandingEvent,
     TraceResult,
 )
-from core.agent import AgentLoop
+from core.agent import MIN_SECRET_CHARS, PASSPHRASE_VAR, AgentLoop
 from core.anchor_local import ANCHOR_SECRET_VAR, LocalSignedAnchor, anchor_for
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
@@ -77,6 +78,14 @@ TICK_SECONDS = 60.0
 COUNCIL_ON = frozenset({"on", "true", "1", "yes"})
 # Source: .env.example. The simulated rails beyond Pix are on unless SIM_RAILS names one of these.
 SIM_RAILS_OFF = frozenset({"off", "false", "0", "no"})
+
+# Source: docs/decisions.md, 13 October 2026. One passphrase from .env locks the API for the one demo student;
+# it is not accounts or sign in. Empty means unlocked, as before, except in production.
+PASSPHRASE_HEADER = "X-Lifeline-Passphrase"
+PASSPHRASE_DETAIL = f"This API is locked: send the passphrase in the {PASSPHRASE_HEADER} header."
+# Paths that answer without the passphrase: health, so the app knows whether to ask for it, and FastAPI's own
+# pages, which show only the API's shape and nothing from the ledger.
+OPEN_PATHS = frozenset({"/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
 
 logger = logging.getLogger("lifeline.api")
 
@@ -147,6 +156,8 @@ class Health(BaseModel):
     status: str
     # Each language Lifeline replies in, with its writing direction and its own name. Source: LANGUAGE_META.
     languages: dict[str, dict[str, str]]
+    # Whether every other endpoint needs the X-Lifeline-Passphrase header, so the app knows to ask for it.
+    passphrase_required: bool
 
 
 class Reminder(BaseModel):
@@ -293,6 +304,12 @@ def require_production_secrets() -> None:
     for name in (CONFIRM_SECRET_VAR, ANCHOR_SECRET_VAR):
         if not os.environ.get(name):
             raise RuntimeError(f"{name} must be set to a non empty value when LIFELINE_ENV is production, so the API did not start.")
+    # The reply guard looks for a secret only from MIN_SECRET_CHARS on, so a shorter passphrase is refused here.
+    if len(os.environ.get(PASSPHRASE_VAR, "").strip()) < MIN_SECRET_CHARS:
+        raise RuntimeError(
+            f"{PASSPHRASE_VAR} must be set to at least {MIN_SECRET_CHARS} characters when LIFELINE_ENV is production, "
+            "so the API did not start."
+        )
 
 
 def council_for(env: Mapping[str, str] | None = None) -> FiveVoiceCouncil | None:
@@ -321,6 +338,8 @@ def create_app(
     wise_sandbox: WiseSandboxClient | None = None,
 ) -> FastAPI:
     require_production_secrets()
+    # Read once here: changing .env takes a restart, as every other setting does.
+    passphrase = environment(None).get(PASSPHRASE_VAR, "").strip()
     fixture = _load_fixture(fixture_path)
     parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
@@ -408,14 +427,22 @@ def create_app(
         if task is not None:
             task.cancel()
 
-    app = FastAPI(title="Lifeline API", lifespan=lifespan)
+    def passphrase_lock(request: Request) -> None:
+        """Refuse a request without the right passphrase, before its body is validated or anything is written."""
+        if not passphrase or request.url.path in OPEN_PATHS:
+            return
+        sent = request.headers.get(PASSPHRASE_HEADER, "")
+        if not hmac.compare_digest(sent.encode("utf-8"), passphrase.encode("utf-8")):
+            raise HTTPException(status_code=401, detail=PASSPHRASE_DETAIL)
+
+    app = FastAPI(title="Lifeline API", lifespan=lifespan, dependencies=[Depends(passphrase_lock)])
     app.state.loop = loop
     app.state.ledger = ledger
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=LOCAL_ORIGINS,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", PASSPHRASE_HEADER],
     )
 
     @app.exception_handler(ModelAdapterError)
@@ -449,7 +476,7 @@ def create_app(
 
     @app.get("/health")
     def health() -> Health:
-        return Health(status="ok", languages=LANGUAGE_META)
+        return Health(status="ok", languages=LANGUAGE_META, passphrase_required=bool(passphrase))
 
     @app.post("/chat")
     def chat(request: ChatRequest) -> AgentReply:

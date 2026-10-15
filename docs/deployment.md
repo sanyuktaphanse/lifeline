@@ -34,9 +34,10 @@ Copy `.env.example` to `.env` and fill in what you need. `.env` is ignored by gi
 
 | Setting | What it does | Empty means |
 | --- | --- | --- |
-| `LIFELINE_ENV` | `production` makes the API refuse to start without the two secrets below | development |
+| `LIFELINE_ENV` | `production` makes the API refuse to start without the two secrets and the passphrase below | development |
 | `LIFELINE_CONFIRM_SECRET` | Signs confirmation tokens | A public development secret, refused in production |
 | `LIFELINE_ANCHOR_SECRET` | Signs the local ledger anchor | A public development secret, refused in production |
+| `LIFELINE_APP_PASSPHRASE` | One passphrase that locks the API for the one demo student, sent in the `X-Lifeline-Passphrase` header and compared in constant time; not accounts or sign in | The API is unlocked; refused in production, which needs at least 8 characters |
 | `MODEL_PROVIDER` | `anthropic` or `dashscope`, the model the agent uses | `anthropic` |
 | `FALLBACK_MODEL_PROVIDER` | The provider tried when the first one fails | `dashscope` |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Anthropic key and model | No Anthropic calls; model `claude-opus-5` |
@@ -49,7 +50,7 @@ Copy `.env.example` to `.env` and fill in what you need. `.env` is ignored by gi
 | `WISE_SANDBOX_TOKEN`, `WISE_SANDBOX_PROFILE_ID`, `WISE_SANDBOX_RECIPIENTS` | The Wise sandbox, section 5 | The fixture Wise rail |
 | `LIVE_SCENARIO_LIMIT` | Caps how many scenarios a live evidence run plays | Every scenario marked live |
 
-For a demo that anyone else can reach, set `LIFELINE_ENV=production` and two long random secrets, for example from `python3 -c "import secrets; print(secrets.token_hex(32))"`.
+For a demo that anyone else can reach, set `LIFELINE_ENV=production`, a passphrase of at least 8 characters, and two long random secrets, for example from `python3 -c "import secrets; print(secrets.token_hex(32))"`.
 
 ## 4. Run the API
 
@@ -62,6 +63,8 @@ starts the API on `http://127.0.0.1:8000` with reload. It accepts browser reques
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+`/health` answers without the passphrase and says in `passphrase_required` whether one is set. With `LIFELINE_APP_PASSPHRASE` set, every other call needs it in a header, for example `curl -H "X-Lifeline-Passphrase: $LIFELINE_APP_PASSPHRASE" http://127.0.0.1:8000/ledger/student_001`, and is answered `401` without it; `docs/api.md`, Passphrase, gives the details. The passphrase is one shared value for the one demo student, not accounts or sign in.
 
 The demo student is `student_001` from `fixtures/demo_user.yaml`, and a parent in India is loaded from `fixtures/demo_parent.yaml`. The ledger and the conversations are written to `data/`, which git ignores. `docs/api.md` describes every endpoint with real requests and responses.
 
