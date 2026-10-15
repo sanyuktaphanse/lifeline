@@ -8,6 +8,7 @@ import { el, errorText, label } from "../dom.js";
 import { STRINGS } from "../i18n.js";
 import { routeBlocked } from "../routes.js";
 import { showRunnerUp, triggerKeys } from "../council.js";
+import { RAIL_KEYS, railName } from "../rails.js";
 
 export function confirmationCard(ctx, confirmation, onConfirm) {
   let token = confirmation.confirmation_token;
@@ -104,6 +105,8 @@ function routeList(ctx, routes, selected) {
     "div",
     {},
     label(ctx, "h3", "routes_title"),
+    // How the loop chooses (_considered and _choose in core/agent.py); the council may advise another route.
+    label(ctx, "p", "me_route_rule", null, { class: "hint route-rule" }),
     el(
       "ul",
       { class: "routes" },
@@ -112,7 +115,8 @@ function routeList(ctx, routes, selected) {
         return el(
           "li",
           { class: chosen ? "selected" : null, "data-rail": route.rail },
-          el("strong", {}, route.rail),
+          chosen ? el("span", { class: "route-tick", "aria-hidden": "true" }, "✓") : null,
+          RAIL_KEYS[route.rail] ? label(ctx, "strong", RAIL_KEYS[route.rail], null, { class: "route-name" }) : el("strong", { class: "route-name" }, route.rail),
           " ",
           chosen ? label(ctx, "span", "route_selected", null, { class: "badge" }) : null,
           " ",
@@ -144,9 +148,9 @@ function councilAdvice(ctx, council) {
     "div",
     { class: "council" },
     label(ctx, "h3", "council_title"),
-    label(ctx, "p", "council_chosen", { rail: council.chosen }),
+    label(ctx, "p", "council_chosen", { rail: railName(council.chosen, ctx.lang()) }),
     // Only above the threshold, as the reply text does (src/council.js).
-    showRunnerUp(council) ? label(ctx, "p", "council_runner_up", { rail: council.runner_up }, { class: "council-runner-up" }) : null,
+    showRunnerUp(council) ? label(ctx, "p", "council_runner_up", { rail: railName(council.runner_up, ctx.lang()) }, { class: "council-runner-up" }) : null,
     el("p", { class: "council-reason" }, council.reason),
     label(ctx, "p", "council_disagreement", { score: council.disagreement }, { class: "hint" }),
     triggers.length

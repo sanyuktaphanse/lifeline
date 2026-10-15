@@ -22,7 +22,7 @@ test("DOCUMENTED SHAPE: the card shows the warning, the action and every route w
   await expect(card.locator("dl.facts")).toContainText("SG>BR");
   await expect(card.locator(".routes li")).toHaveCount(3);
   await expect(card.locator(".routes li.selected")).toHaveCount(1);
-  await expect(card.locator(".routes li.selected")).toContainText("wise");
+  await expect(card.locator(".routes li.selected")).toContainText("Wise");
   await expect(card.locator(".routes li").nth(1)).toContainText("Simulated");
   await expect(card.locator(".confirm-expiry")).toContainText("Expires in");
   await page.selectOption("#lang", "zh");
@@ -89,7 +89,7 @@ test("DOCUMENTED SHAPE: a failed rail offers the next route under the same token
   await waitingTransfer(page, backend, open);
   await page.locator(".confirm-card").last().locator(".confirm-button").click();
   const offer = page.locator(".confirm-card").last();
-  await expect(offer.locator(".routes li.selected")).toContainText("bank_wire");
+  await expect(offer.locator(".routes li.selected")).toContainText("Bank transfer");
   await offer.locator(".confirm-button").click();
   await expect(page.locator(".msg-lifeline").last().locator(".receipt")).toContainText("wise-0001");
   expect(bodies.map((body) => body.confirmation_token)).toEqual([TOKEN, retry.confirmation.confirmation_token]);

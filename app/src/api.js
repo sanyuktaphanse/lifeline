@@ -42,5 +42,6 @@ export function makeApi(base) {
     verify: (id) => call(base, "GET", `/ledger/${user(id)}/verify`),
     // Writes to the ledger (docs/api.md, POST /precheck), so it is called only when the student taps a check.
     precheck: (body) => call(base, "POST", "/precheck", body),
+    reminders: (id) => call(base, "GET", `/reminders/${user(id)}`),
   };
 }

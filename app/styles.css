@@ -233,3 +233,37 @@ optgroup.on-file, option.on-file { font-weight: 700; }
 .me .card ul { margin: 0; padding-inline-start: 1.2em; }
 .me-check-block { display: flex; flex-direction: column; gap: 8px; }
 .btn-link + .btn-link { margin-inline-start: 0; }
+
+/* Home */
+.home-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.home-greeting { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.bell { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; }
+.bell .count { min-width: 22px; padding: 0 6px; border-radius: 999px; background: var(--danger-line); color: #fff; font-size: 0.8rem; text-align: center; }
+#home-reminders ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.home-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.home-card { text-align: start; cursor: pointer; font: inherit; color: inherit; min-height: 96px; }
+.home-card:hover, .home-card:focus-visible { border-color: var(--accent); }
+.view-title, #view-home h2, #view-activity h2 { margin: 0; font-size: 1.15rem; }
+
+/* Chat starters, copy, route tick */
+.starters { display: flex; flex-direction: column; gap: 8px; }
+.starter { text-align: start; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); cursor: pointer; }
+.starter:hover, .starter:focus-visible { border-color: var(--accent); }
+.reply-copy { align-self: flex-start; margin-inline-start: 0; }
+.route-tick { color: var(--ok-line); font-weight: 700; margin-inline-end: 6px; }
+
+/* Lost card one tap answers */
+.quick-answers { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { min-height: 40px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); cursor: pointer; }
+
+/* Activity */
+.day { display: flex; flex-direction: column; gap: 6px; }
+.day h3 { margin: 8px 0 0; font-size: 0.95rem; color: var(--muted); }
+.act-list { list-style: none; margin: 0; }
+.act-row { padding-block: 6px; border-block-end: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.act-row:last-child { border-block-end: 0; }
+.act-row .hint { flex-basis: 100%; font-size: 0.85rem; }
+.act-ok > span:first-child::before { content: "\2713  "; color: var(--ok-line); }
+.act-bad > span:first-child { color: var(--danger-line); }
+#activity-advanced summary { cursor: pointer; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+.activity-ledger { display: flex; flex-direction: column; gap: 12px; }

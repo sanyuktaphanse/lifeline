@@ -5,7 +5,8 @@ import { t } from "./i18n.js";
 import { applyLanguage, languagesFromHealth } from "./languages.js";
 import { chatView } from "./views/chat.js";
 import { rescueView } from "./views/rescue.js";
-import { ledgerView } from "./views/ledger.js";
+import { activityView } from "./views/activity.js";
+import { homeView } from "./views/home.js";
 import { guideView } from "./views/guide.js";
 import { welcomeView } from "./views/welcome.js";
 import { onboardingView } from "./views/onboarding.js";
@@ -54,6 +55,7 @@ function choose(code) {
   relabel(document, language.code);
   for (const view of Object.values(VIEWS)) view.relang?.();
   ctx.refreshGreeting?.();
+  ctx.refreshStarters?.();
 }
 
 // The tab the student was on, so Close on Me goes back to it.
@@ -70,6 +72,7 @@ function showTab(name) {
   currentTab = name;
   hideAll();
   ctx.refreshGreeting?.();
+  ctx.refreshStarters?.();
   document.querySelector(".tabs").hidden = false;
   for (const tab of document.querySelectorAll('[role="tab"]')) {
     const on = tab.id === `tab-${name}`;
@@ -87,7 +90,7 @@ function showWelcome() {
 }
 
 document.getElementById("lang").addEventListener("change", (event) => choose(event.target.value));
-for (const name of ["chat", "rescue", "ledger", "guide"]) {
+for (const name of ["home", "chat", "rescue", "activity", "guide"]) {
   document.getElementById(`tab-${name}`).addEventListener("click", () => showTab(name));
 }
 // The onboarding after the welcome, and again from Me with "trip" or "plan" to change one part.
@@ -108,13 +111,20 @@ document.getElementById("open-me").addEventListener("click", showMe);
 document.getElementById("brand").replaceChildren(logo(24));
 chatView(ctx, document.getElementById("view-chat"));
 rescueView(ctx, document.getElementById("view-rescue"));
-VIEWS.ledger = ledgerView(ctx, document.getElementById("view-ledger"));
+VIEWS.activity = activityView(ctx, document.getElementById("view-activity"));
+VIEWS.home = homeView(ctx, document.getElementById("view-home"), {
+  send: (words) => {
+    showTab("chat");
+    ctx.sendNow(words);
+  },
+  openTab: showTab,
+});
 VIEWS.guide = guideView(ctx, document.getElementById("view-guide"), (words) => {
   showTab("chat");
   ctx.fillMessage(words);
 });
 VIEWS.welcome = welcomeView(ctx, document.getElementById("view-welcome"), () => showOnboarding("all"));
-VIEWS.onboarding = onboardingView(ctx, document.getElementById("view-onboarding"), (next) => (next === "me" ? showMe() : showTab("chat")));
+VIEWS.onboarding = onboardingView(ctx, document.getElementById("view-onboarding"), (next) => (next === "me" ? showMe() : showTab("home")));
 VIEWS.me = meView(ctx, document.getElementById("view-me"), { onChange: showOnboarding, onClose: () => showTab(currentTab) });
 if (new URLSearchParams(location.search).get("welcome") === "off") showTab("chat");
 else showWelcome();
