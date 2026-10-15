@@ -41,6 +41,8 @@ test("DOCUMENTED SHAPE: a blocked paste puts its sentence at the top, the turn l
   await page.locator("#chat-paste").fill("Hi, this is your landlord.");
   await page.locator("#chat-send").click();
   const reply = page.locator(".msg-lifeline").last();
+  // evaluateAll does not wait, so wait for the reply's last line before reading the order of its parts.
+  await expect(reply.locator(".reply-turn")).toBeVisible();
   const order = await reply.locator(".reply > *").evaluateAll((nodes) => nodes.map((node) => node.className.split(" ")[0]));
   expect(order[0]).toBe("reply-blocked");
   expect(order.at(-1)).toBe("reply-turn");

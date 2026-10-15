@@ -102,3 +102,12 @@ test("after the time runs out the card says it has probably expired, and still l
   await expect(card.locator(".confirm-expiry")).toContainText("probably expired");
   await expect(card.locator(".confirm-button")).toBeEnabled();
 });
+
+test("DOCUMENTED SHAPE: in Chinese the card labels the corridor 汇往国家或地区, not 通道", async ({ page, backend, open }) => {
+  const card = await waitingTransfer(page, backend, open);
+  await page.selectOption("#lang", "zh");
+  const facts = card.locator("dl.facts");
+  await expect(facts.locator("dt", { hasText: "汇往国家或地区" })).toHaveCount(1);
+  await expect(facts.locator("dt", { hasText: "汇往国家或地区" }).locator("xpath=following-sibling::dd[1]")).toHaveText("SG>BR");
+  await expect(facts.locator("dt", { hasText: "通道" })).toHaveCount(0);
+});

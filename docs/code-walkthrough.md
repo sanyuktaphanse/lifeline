@@ -3882,7 +3882,9 @@ ANCHOR_KIND = "anchor"
 REDACTION_MARKER = "[redacted]"
 # Source: .env.example. The secrets the engine, the anchor and the model adapter read from the
 # environment; their values, and the development fallbacks used when they are unset, never reach a reply.
-SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY")
+# The API's passphrase, set in .env; api/main.py checks it, and the reply guard redacts it like any secret.
+PASSPHRASE_VAR = "LIFELINE_APP_PASSPHRASE"
+SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY", PASSPHRASE_VAR)
 DEVELOPMENT_SECRETS = (DEVELOPMENT_CONFIRM_SECRET, DEVELOPMENT_ANCHOR_SECRET)
 # Source: this module. A secret shorter than this is not looked for, so an empty or one letter value
 # cannot blank out ordinary words.
@@ -7081,7 +7083,9 @@ Every reply passes one guard before it leaves the loop. It looks for three kinds
 REDACTION_MARKER = "[redacted]"
 # Source: .env.example. The secrets the engine, the anchor and the model adapter read from the
 # environment; their values, and the development fallbacks used when they are unset, never reach a reply.
-SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY")
+# The API's passphrase, set in .env; api/main.py checks it, and the reply guard redacts it like any secret.
+PASSPHRASE_VAR = "LIFELINE_APP_PASSPHRASE"
+SECRET_VARIABLES = ("LIFELINE_CONFIRM_SECRET", "LIFELINE_ANCHOR_SECRET", "ANTHROPIC_API_KEY", "DASHSCOPE_API_KEY", PASSPHRASE_VAR)
 DEVELOPMENT_SECRETS = (DEVELOPMENT_CONFIRM_SECRET, DEVELOPMENT_ANCHOR_SECRET)
 # Source: this module. A secret shorter than this is not looked for, so an empty or one letter value
 # cannot blank out ordinary words.
@@ -9936,6 +9940,7 @@ This file serves Lifeline over HTTP for the frontend of lane C, which is not in 
 
 ```python
 import asyncio
+import hmac
 import logging
 import os
 import threading
@@ -9947,7 +9952,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -9974,7 +9979,7 @@ from contracts.schemas import (
     StandingEvent,
     TraceResult,
 )
-from core.agent import AgentLoop
+from core.agent import MIN_SECRET_CHARS, PASSPHRASE_VAR, AgentLoop
 from core.anchor_local import ANCHOR_SECRET_VAR, LocalSignedAnchor, anchor_for
 from core.conversation_store import ConversationStore
 from core.council import FiveVoiceCouncil
@@ -10014,6 +10019,14 @@ TICK_SECONDS = 60.0
 COUNCIL_ON = frozenset({"on", "true", "1", "yes"})
 # Source: .env.example. The simulated rails beyond Pix are on unless SIM_RAILS names one of these.
 SIM_RAILS_OFF = frozenset({"off", "false", "0", "no"})
+
+# Source: docs/decisions.md, 13 October 2026. One passphrase from .env locks the API for the one demo student;
+# it is not accounts or sign in. Empty means unlocked, as before, except in production.
+PASSPHRASE_HEADER = "X-Lifeline-Passphrase"
+PASSPHRASE_DETAIL = f"This API is locked: send the passphrase in the {PASSPHRASE_HEADER} header."
+# Paths that answer without the passphrase: health, so the app knows whether to ask for it, and FastAPI's own
+# pages, which show only the API's shape and nothing from the ledger.
+OPEN_PATHS = frozenset({"/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
 
 logger = logging.getLogger("lifeline.api")
 ```
@@ -10205,6 +10218,8 @@ def create_app(
     wise_sandbox: WiseSandboxClient | None = None,
 ) -> FastAPI:
     require_production_secrets()
+    # Read once here: changing .env takes a restart, as every other setting does.
+    passphrase = environment(None).get(PASSPHRASE_VAR, "").strip()
     fixture = _load_fixture(fixture_path)
     parent = _load_fixture(parent_fixture_path) if parent_fixture_path is not None and parent_fixture_path.exists() else None
     user_id = fixture["user_id"]
@@ -10292,14 +10307,22 @@ def create_app(
         if task is not None:
             task.cancel()
 
-    app = FastAPI(title="Lifeline API", lifespan=lifespan)
+    def passphrase_lock(request: Request) -> None:
+        """Refuse a request without the right passphrase, before its body is validated or anything is written."""
+        if not passphrase or request.url.path in OPEN_PATHS:
+            return
+        sent = request.headers.get(PASSPHRASE_HEADER, "")
+        if not hmac.compare_digest(sent.encode("utf-8"), passphrase.encode("utf-8")):
+            raise HTTPException(status_code=401, detail=PASSPHRASE_DETAIL)
+
+    app = FastAPI(title="Lifeline API", lifespan=lifespan, dependencies=[Depends(passphrase_lock)])
     app.state.loop = loop
     app.state.ledger = ledger
     app.add_middleware(
         CORSMiddleware,
         allow_origin_regex=LOCAL_ORIGINS,
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type"],
+        allow_headers=["Content-Type", PASSPHRASE_HEADER],
     )
 
     @app.exception_handler(ModelAdapterError)
@@ -10333,7 +10356,7 @@ def create_app(
 
     @app.get("/health")
     def health() -> Health:
-        return Health(status="ok", languages=LANGUAGE_META)
+        return Health(status="ok", languages=LANGUAGE_META, passphrase_required=bool(passphrase))
 
     @app.post("/chat")
     def chat(request: ChatRequest) -> AgentReply:
@@ -10443,7 +10466,7 @@ The demo student lives in `fixtures/demo_user.yaml`: the user id, the mandate wi
 
 ## The tests
 
-There are 1586 tests, as `pytest --collect-only` counts them after the reply fields of 11 October 2026: 1507 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
+There are 1632 tests, as `pytest --collect-only` counts them after the reply fields of 11 October 2026: 1507 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110. Each was written before the code it checks and was seen to fail first.
 
 ### Patterns used across the tests
 
@@ -11406,7 +11429,7 @@ The factory defines a class inside a function. The class can see `calls`, `queue
 | `test_attack_five.py` | `test_a_record_written_by_another_account_does_not_verify` | A record written by another account does not verify |
 | `test_attack_five.py` | `test_the_contract_never_overwrites_a_record_or_takes_one_from_another_account` | The contract never overwrites a record or takes one from another account |
 
-In all, 147 parametrized tests add 398 extra runs, which is how 1188 test functions become 1586 tests. The table above is not complete: it has no rows for 292 functions, among them every test in `test_stranger_fixes.py`, `test_reply_fields.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
+In all, 151 parametrized tests add 430 extra runs, which is how 1202 test functions become 1632 tests. The table above is not complete: it has no rows for 292 functions, among them every test in `test_stranger_fixes.py`, `test_reply_fields.py`, `test_live_findings.py`, `test_live_harness.py`, `test_attack_six.py`, `test_attack_seven.py`, `test_api_proactive.py`, `test_cash_withdrawal.py`, `test_reminders.py` and `test_i18n.py`, and the stranger tests of `test_harness.py`; the sections after it describe those files.
 
 ## The Stage 8a tests
 

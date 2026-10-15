@@ -36,7 +36,7 @@ This is item 5 of the submission: the permission tier implementation and the kno
 12. A run under a standing mandate the student stopped is refused under R12: `tests/test_standing.py::test_a_run_under_an_inactive_standing_mandate_is_refused_under_r12`.
 13. Suite tasks T07, T09 and T10 and attacks X09 and X20 play the tiers end to end.
 
-**What we do not claim.** The tiers come from the master plan, not from a regulator. Sending the token is the confirmation: words sent beside it, even a no, are not read, break B-B3. The token shows that someone holding it said yes, not who that person is, because the API has no sign in, open item 37. One malformed `change_limit`, with an amount written `5,000`, never reached the engine and so got no T3 refusal, break C-B5; the limit did not change.
+**What we do not claim.** The tiers come from the master plan, not from a regulator. Sending the token is the confirmation: words sent beside it, even a no, are not read, break B-B3. The token shows that someone holding it said yes, not who that person is, because the API has no accounts or sign in, open item 37. One passphrase from `.env`, `LIFELINE_APP_PASSPHRASE`, now locks the API for the one demo student, compared in constant time, so with it set the token also shows that the caller knew the passphrase; it is not accounts or sign in, and it says nothing about who the caller is. One malformed `change_limit`, with an amount written `5,000`, never reached the engine and so got no T3 refusal, break C-B5; the limit did not change.
 
 ## 2. Deterministic authorisation
 
@@ -137,7 +137,7 @@ This is item 5 of the submission: the permission tier implementation and the kno
 
 ## 8. Secrets
 
-**What we claim.** Lifeline's secret values live in `.env`, the FISCO BCOS signing key in the file `FISCO_KEY_PATH` names, which git ignores, and the CI provider keys in GitHub secrets; `.env.example` lists the names with no secret values. Every reply passes a guard that redacts card numbers in digits, issued confirmation tokens and the values of the secrets. Lifeline never writes its own secret values to a response, a ledger entry, an anchor line or an error, and in production the API does not start without both secrets, decision 120.
+**What we claim.** Lifeline's secret values live in `.env`, the FISCO BCOS signing key in the file `FISCO_KEY_PATH` names, which git ignores, and the CI provider keys in GitHub secrets; `.env.example` lists the names with no secret values. Every reply passes a guard that redacts card numbers in digits, issued confirmation tokens and the values of the secrets. Lifeline never writes its own secret values to a response, a ledger entry, an anchor line or an error, and in production the API does not start without both secrets, decision 120. One passphrase from `.env`, `LIFELINE_APP_PASSPHRASE`, now locks the API for the one demo student: with it set, every endpoint except `GET /health` and FastAPI's own pages needs it in the `X-Lifeline-Passphrase` header, compared in constant time with `hmac.compare_digest`. It is not accounts or sign in. The reply guard redacts it like the other secrets, and in production the API does not start without it or with one shorter than 8 characters, the length from which the guard looks for a secret, as `docs/api.md`, Passphrase, says.
 
 **Evidence.**
 
@@ -146,7 +146,8 @@ This is item 5 of the submission: the permission tier implementation and the kno
 3. A provider error names the provider and the reason, and the provider key planted in the request never appears: `tests/test_api.py::test_a_provider_status_error_on_chat_is_a_503_naming_the_provider_and_the_reason`.
 4. No council voice is given the token: `tests/test_council.py::test_no_voice_prompt_carries_the_token_or_the_students_own_words`.
 5. Production needs both secrets: `tests/test_attack_seven.py::test_an_empty_secret_in_production_stops_the_api_at_start`.
-6. Attacks X10 and X20 play it.
+6. The passphrase locks every endpoint but `GET /health` and never comes back in a reply, the ledger or a log line: `tests/test_passphrase.py::test_each_endpoint_refuses_a_wrong_passphrase`, `tests/test_passphrase.py::test_a_wrong_passphrase_writes_nothing_to_the_ledger` and `tests/test_passphrase.py::test_the_passphrase_never_reaches_a_reply_the_ledger_or_a_log_line`; production needs it: `tests/test_passphrase.py::test_production_refuses_to_start_with_a_passphrase_under_eight_characters`.
+7. Attacks X10 and X20 play it.
 
 **What we do not claim.** A value the model itself types into a tool's arguments can come back in `decision.reasons`, `council.reason`, the reminders and the monthly summary, breaks F-B1 to F-B3, and is written to the ledger unguarded, open item 101. The guard misses a card number written in words or split across replies, open item 101, a secret in fullwidth letters or with an invisible character, open item 109, and a card number given as a payee id inside the confirmation object, open item 110; each of 109, 110 and the ledger case of 101 is a strict expected failure in `tests/test_attack_one.py`. The master plan proposed a repository scan for secrets on every pull request; CI does not run one. Until 10 October 2026 a clone made inside the repository folder read the repository's `.env`; the adapter now reads only the `.env` beside its own root, `tests/test_model_adapter.py::test_a_clone_inside_another_folder_never_reads_the_parent_folders_env`, which closed open item 173.
 
@@ -164,7 +165,7 @@ This is item 5 of the submission: the permission tier implementation and the kno
 6. One student's ledger is not another's: `tests/test_api.py::test_ledger_lists_only_that_users_entries_and_verify_finds_no_break`.
 7. Attack X11 plays it, and six of the fourteen HTTP attempts under X25 in the Stage 10 review tried to reach one student's data as another and held.
 
-**What we do not claim.** The ledger, which cannot be erased, still holds reminder texts and the model's tool arguments, so erasing the conversation does not erase everything the student said. Lifeline has no data map, retention policy or legal review, so we do not claim minimisation or compliance; the master plan's note of Singapore's PDPA, Brazil's LGPD and India's DPDP is a note. Identity documents stay with the partners because Lifeline never asks for them. The API has no sign in, so anyone who reaches it can read the demo student's ledger, open item 37.
+**What we do not claim.** The ledger, which cannot be erased, still holds reminder texts and the model's tool arguments, so erasing the conversation does not erase everything the student said. Lifeline has no data map, retention policy or legal review, so we do not claim minimisation or compliance; the master plan's note of Singapore's PDPA, Brazil's LGPD and India's DPDP is a note. Identity documents stay with the partners because Lifeline never asks for them. The API has no accounts or sign in, open item 37. One passphrase from `.env` now locks it for the one demo student, compared in constant time; without it set, anyone who reaches the API can read the demo student's ledger, and with it set, anyone who knows the passphrase can.
 
 ## 10. Facts and honesty
 
@@ -214,7 +215,7 @@ This is item 5 of the submission: the permission tier implementation and the kno
 3. The conversation layer. The engine held in every stranger task, but the model's words did not: it claimed things the ledger does not show, gave false reasons, and proposed a scam's payment until the engine stopped it. The fixes made the code's own sentences true; they do not make the model's words true. A cash cap warning from before a withdrawal still reaches the reply, open item 169; a model that never calls the precheck flags nothing, open item 102; the standing day must be written in figures, open item 168; and no live model has been judged again since the fixes.
 4. The languages. Lifeline replies in English, Portuguese and Chinese only, and the Portuguese and Chinese wording waits for a native speaker, `docs/i18n_review.md`.
 5. The chain anchor is tamper evidence, not settlement, has run only on a local network, and does not catch entries appended and rechained after the last anchor.
-6. The API binds to `127.0.0.1` with no sign in and serves one demo student, so it is for a developer's machine only, open item 37. It has no check of the Host header, so a web page open on the same machine can reach it through DNS rebinding, break H-B1, which two of three skeptics upheld. A `422` echoes its request body back to the caller, open item 79.
+6. The API binds to `127.0.0.1` with no accounts or sign in and serves one demo student, so it is for a developer's machine only, open item 37. One passphrase from `.env`, `LIFELINE_APP_PASSPHRASE`, now locks it for that student and is compared in constant time; it is not accounts or sign in, and it is off unless set, except in production. It has no check of the Host header, so a web page open on the same machine can reach it through DNS rebinding, break H-B1, which two of three skeptics upheld. A `422` echoes its request body back to the caller, open item 79.
 7. The reply guard's gaps, open items 101, 109 and 110, and the claims no test proves, open items 171, 172, 176 and 177.
 
 ## The attack suite
@@ -274,7 +275,7 @@ python -c "from core.harness import evaluate; r=[e for e in evaluate() if e.suit
 ```
 
 1. Clone the repository and install, in a virtual environment named `.venv`, with `python3.12 -m venv .venv`, or `python3.13 -m venv .venv` if that is what you have. Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. The repository is private on 10 October 2026, so a judge needs the access the submission grants, or the submitted archive in place of the clone.
-2. After the reply fields of 11 October, `pytest` collects 1586 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
+2. After the passphrase lock of 13 October, `pytest` collects 1632 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
 3. `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`, whose By suite table shows the attacks: 28 entries, 27 passed, 1 not automated.
 4. The last command plays the attack scenarios alone and prints `28 attacks, 27 passed, not passed: ['X25 not automated']`.
 5. The attempts behind the security review are in the section Attacks attempted and held of `docs/technical-reference.md`, and the stranger test is `docs/stranger_test.md`.

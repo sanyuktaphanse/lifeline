@@ -14,13 +14,35 @@ The API listens on `http://127.0.0.1:8000`. FastAPI also serves interactive docu
 
 There is one demo user, `student_001`, loaded from `fixtures/demo_user.yaml`: an SGD mandate with a per transaction limit of 1,500, a daily limit of 2,500, the payees `landlord_sp` and `self_sg`, the student's own Singapore account, the corridors `SG>BR` and `SG>SG`, the purposes `rent` and `emergency`, balances of 2,300 SGD and 150 BRL, and a resilience plan for the rescue. The mandate is valid from midnight UTC of the day the demo ledger began, for 365 days.
 
-CORS allows `http://localhost` and `http://127.0.0.1` on any port, for `GET` and `POST` with a `Content-Type` header. No other origin is allowed.
+CORS allows `http://localhost` and `http://127.0.0.1` on any port, for `GET` and `POST` with a `Content-Type` header and an `X-Lifeline-Passphrase` header. No other origin is allowed.
 
 ## Security: developer machines only
 
-When `LIFELINE_ENV` is `production` the API does not start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are both set to non empty values; the error names the variable that is missing.
+When `LIFELINE_ENV` is `production` the API does not start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are both set to non empty values and `LIFELINE_APP_PASSPHRASE` is set to at least 8 characters; the error names the variable that is missing or too short, never its value.
 
-`make dev` binds the server to `127.0.0.1` only, so no other machine can reach it; the Makefile sets it, and no test checks it. It has no sign in: anyone who can reach it can act as the demo student. Run it only on a developer's machine, and never expose it on a network. Authentication is out of scope for the hackathon.
+`make dev` binds the server to `127.0.0.1` only, so no other machine can reach it; the Makefile sets it, and no test checks it. It has no accounts and no sign in. One passphrase from `.env` can lock it for the one demo student, as the next section says; without one, anyone who can reach it can act as the demo student. Run it only on a developer's machine, and never expose it on a network. Accounts and sign in are out of scope for the hackathon.
+
+## Passphrase
+
+`LIFELINE_APP_PASSPHRASE` in `.env` locks the API for the one demo student. It is one shared passphrase, not accounts or sign in: it shows that a caller knows the passphrase, not who the caller is. The API reads it when it starts, so a change takes a restart.
+
+When it is set, every endpoint except `GET /health` needs the header:
+
+```
+X-Lifeline-Passphrase: <the passphrase>
+```
+
+The header is compared with the setting in constant time, with `hmac.compare_digest`. A request with no header or a wrong one is answered before its body is validated or anything is written to the ledger:
+
+Response `401`:
+
+```json
+{"detail": "This API is locked: send the passphrase in the X-Lifeline-Passphrase header."}
+```
+
+The passphrase never appears in a reply, a ledger entry, a log line or an error, and the reply guard redacts it like the other secrets. `GET /health` answers without it and reports `passphrase_required`, `true` when the setting is set and `false` when it is empty, so the app knows whether to ask for it. FastAPI's own pages, `/docs`, `/redoc` and `/openapi.json`, also answer without it, because they show only the API's shape and nothing from the ledger.
+
+When the setting is empty the API behaves as it did before the passphrase, except that `/health` reports `passphrase_required: false`. In production an empty passphrase, or one shorter than 8 characters, stops the API at start, because the reply guard looks for a secret only from 8 characters on.
 
 ## Persistence and restarts
 
@@ -82,11 +104,12 @@ Response `200`:
     "en": {"direction": "ltr", "name": "English"},
     "pt": {"direction": "ltr", "name": "Português"},
     "zh": {"direction": "ltr", "name": "中文"}
-  }
+  },
+  "passphrase_required": false
 }
 ```
 
-`languages` holds every language Lifeline replies in, with its writing direction, `ltr` or `rtl`, and its name in its own script. Read it from here and never hardcode it: a new language appears here first. Amounts in every reply come as the figure and its currency code, such as 1200 SGD, and dates as ISO 8601, in every language. Showing them with the student's locale separators and date order is the app's job.
+`passphrase_required` says whether every other endpoint needs the `X-Lifeline-Passphrase` header, as the Passphrase section says. `languages` holds every language Lifeline replies in, with its writing direction, `ltr` or `rtl`, and its name in its own script. Read it from here and never hardcode it: a new language appears here first. Amounts in every reply come as the figure and its currency code, such as 1200 SGD, and dates as ISO 8601, in every language. Showing them with the student's locale separators and date order is the app's job.
 
 ## POST /chat
 
