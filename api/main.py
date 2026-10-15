@@ -87,6 +87,10 @@ PASSPHRASE_DETAIL = f"This API is locked: send the passphrase in the {PASSPHRASE
 # pages, which show only the API's shape and nothing from the ledger.
 OPEN_PATHS = frozenset({"/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
 
+# The keys a 422 keeps of each validation error: where it is, why, and its kind. FastAPI's input, ctx and url are
+# left out, because input and ctx can carry what the caller sent.
+VALIDATION_FIELDS = ("loc", "msg", "type")
+
 logger = logging.getLogger("lifeline.api")
 
 
@@ -451,10 +455,9 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request: Request, error: RequestValidationError) -> JSONResponse:
-        errors = error.errors()
-        if request.url.path.startswith("/rescue/"):
-            # A rescue request can hold the identity answer, so its 422 never echoes what was sent.
-            errors = [{name: value for name, value in item.items() if name != "input"} for item in errors]
+        # Every 422 names the field and the reason only, never what was sent: a request can hold pasted text,
+        # an identity answer or a body far over the limit. Source: docs/decisions.md, 15 October 2026.
+        errors = [{name: item.get(name) for name in VALIDATION_FIELDS} for item in error.errors()]
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
     def known(user: str) -> str:

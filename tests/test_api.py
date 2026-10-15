@@ -916,3 +916,59 @@ def test_the_api_runs_without_a_parent_fixture(tmp_path):
     client = TestClient(create_app(adapter=FakeModelAdapter([]), parent_fixture_path=tmp_path / "absent.yaml"))
 
     assert client.post("/precheck", json={"user_id": "parent_001", "action_kind": "enable_pix", "provider": "sim_pix"}).status_code == 404
+
+
+ECHO_MARKER = "MARKER-7f3a-never-echoed"
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/chat", {"user_id": USER, "text": ECHO_MARKER + "x" * (4001 - len(ECHO_MARKER))}),
+        ("/chat", {"user_id": USER, "text": "hi", "pasted_text": ECHO_MARKER, "lang": "xx"}),
+        ("/chat", {"text": ECHO_MARKER}),
+        ("/confirm", {"user_id": USER, "confirmation_token": ECHO_MARKER, "lang": ECHO_MARKER}),
+        ("/trace", {"receipt_id": ECHO_MARKER}),
+        ("/precheck", {"user_id": USER, "action_kind": "remit_from_china", "provider": "x", "channel": ECHO_MARKER, "senders": 5}),
+        ("/standing/run_due", {"now": ECHO_MARKER}),
+    ],
+)
+def test_a_422_names_the_fields_and_the_reasons_and_never_the_values_sent(path, body):
+    response = _client().post(path, json=body)
+
+    assert response.status_code == 422
+    assert ECHO_MARKER not in response.text
+    detail = response.json()["detail"]
+    assert detail
+    for item in detail:
+        assert set(item) == {"loc", "msg", "type"}
+
+
+def test_a_4001_character_text_is_a_422_on_text_without_the_text():
+    text = ECHO_MARKER + "x" * (4001 - len(ECHO_MARKER))
+
+    response = _client().post("/chat", json={"user_id": USER, "text": text})
+
+    assert response.status_code == 422
+    assert ECHO_MARKER not in response.text
+    assert "x" * 100 not in response.text
+    assert response.json()["detail"] == [
+        {"loc": ["body", "text"], "msg": "String should have at most 4000 characters", "type": "string_too_long"}
+    ]
+
+
+def test_a_body_that_is_not_json_is_a_422_that_never_echoes_it():
+    response = _client().post(
+        "/chat", content='{"user_id": "' + ECHO_MARKER + '", "text": ', headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
+    assert ECHO_MARKER not in response.text
+
+
+def test_a_query_value_that_fails_validation_is_never_echoed():
+    response = _client().get(f"/reminders/{USER}", params={"now": ECHO_MARKER})
+
+    assert response.status_code == 422
+    assert ECHO_MARKER not in response.text
+    assert response.json()["detail"][0]["loc"] == ["query", "now"]
