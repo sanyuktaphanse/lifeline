@@ -1,6 +1,6 @@
 # Lifeline submission index
 
-Lifeline is a cross border finance agent for students studying abroad, entered in the International Track of the 2026 Shenzhen FinTechathon under Topic C. This page maps each of the six items the rules ask for, in `docs/hackathon/rules.md` section 5, to where it is in this repository. It describes `main` at commit `06b3c30`, 13 October 2026, with the release pull request that adds this page.
+Lifeline is a cross border finance agent for students studying abroad, entered in the International Track of the 2026 Shenzhen FinTechathon under Topic C. This page maps each of the six items the rules ask for, in `docs/hackathon/rules.md` section 5, to where it is in this repository. It describes `main` on 15 October 2026 with the final documentation pass, the last pull request before the submission tag.
 
 | Item the rules ask for | Where it is |
 | --- | --- |
@@ -9,7 +9,7 @@ Lifeline is a cross border finance agent for students studying abroad, entered i
 | 3. Demo video, no more than 5 minutes | Attached to the submission form; it is not in the repository. |
 | 4. Source code with README, repository link, deployment instructions and test cases | This repository, https://github.com/sanyuktaphanse/lifeline, public since 15 October 2026, so anyone can clone it: [README.md](../../README.md), [docs/deployment.md](../deployment.md), the backend tests in [tests/](../../tests/) and the app tests in [app/tests/](../../app/tests/) |
 | 5. Security self assessment: permission tier implementation and known risk list | [docs/self_assessment.md](../self_assessment.md) |
-| 6. Execution evidence: simulated account or sandbox operation logs | `evidence/report.md`, which `make evidence` writes and CI uploads as the `evidence-report` artifact on every run whose tests pass; the stranger runs in [suites/scenarios/stranger/](../../suites/scenarios/stranger/) and the live stranger test they replay, [docs/stranger_test.md](../stranger_test.md); and the chain record, [chain/evidence.md](../../chain/evidence.md) |
+| 6. Execution evidence: simulated account or sandbox operation logs | `evidence/report.md`, which `make evidence` writes and CI uploads as the `evidence-report` artifact on every run whose tests pass; the stranger runs in [suites/scenarios/stranger/](../../suites/scenarios/stranger/) and the live stranger test they replay, [docs/stranger_test.md](../stranger_test.md); and the chain record, [chain/evidence.md](../../chain/evidence.md); and the demo video, which the rules also name here, attached to the submission form |
 
 No money moves anywhere: every rail is a fixture or a simulation, and the Wise sandbox log that `make evidence-wise` writes is pending a sandbox token.
 

@@ -1,10 +1,10 @@
 # Submission requirements
 
-What the organisers ask for, where each item lives in the repository, and who owns it. Owners follow the lanes in the master plan, section 4. The status column was checked against `main` on 13 October 2026; update it as items land.
+What the organisers ask for, where each item lives in the repository, and who owns it. Owners follow the lanes in the master plan, section 4. The status column was checked against `main` on 15 October 2026, with the final documentation pass before the submission tag.
 
 ## Checklist
 
-| Item | Required by the rules | Where it lives | Owner | Status on 13 October |
+| Item | Required by the rules | Where it lives | Owner | Status on 15 October |
 | --- | --- | --- | --- | --- |
 | 1. Technical documentation | System architecture, core algorithm description, security design | `docs/technical_documentation.md`, build program Stage 17; `docs/technical-reference.md` is the internal reference behind it | A, with B for the rails sections | On `main` since 10 October 2026, merged through pull request 46; `tests/test_technical_documentation.py` keeps its numbers current |
 | 2. Presentation deck | For a final presentation of no more than 10 minutes | Attached to the submission form, not in the repository | A content, C design | Attached to the submission form; not in the repository |
@@ -24,7 +24,7 @@ What the organisers ask for, where each item lives in the repository, and who ow
 
 ## Topic C and what Lifeline answers
 
-Topic C asks for solutions to real financial pain points of international students and cross border users, such as remittances, tuition payments, credit building, and multi currency management. Status on `main`, 13 October 2026:
+Topic C asks for solutions to real financial pain points of international students and cross border users, such as remittances, tuition payments, credit building, and multi currency management. Status on `main`, 15 October 2026:
 
 | Pain point named in the topic | What Lifeline does | Status |
 | --- | --- | --- |

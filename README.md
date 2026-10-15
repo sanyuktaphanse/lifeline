@@ -2,7 +2,7 @@
 
 Lifeline is a cross border finance agent for students studying abroad, built for the 2026 Shenzhen FinTechathon. It has two jobs. It helps the student move money across borders, and it protects the student from scams, fraud, and costly mistakes. Every action that moves money passes a plain Python mandate engine first. Lifeline is instructed never to give investment advice; one sentence of the system prompt carries that rule, and no code checks the model's words, as open item 170 of the technical reference records.
 
-This README describes `main` at commit `06b3c30`, 13 October 2026, with the release pull request that adds `docs/submission/README.md`. The repository is https://github.com/sanyuktaphanse/lifeline, which is public since 15 October 2026, so anyone can clone it. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
+This README describes `main` on 15 October 2026 with the final documentation pass, the last pull request before the submission tag. The repository is https://github.com/sanyuktaphanse/lifeline, which is public since 15 October 2026, so anyone can clone it. Lifeline is released under the MIT licence in [LICENSE](LICENSE), and [docs/licences.md](docs/licences.md) lists the licence of every package in `requirements.txt` and `app/package.json` and of what `chain/setup.sh` downloads.
 
 ## Quick start
 
@@ -27,7 +27,7 @@ Python 3.12 or later is required: `core/agent.py` uses the generic function synt
 
 None of these needs a key or a `.env` file. Only `/chat` and the live evidence runs call a model; for those, copy `.env.example` to `.env` and fill in the provider keys. The code loads only the `.env` beside the repository root, found from its own path, and never a parent folder's, so a clone made inside this folder reads its own `.env` or none, never this folder's keys.
 
-The API is for developer machines only. It binds to `127.0.0.1` and has no accounts or sign in. One passphrase from `.env`, `LIFELINE_APP_PASSPHRASE`, locks it for the one demo student: with it set, every endpoint except `GET /health` needs it in the `X-Lifeline-Passphrase` header, compared in constant time, as [docs/api.md](docs/api.md) says under Passphrase. It is not accounts or sign in. With `LIFELINE_ENV=production` the API refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set and the passphrase has at least 8 characters. [docs/deployment.md](docs/deployment.md) is the deployment guide.
+The API is for developer machines only. It binds to `127.0.0.1` and has no accounts or sign in. One passphrase from `.env`, `LIFELINE_APP_PASSPHRASE`, locks it for the one demo student: with it set, every endpoint except `GET /health` and FastAPI's own pages, `/docs`, `/redoc` and `/openapi.json`, needs it in the `X-Lifeline-Passphrase` header, compared in constant time, as [docs/api.md](docs/api.md) says under Passphrase. It is not accounts or sign in. With `LIFELINE_ENV=production` the API refuses to start unless `LIFELINE_CONFIRM_SECRET` and `LIFELINE_ANCHOR_SECRET` are set and the passphrase has at least 8 characters. [docs/deployment.md](docs/deployment.md) is the deployment guide.
 
 ## What is built
 
@@ -81,7 +81,7 @@ Read [CLAUDE.md](CLAUDE.md) before contributing. It holds the scope, the layout,
 
 ## Evidence
 
-At `06b3c30` the report counts 66 suite entries. Of the 38 tasks, 31 pass and 7 are not automated; of the 28 attacks, 27 pass and 1 is not automated; none fails. Their runs count 79 in English, 24 in Portuguese and 26 in Chinese, a run that switches language counted under each. `evidence/` is ignored by git, so the report is not in the repository; run `make evidence`, or open the `evidence-report` artifact of the latest CI run on `main` under the repository's Actions tab.
+On 15 October 2026 the report counts 66 suite entries. Of the 38 tasks, 31 pass and 7 are not automated; of the 28 attacks, 27 pass and 1 is not automated; none fails. Their runs count 79 in English, 24 in Portuguese and 26 in Chinese, a run that switches language counted under each. `evidence/` is ignored by git, so the report is not in the repository; run `make evidence`, or open the `evidence-report` artifact of the latest CI run on `main` under the repository's Actions tab.
 
 The stranger runs replay, with a scripted model, the seventeen tasks of [docs/stranger_test.md](docs/stranger_test.md) that did not work in the live stranger test of 9 October, which judged 3 of 20 tasks worked, 12 worked badly and 5 failed. Each replay checks only what the code writes. After the fixes of pull request 43, 16 pass and 1 is still expected failing; a live model has not been judged again since.
 
