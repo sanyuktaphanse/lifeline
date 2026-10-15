@@ -40,5 +40,7 @@ export function makeApi(base) {
     rescueStep: (body) => call(base, "POST", "/rescue/step", body),
     ledger: (id) => call(base, "GET", `/ledger/${user(id)}`),
     verify: (id) => call(base, "GET", `/ledger/${user(id)}/verify`),
+    // Writes to the ledger (docs/api.md, POST /precheck), so it is called only when the student taps a check.
+    precheck: (body) => call(base, "POST", "/precheck", body),
   };
 }

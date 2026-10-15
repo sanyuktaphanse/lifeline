@@ -8,12 +8,16 @@ import { rescueView } from "./views/rescue.js";
 import { ledgerView } from "./views/ledger.js";
 import { guideView } from "./views/guide.js";
 import { welcomeView } from "./views/welcome.js";
+import { onboardingView } from "./views/onboarding.js";
+import { meView } from "./views/me.js";
 import { logo } from "./logo.js";
 
 const VIEWS = {};
 
 const state = { lang: "en", languages: [] };
 const ctx = {
+  // What the onboarding gave, in page memory only: never sent and never stored, so a reload starts again.
+  profile: { trip: null, plan: null },
   api: makeApi(apiBase(location.search)),
   userId: USER_ID,
   lang: () => state.lang,
@@ -48,10 +52,24 @@ function choose(code) {
   document.getElementById("lang").value = language.code;
   applyLanguage(document, language);
   relabel(document, language.code);
+  for (const view of Object.values(VIEWS)) view.relang?.();
+  ctx.refreshGreeting?.();
+}
+
+// The tab the student was on, so Close on Me goes back to it.
+let currentTab = "chat";
+
+// Hides every screen: the welcome, the onboarding, Me, the tabs and their panels.
+function hideAll() {
+  for (const id of ["view-welcome", "view-onboarding", "view-me"]) document.getElementById(id).hidden = true;
+  document.querySelector(".tabs").hidden = true;
+  for (const panel of document.querySelectorAll('[role="tabpanel"]')) panel.hidden = true;
 }
 
 function showTab(name) {
-  document.getElementById("view-welcome").hidden = true;
+  currentTab = name;
+  hideAll();
+  ctx.refreshGreeting?.();
   document.querySelector(".tabs").hidden = false;
   for (const tab of document.querySelectorAll('[role="tab"]')) {
     const on = tab.id === `tab-${name}`;
@@ -63,8 +81,7 @@ function showTab(name) {
 
 // The welcome takes the place of the tabs until the student continues. ?welcome=off skips it, for the tests.
 function showWelcome() {
-  document.querySelector(".tabs").hidden = true;
-  for (const panel of document.querySelectorAll('[role="tabpanel"]')) panel.hidden = true;
+  hideAll();
   document.getElementById("view-welcome").hidden = false;
   VIEWS.welcome.shown();
 }
@@ -73,7 +90,21 @@ document.getElementById("lang").addEventListener("change", (event) => choose(eve
 for (const name of ["chat", "rescue", "ledger", "guide"]) {
   document.getElementById(`tab-${name}`).addEventListener("click", () => showTab(name));
 }
+// The onboarding after the welcome, and again from Me with "trip" or "plan" to change one part.
+function showOnboarding(mode) {
+  hideAll();
+  document.getElementById("view-onboarding").hidden = false;
+  VIEWS.onboarding.start(mode);
+}
+
+function showMe() {
+  hideAll();
+  document.getElementById("view-me").hidden = false;
+  VIEWS.me.shown();
+}
+
 document.getElementById("open-welcome").addEventListener("click", showWelcome);
+document.getElementById("open-me").addEventListener("click", showMe);
 document.getElementById("brand").replaceChildren(logo(24));
 chatView(ctx, document.getElementById("view-chat"));
 rescueView(ctx, document.getElementById("view-rescue"));
@@ -82,7 +113,9 @@ VIEWS.guide = guideView(ctx, document.getElementById("view-guide"), (words) => {
   showTab("chat");
   ctx.fillMessage(words);
 });
-VIEWS.welcome = welcomeView(ctx, document.getElementById("view-welcome"), () => showTab("chat"));
+VIEWS.welcome = welcomeView(ctx, document.getElementById("view-welcome"), () => showOnboarding("all"));
+VIEWS.onboarding = onboardingView(ctx, document.getElementById("view-onboarding"), (next) => (next === "me" ? showMe() : showTab("chat")));
+VIEWS.me = meView(ctx, document.getElementById("view-me"), { onChange: showOnboarding, onClose: () => showTab(currentTab) });
 if (new URLSearchParams(location.search).get("welcome") === "off") showTab("chat");
 else showWelcome();
 loadLanguages();

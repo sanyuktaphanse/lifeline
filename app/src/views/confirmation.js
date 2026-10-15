@@ -130,6 +130,8 @@ function routeList(ctx, routes, selected) {
             }),
           ),
           route.blocked_reason ? el("div", { class: "hint" }, route.blocked_reason) : null,
+          // The knowledge entry the route cites, exactly as the server names it. The app keeps no copy of the entries.
+          route.rule_id ? label(ctx, "div", "route_source", { id: route.rule_id }, { class: "hint mono route-source" }) : null,
         );
       }),
     ),

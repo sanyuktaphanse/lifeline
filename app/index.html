@@ -14,6 +14,7 @@
     <div class="topbar-row">
       <h1 class="brand" id="brand">Lifeline</h1>
       <button type="button" class="btn-link" id="open-welcome" data-i18n="open_welcome">Welcome</button>
+      <button type="button" class="btn-link" id="open-me" data-i18n="open_me">Me</button>
       <label class="lang-picker">
         <span id="lang-label" data-i18n="language_label">Language</span>
         <select id="lang" aria-labelledby="lang-label" disabled></select>
@@ -31,6 +32,8 @@
   </nav>
   <main>
     <section id="view-welcome" class="welcome" aria-labelledby="welcome-tagline" hidden></section>
+    <section id="view-onboarding" class="onboarding" hidden></section>
+    <section id="view-me" class="me" hidden></section>
     <section id="view-chat" role="tabpanel" aria-labelledby="tab-chat" hidden></section>
     <section id="view-rescue" role="tabpanel" aria-labelledby="tab-rescue" hidden></section>
     <section id="view-ledger" role="tabpanel" aria-labelledby="tab-ledger" hidden></section>

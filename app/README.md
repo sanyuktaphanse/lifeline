@@ -27,13 +27,17 @@ The chat needs a model key in `.env`, as `.env.example` lists. Without one the c
 
 1. A language picker. Its list, each language's own name and its writing direction come only from `GET /health`. The page's `lang` and `dir` follow the choice, so a right to left language would turn the layout. The app's own labels exist in English, Portuguese and Chinese and fall back to English for any other language.
 2. A chat screen with a separate paste box. What the student types goes in `text` and what they paste goes in `pasted_text`, and the two are never joined. A paste or a drop into the message box is moved to the paste box. A paste with no typed words is never sent.
-3. A confirmation card built from the reply's `confirmation` field: the warning, the action, every route with the selected one marked, and the council's advice when present. The council's runner up is shown only when its disagreement score is above 0.4, the backend's `RUNNER_UP_DISAGREEMENT`, as the reply text does, and the reasons it was asked are shown as short labels in the chosen language; an id the app does not know is left off. A route is marked Blocked only when it has a blocked reason, its limit is not ok, or its status is down; a degraded route is still offered by the loop, so it is not marked. The token is kept only in memory, inside the card, and is sent back to `/confirm` exactly as it came, once. A token the server does not accept, because it expired, was used or was never issued, comes back as a normal reply that says nothing was sent, and the app shows it as one.
+3. A confirmation card built from the reply's `confirmation` field: the warning, the action, every route with the selected one marked, and the council's advice when present. The council's runner up is shown only when its disagreement score is above 0.4, the backend's `RUNNER_UP_DISAGREEMENT`, as the reply text does, and the reasons it was asked are shown as short labels in the chosen language; an id the app does not know is left off. A route is marked Blocked only when it has a blocked reason, its limit is not ok, or its status is down; a degraded route is still offered by the loop, so it is not marked. A route's blocked reason and the knowledge entry it cites, its `rule_id`, are shown as the server sends them; the app keeps no copy of the knowledge base. The token is kept only in memory, inside the card, and is sent back to `/confirm` exactly as it came, once. A token the server does not accept, because it expired, was used or was never issued, comes back as a normal reply that says nothing was sent, and the app shows it as one.
 4. The two sentences code writes in every reply, shown on their own lines: each blocked request sentence at the top, and the sentence that begins `This turn:`, `Neste turno:` or `本轮：` at the bottom. The app reads them from the reply's `blocked` and `turn_summary` fields. Only when a field is absent, as from a server older than those fields, does it find that sentence by its wording.
 5. The lost card rescue, driven only by `rescue.do_now`, for all seven values. Its fields take typed words only: pasting and dropping are refused. An empty identity answer is never sent, because the server would count it as a wrong one, and the answer is cleared as soon as it is sent.
 6. The ledger: every entry, newest first, with the result of verify above it: whether the chain is intact and the first broken entry, the anchor status, the integrity hold, and whether demo keys are signing.
-7. A welcome screen, shown on opening before the tabs: the logo, one sentence on what Lifeline is for, three short cards to swipe or tap through, on what Lifeline does, what it never does and how it works, and one button, Continue as the demo student, with a line saying the demo runs as one demo student with demo limits, no real money moves and sign in is not built. It has no password field and no account. Continue opens Chat, and the Welcome button in the top bar brings it back. Nothing remembers a visit, so it shows on every opening. `?welcome=off` in the address skips it; the browser tests use that.
+7. A welcome screen, shown on opening before the tabs: the logo, one sentence on what Lifeline is for, three short cards to swipe or tap through, on what Lifeline does, what it never does and how it works, and one button, Continue as the demo student, with a line saying the demo runs as one demo student with demo limits, no real money moves and sign in is not built. It has no password field and no account. Continue opens the onboarding, and the Welcome button in the top bar brings it back. Nothing remembers a visit, so it shows on every opening. `?welcome=off` in the address skips it; the browser tests use that.
 8. The Guide tab, after Ledger: six sections for the moments a student meets, paying rent abroad, a message about money, a lost card, money from or to China, money from India or to Brazil, and reading the ledger, then How Lifeline protects you in six sections. Example sentences can be tapped to put their words in the message box, never in the paste box. When the tab is shown it reads `GET /ledger/{user_id}/verify` once and shows the result, with a line when development keys are signing. Its sentences are in `src/guide-content.js` and `src/i18n.js`.
 9. The logo, an original mark drawn in `src/logo.js`: one continuous line with a single heartbeat pulse, in the accent colour, beside the wordmark Lifeline. It is in the top bar, on the welcome screen, and in `index.html` as the favicon, drawn from the same path.
+10. The onboarding, after the welcome. First three questions about the trip: home, where the student will study, and the purpose. The two country lists hold every country with its flag and its name in the chosen language, from the browser's own `Intl.DisplayNames`. Brazil, China, India and Singapore come first, in bold, because `rails/knowledge` has entries for them; any other country can be chosen and the app says Lifeline has no sourced rules for it yet. Then five steps of a safety net: the main card, from common choices that Lifeline recommends none of; a second card; a safety question and its answer; a trusted contact with a name, a relationship, a phone, an email and a channel; and emergency money of 100, 200 or 300 SGD, or none. Then a summary. Skip keeps the demo student's sample plan.
+11. Everything the onboarding gives lives in page memory only. Nothing is sent to the server, because the API has no endpoint for a plan, and nothing is written to browser storage, so a reload starts again. The safety answer is read only to know that one was typed and is cleared at once, so it is never kept, even in memory. The phone and email stay on the page and are never sent; a trusted contact in a Lifeline plan holds only a name and a channel, as `docs/decisions.md` says on 8 October 2026. The live rescue always reads the plan in `fixtures/demo_user.yaml`, and the onboarding says so, quoting that plan's question.
+12. The trip tailors the app: the greeting at the top of Chat names the place of study, and `src/tailoring.js` also words a money from home label and a chat starter about money from home for the screens that will use them.
+13. The Me page, from the Me button in the top bar: the trip and the safety net, each with Change; the sample plan marked Sample; how Lifeline chooses a route, in one sentence, Lifeline picks the cheapest route not marked Simulated, and simulated routes follow a real rail's rules, for practice; the checks of `POST /precheck` that fit the trip, money from China, arriving in China or turning on Pix, each run only when tapped because each writes a ledger entry, with the documents, the review triggers and the entry ids the server returns; and sign in, marked Coming soon.
 
 A banner in the header says the app is a demo and that no real money moves on any route, in the chosen language. It stays on screen on every tab, and shows in English even before `/health` answers.
 
@@ -52,7 +56,7 @@ npm test
 npx playwright test
 ```
 
-`npm test` runs the unit tests. Two of them read the backend's own files, so they fail if lane A changes something the app copies: the wording of the two code written sentences in `core/agent.py`, which the app now uses only as a fallback, and the list of `do_now` values in `contracts/schemas.py`.
+`npm test` runs the unit tests. Two of them read the backend's own files, so they fail if lane A changes something the app copies: the wording of the two code written sentences in `core/agent.py`, which the app now uses only as a fallback, and the list of `do_now` values in `contracts/schemas.py`. Three more do the same for the onboarding: the countries listed first must be the countries of `rails/knowledge`, the sample plan on Me must be the plan of `fixtures/demo_user.yaml`, and every check on Me must be a kind `rails/fake_router.py` answers.
 
 `npx playwright test` drives a phone sized Chromium. Each test starts its own copy of the real API through `tests/e2e/backend.py`, which is `create_app` from `api/main.py` with only the data folder changed to `app/.e2e-data/`, so the repository's `data/` folder is never touched. One rescue test loads the demo student with no primary card in the plan, a plan the schema allows, because only then does the server ask which card was lost.
 
@@ -157,9 +161,125 @@ The Portuguese and Chinese of the welcome, the Guide and the Welcome button, as 
 | `protect_demo_1` | Every rail here is a fixture or a simulation and no real money moves. The API runs on this machine only, with no sign in, for one demo student. | Cada trilho aqui é uma fixture ou uma simulação e nenhum dinheiro real se move. A API roda só nesta máquina, sem login, para um único estudante de demonstração. | 这里的每个通道都是固定样例或模拟，不会转移真实资金。API 只在本机运行，没有登录，只服务一名演示学生。 |
 | `protect_demo_2` | The full security self assessment and the known limitations are in docs/self_assessment.md in the repository. | A autoavaliação de segurança completa e as limitações conhecidas estão em docs/self_assessment.md no repositório. | 完整的安全自评报告和已知局限，见代码仓库中的 docs/self_assessment.md。 |
 
+### Onboarding, tailoring and Me
+
+The labels of the onboarding, the tailoring and the Me page, as `src/i18n-onboarding.js` holds them, wait for a native speaker too. `tests/unit/onboarding-words.test.js` fails when this table no longer holds the words the app shows.
+
+| Key | English | Portuguese | Chinese |
+| --- | --- | --- | --- |
+| `open_me` | Me | Eu | 我的 |
+| `onb_trip_title` | Your trip | A sua viagem | 您的行程 |
+| `onb_trip_intro` | Three questions so Lifeline can speak to your trip. Nothing you choose here is sent to the server. | Três perguntas para o Lifeline falar da sua viagem. Nada do que você escolher aqui é enviado ao servidor. | 回答三个问题，Lifeline 就能针对您的行程说话。您在这里的选择不会发送到服务器。 |
+| `onb_home` | Where is home? | Qual é o seu país de origem? | 您来自哪里？ |
+| `onb_study` | Where will you study? | Onde você vai estudar? | 您将在哪里学习？ |
+| `onb_choose_country` | Choose a country | Escolha um país | 选择国家或地区 |
+| `onb_group_on_file` | Rules on file | Regras registradas | 已收录规则 |
+| `onb_group_others` | Every other country | Todos os outros países | 其他所有国家或地区 |
+| `onb_no_rules` | Lifeline has no sourced rules for {place} yet, so it cannot check that country's rules for you. | O Lifeline ainda não tem regras com fonte para este país ({place}), então não pode conferir as regras dele para você. | Lifeline 尚未收录{place}有来源的规则，因此无法为您核对当地规则。 |
+| `onb_purpose` | What is the trip for? | Qual é o motivo da viagem? | 这次出行的目的是什么？ |
+| `purpose_exchange` | Exchange | Intercâmbio | 交换 |
+| `purpose_degree` | Full degree | Graduação completa | 攻读完整学位 |
+| `purpose_internship` | Internship | Estágio | 实习 |
+| `purpose_leisure` | Leisure and travel | Lazer e viagem | 休闲旅行 |
+| `purpose_family` | Visiting friends and family | Visitar amigos e família | 探亲访友 |
+| `purpose_work` | Work or a conference | Trabalho ou conferência | 工作或参加会议 |
+| `onb_continue` | Continue | Continuar | 继续 |
+| `onb_skip` | Skip | Pular | 跳过 |
+| `onb_skip_note` | Skip keeps the demo student's sample plan. | Pular mantém o plano de exemplo do estudante de demonstração. | 跳过将保留演示学生的示例计划。 |
+| `onb_back` | Back | Voltar | 返回 |
+| `onb_next` | Next | Próximo | 下一步 |
+| `onb_step_n` | Step {n} of 5 | Etapa {n} de 5 | 第 {n} 步，共 5 步 |
+| `onb_plan_title` | Your safety net | A sua rede de segurança | 您的安全网 |
+| `onb_card_q` | Which card will you use most abroad? | Qual cartão você mais vai usar no exterior? | 在海外您最常用哪张卡？ |
+| `onb_card_common` | Common choices for students. Lifeline recommends none of them and is not paid by any of them. | Escolhas comuns entre estudantes. O Lifeline não recomenda nenhuma e não é pago por nenhuma. | 学生常见的选择。Lifeline 不推荐其中任何一个，也不从其中任何一家获得报酬。 |
+| `onb_card_note` | Choose the one you will carry most. You can change it later on Me. | Escolha o que você mais vai levar. Você pode mudar depois em Eu. | 请选择您最常带的那张。之后可以在「我的」中更改。 |
+| `card_home` | A card from home | Um cartão do seu país | 国内的卡 |
+| `card_unsure` | Not sure yet | Ainda não sei | 还不确定 |
+| `onb_unsure_1` | Many students carry one card made for travel and one card from home. | Muitos estudantes levam um cartão feito para viagem e um cartão do seu país. | 很多学生会带一张为旅行设计的卡和一张国内的卡。 |
+| `onb_unsure_2` | Before you leave, ask your bank at home which of its cards work abroad. | Antes de viajar, pergunte ao seu banco quais cartões dele funcionam no exterior. | 出发前，请向您国内的银行确认哪些卡可以在海外使用。 |
+| `onb_backup_q` | Will you carry a second card? | Você vai levar um segundo cartão? | 您会带第二张卡吗？ |
+| `onb_backup_hint` | Most students carry one, so a lost card does not leave them without money. | A maioria dos estudantes leva um, para não ficar sem dinheiro se perder o cartão. | 大多数学生都会带一张，这样丢卡时也不会没钱用。 |
+| `onb_yes` | Yes | Sim | 会 |
+| `onb_no` | No | Não | 不会 |
+| `onb_question_q` | Choose a safety question | Escolha uma pergunta de segurança | 选择一个安全问题 |
+| `safety_q_pass` | What are the last four characters of your student pass number? | Quais são os quatro últimos caracteres do número do seu cartão de estudante? | 您学生证号码的最后四位是什么？ |
+| `safety_q_school` | What was the name of your first school? | Qual era o nome da sua primeira escola? | 您上的第一所学校叫什么名字？ |
+| `safety_q_street` | What street did you grow up on? | Em que rua você cresceu? | 您在哪条街上长大？ |
+| `onb_answer` | Your answer | A sua resposta | 您的答案 |
+| `onb_answer_note` | Your answer is never stored. This page keeps only that you set one, and forgets even that when you close it. | A sua resposta nunca é guardada. Esta página guarda só que você definiu uma, e esquece até isso quando você a fecha. | 您的答案从不保存。本页只记住您已设置答案，关闭页面后连这一点也会忘记。 |
+| `onb_rescue_note` | In this demo the live rescue asks the sample plan's question: What are the last four characters of your student pass number? | Nesta demonstração, o resgate ao vivo faz a pergunta do plano de exemplo: quais são os quatro últimos caracteres do número do seu cartão de estudante? | 在本演示中，实时救援使用示例计划的问题：您学生证号码的最后四位是什么？ |
+| `onb_contact_q` | Who should Lifeline tell if your card is lost? | Quem o Lifeline deve avisar se você perder o cartão? | 如果您丢了卡，Lifeline 应该通知谁？ |
+| `onb_contact_name` | Name | Nome | 姓名 |
+| `onb_contact_rel` | Relationship | Relação | 关系 |
+| `rel_parent` | Parent | Mãe ou pai | 父母 |
+| `rel_sibling` | Brother or sister | Irmão ou irmã | 兄弟姐妹 |
+| `rel_partner` | Partner | Parceiro ou parceira | 伴侣 |
+| `rel_relative` | Other relative | Outro parente | 其他亲属 |
+| `rel_friend` | Friend | Amigo ou amiga | 朋友 |
+| `rel_other` | Someone else | Outra pessoa | 其他人 |
+| `onb_contact_phone` | Phone, optional | Telefone, opcional | 电话，选填 |
+| `onb_contact_email` | Email, optional | Email, opcional | 邮箱，选填 |
+| `onb_contact_channel` | How should they be told? | Como essa pessoa deve ser avisada? | 用什么方式通知对方？ |
+| `channel_whatsapp` | WhatsApp | WhatsApp | WhatsApp |
+| `channel_wechat` | WeChat | WeChat | 微信 |
+| `channel_telegram` | Telegram | Telegram | Telegram |
+| `channel_sms` | Text message | Mensagem de texto | 短信 |
+| `channel_phone_call` | Phone call | Ligação | 电话 |
+| `channel_email` | Email | Email | 邮件 |
+| `onb_on_device` | Lifeline's plan holds only a name and a channel. The phone and email stay on this page and are never sent; they are gone when you close it. | O plano do Lifeline guarda só um nome e um canal. O telefone e o email ficam nesta página e nunca são enviados; somem quando você a fecha. | Lifeline 的计划只保存姓名和联系方式类型。电话和邮箱只留在本页，从不发送；关闭页面后就会消失。 |
+| `onb_money_q` | If your card is lost, how much emergency money should go to your own account? | Se você perder o cartão, quanto dinheiro de emergência deve ir para a sua própria conta? | 如果您丢了卡，应该把多少应急资金转到您自己的账户？ |
+| `onb_money_hint` | It is only proposed. Nothing moves until you confirm it. | Ele só é proposto. Nada se move até você confirmar. | 这只是提议。您确认之前不会转出任何资金。 |
+| `onb_money_amount` | {amount} {currency} | {amount} {currency} | {amount} {currency} |
+| `onb_money_none` | None | Nenhum | 不需要 |
+| `onb_done_title` | Your plan on this page | O seu plano nesta página | 本页上的您的计划 |
+| `onb_done` | Done | Concluir | 完成 |
+| `onb_nothing_sent` | Nothing you set here was sent to Lifeline's server. The live rescue still uses the sample plan. | Nada do que você definiu aqui foi enviado ao servidor do Lifeline. O resgate ao vivo continua usando o plano de exemplo. | 您在这里设置的内容都没有发送到 Lifeline 的服务器。实时救援仍使用示例计划。 |
+| `hello_study` | Hello. Lifeline is ready for your time in {place}. | Olá. O Lifeline está pronto para o seu período de estudos. Destino: {place}. | 您好。Lifeline 已准备好陪您在{place}学习。 |
+| `hello_plain` | Hello. Lifeline is ready to help. | Olá. O Lifeline está pronto para ajudar. | 您好。Lifeline 随时为您提供帮助。 |
+| `from_home` | Money from {place} | Dinheiro do seu país: {place} | 来自{place}的钱 |
+| `from_home_plain` | Money from home | Dinheiro do seu país | 来自家里的钱 |
+| `starter_home_cn` | My family wants to send money from China. What will the bank ask for? | Minha família quer enviar dinheiro da China. O que o banco vai pedir? | 我的家人想从中国给我汇钱。银行会要求什么材料？ |
+| `starter_home_in` | My parents want to send money from India. How does that work? | Meus pais querem enviar dinheiro da Índia. Como funciona? | 我的父母想从印度给我汇钱。流程是怎样的？ |
+| `starter_home_br` | How can my family send me money from Brazil? | Como minha família pode me enviar dinheiro do Brasil? | 我的家人怎样从巴西给我汇钱？ |
+| `starter_home_other` | How can my family send me money from {place}? | Como minha família pode me enviar dinheiro? País de origem: {place}. | 我的家人怎样从{place}给我汇钱？ |
+| `me_title` | Me | Eu | 我的 |
+| `me_trip` | Your trip | A sua viagem | 您的行程 |
+| `me_no_trip` | No trip set, so Lifeline speaks in general terms. | Nenhuma viagem definida, então o Lifeline fala de forma geral. | 尚未设置行程，因此 Lifeline 只做一般性说明。 |
+| `me_trip_line` | {purpose}, from {home} to {study} | {purpose}. Origem: {home}. Destino: {study}. | {purpose}，从{home}到{study} |
+| `me_change` | Change | Mudar | 更改 |
+| `me_net` | Your safety net | A sua rede de segurança | 您的安全网 |
+| `me_sample` | Sample | Exemplo | 示例 |
+| `me_sample_note` | This is the demo student's sample plan, which the live rescue reads. | Este é o plano de exemplo do estudante de demonstração, que o resgate ao vivo lê. | 这是演示学生的示例计划，实时救援读取的就是它。 |
+| `me_card` | Main card | Cartão principal | 主卡 |
+| `me_backup` | Second card | Segundo cartão | 第二张卡 |
+| `me_question` | Safety question | Pergunta de segurança | 安全问题 |
+| `me_question_set` | Set. The answer is not stored. | Definida. A resposta não é guardada. | 已设置。答案不会保存。 |
+| `me_contact` | Trusted contact | Contato de confiança | 信任联系人 |
+| `me_contact_line` | {name}, by {channel} | {name}, por {channel} | {name}，通过{channel} |
+| `me_on_device` | On this page only: {details} | Só nesta página: {details} | 仅在本页：{details} |
+| `me_money` | Emergency money | Dinheiro de emergência | 应急资金 |
+| `me_routes` | How routes are chosen | Como as rotas são escolhidas | 如何选择路线 |
+| `me_route_rule` | Lifeline picks the cheapest route not marked Simulated. Simulated routes follow a real rail's rules, for practice. | O Lifeline escolhe a rota mais barata que não está marcada como Simulada. As rotas simuladas seguem as regras de um trilho real, para praticar. | Lifeline 选择未标为模拟的最便宜路线。模拟路线遵循真实通道的规则，用于练习。 |
+| `me_checks` | What a provider may ask | O que um provedor pode pedir | 服务商可能会要求什么 |
+| `me_check_intro` | Each check asks the server and writes one entry to your ledger, so it runs only when you tap it. | Cada verificação consulta o servidor e grava uma entrada no seu registro, por isso só roda quando você toca nela. | 每次核查都会询问服务器，并在您的账本中写入一条记录，所以只在您点按时运行。 |
+| `me_check_button` | Check: {what} | Verificar: {what} | 核查：{what} |
+| `check_remit_from_china` | money from China | dinheiro da China | 从中国汇款 |
+| `check_arrive_in_china` | arriving in China | chegada à China | 抵达中国 |
+| `check_enable_pix` | turning on Pix | ativar o Pix | 开通 Pix |
+| `me_check_none` | Lifeline has no check on file for this trip yet. | O Lifeline ainda não tem verificação registrada para esta viagem. | Lifeline 尚未收录适用于此行程的核查。 |
+| `me_check_documents` | Documents likely asked for | Documentos que provavelmente serão pedidos | 可能需要的材料 |
+| `me_check_triggers` | What may lead to a review | O que pode levar a uma análise | 可能引发审核的情况 |
+| `me_check_sources` | Sources: {ids} | Fontes: {ids} | 来源：{ids} |
+| `me_check_not_ready` | The server says this is not ready yet. | O servidor diz que isto ainda não está pronto. | 服务器表示目前尚未就绪。 |
+| `me_signin` | Sign in is coming soon. This demo runs as one demo student. | O login chega em breve. Esta demonstração funciona como um único estudante de demonstração. | 登录功能即将推出。本演示以一名演示学生运行。 |
+| `me_coming_soon` | Coming soon | Em breve | 即将推出 |
+| `me_close` | Close | Fechar | 关闭 |
+| `route_source` | Source: {id} | Fonte: {id} | 来源：{id} |
+
 ## Known gaps
 
 1. The Portuguese and Chinese labels were written without a native speaker and wait for one.
 2. Status words from the server, such as `done` and `completed`, are shown as the server writes them.
 3. The app always acts as the demo student, `student_001`. There is no sign in, as `docs/api.md` says.
-4. Standing payments, reminders, the monthly note, trace and precheck have endpoints but no screens yet.
+4. Standing payments, reminders, the monthly note and trace have endpoints but no screens yet. Precheck has one, on Me, for three kinds.
+5. A plan set in the onboarding is not sent anywhere, because the API has no endpoint for one, so the live rescue still asks the sample plan's question. The money from home label and the home country chat starter are worded but not shown yet.

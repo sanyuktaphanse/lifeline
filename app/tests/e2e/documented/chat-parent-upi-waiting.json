@@ -1,0 +1,76 @@
+{
+  "text": "Please confirm: send 40000 INR to student_001 for gift over upi_paynow_sim, fee 0 INR and exchange cost 0 INR. Nothing moves until you confirm. This turn: a transfer of 40000 INR to student_001: proposed, waiting for your confirmation.",
+  "lang": "en",
+  "confirmation": {
+    "action": {
+      "type": "transfer",
+      "source": "user_turn",
+      "idempotency_key": "parent_001:t1:propose_transfer:1",
+      "requested_at": "<time>",
+      "amount": "40000",
+      "currency": "INR",
+      "corridor": "IN>SG",
+      "payee_id": "student_001",
+      "purpose": "gift",
+      "instrument_id": null,
+      "standing_mandate_id": null,
+      "standing_terms": null,
+      "confirmation_token": null,
+      "plan_update": null,
+      "receipt_id": null,
+      "cancel_of": null,
+      "withdrawal_date": null
+    },
+    "confirmation_token": "<token>",
+    "warning_key": "warn.transfer.irreversible",
+    "routes": [
+      {
+        "rail": "upi_paynow_sim",
+        "corridor": "IN>SG",
+        "amount": "40000",
+        "currency_from": "INR",
+        "currency_to": "SGD",
+        "fee": "0",
+        "spread_cost": "0",
+        "tax_lines": [],
+        "arrival_hours": 1.0,
+        "status": "up",
+        "simulated": true,
+        "limit_ok": true,
+        "blocked_reason": null,
+        "rule_id": "in_upi_paynow_purpose_001",
+        "fee_source_url": null,
+        "rate_source": "fixture",
+        "quoted_at": "<time>",
+        "purpose": "gift",
+        "payee_id": null
+      }
+    ],
+    "selected_route": "the same route as above",
+    "council": null,
+    "expires_in_seconds": 300
+  },
+  "decision": {
+    "allowed": true,
+    "reasons": [],
+    "rule_ids": [
+      "R11"
+    ],
+    "tier": "T2",
+    "requires_confirmation": true,
+    "warning_key": "warn.transfer.irreversible",
+    "confirmation_token": null
+  },
+  "receipt": null,
+  "freeze": null,
+  "cancel": null,
+  "ledger_seqs": [
+    1,
+    2,
+    3
+  ],
+  "provider": "fake",
+  "model": "fake-model",
+  "blocked": [],
+  "turn_summary": "This turn: a transfer of 40000 INR to student_001: proposed, waiting for your confirmation."
+}

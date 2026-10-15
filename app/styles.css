@@ -204,3 +204,32 @@ fieldset.choices legend { font-weight: 600; font-size: 0.9rem; margin-block-end:
 .guide-protect h2 { margin: 0; font-size: 1.15rem; }
 .guide-protect .guide-section:last-of-type { border-block-end: 0; }
 .guide-verify { display: flex; flex-direction: column; gap: 8px; padding-block-start: 8px; }
+
+/* Onboarding and Me */
+.onboarding, .me { display: flex; flex-direction: column; gap: 12px; }
+.onb { display: flex; flex-direction: column; gap: 12px; }
+.onb h2, .me h2 { margin: 0; font-size: 1.2rem; }
+.onb h3 { margin: 0; font-size: 1.05rem; }
+.onb-step { display: flex; flex-direction: column; gap: 10px; }
+.onb-step ul { margin: 0; padding-inline-start: 1.2em; }
+.onb select, .onb input[type="text"], .onb input[type="tel"], .onb input[type="email"] {
+  min-height: 44px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); width: 100%;
+}
+.field > label { font-weight: 600; font-size: 0.9rem; }
+/* The countries with rules on file: the group heading is bold in every browser, the names wherever options take styles. */
+optgroup.on-file, option.on-file { font-weight: 700; }
+.onb-choices { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.onb-choices legend { font-weight: 600; font-size: 0.9rem; padding: 0; margin-block-end: 4px; }
+.onb-options { display: flex; flex-direction: column; gap: 6px; }
+.onb-option {
+  display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer;
+}
+.onb-option:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.onb-skip { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.chat-greeting { margin: 0; font-size: 1.1rem; font-weight: 600; }
+.me .card h3 { display: flex; align-items: center; gap: 8px; }
+.me .card h4 { margin: 4px 0 0; font-size: 0.95rem; }
+.me .card ul { margin: 0; padding-inline-start: 1.2em; }
+.me-check-block { display: flex; flex-direction: column; gap: 8px; }
+.btn-link + .btn-link { margin-inline-start: 0; }

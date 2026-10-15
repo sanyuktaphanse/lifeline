@@ -5,6 +5,7 @@ import { el, errorText, label } from "../dom.js";
 import { t } from "../i18n.js";
 import { chatBody, confirmBody } from "../requests.js";
 import { renderReply } from "./reply.js";
+import { greeting } from "../tailoring.js";
 
 // Source: docs/api.md, POST /chat: text is 1 to 4,000 characters and pasted_text 1 to 20,000.
 const MAX_TEXT = 4000;
@@ -80,7 +81,15 @@ export function chatView(ctx, root) {
     node.scrollIntoView({ block: "start", behavior: "smooth" });
   };
 
+  // The greeting names the place of study from the onboarding, and is plain without a trip.
+  const hello = el("p", { class: "chat-greeting", id: "chat-greeting" });
+  ctx.refreshGreeting = () => {
+    hello.textContent = greeting(ctx.profile.trip, ctx.lang());
+  };
+  ctx.refreshGreeting();
+
   root.replaceChildren(
+    hello,
     label(ctx, "p", "chat_intro", null, { class: "intro" }),
     thread,
     el(
