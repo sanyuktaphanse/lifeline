@@ -52,3 +52,11 @@ The licence was read from each project's own repository at the version used.
 | `ubuntu:24.04` image | 24.04 | The official Ubuntu image on Docker Hub, named in `chain/docker-compose.yml`; the nodes run inside it | Each package in the image carries its own licence. Docker Hub's licence note for the image points to Canonical's Intellectual property rights policy, which says the system images and Ubuntu packages are used in accordance with the copyright licences in them |
 
 solc is a build time tool: it compiles the contract into `chain/build/`, which git ignores, and it is not shipped. No compiler code is in this repository.
+
+## Icons copied into the app
+
+The app's line icons are copied, not downloaded: `app/src/icons.js` holds their paths as fixed text, so the app loads nothing from outside for them.
+
+| Component | Where it comes from | Licence |
+| --- | --- | --- |
+| Lucide icons, the paths in `app/src/icons.js` | Derived from the Lucide icon set, lucide.dev and github.com/lucide-icons/lucide, in Joanne's mockup on the branch `joanne/mockup`, and copied into the app with the notice | ISC License. Copyright for portions of Lucide is held by Cole Bemis, from 2013 to 2022, as part of Feather, under MIT; all other copyright for Lucide is held by Lucide Contributors, 2022. The full notice is kept at the top of `app/src/icons.js`, as the licence asks |

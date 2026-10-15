@@ -13,6 +13,7 @@ import { welcomeView } from "./views/welcome.js";
 import { onboardingView } from "./views/onboarding.js";
 import { meView } from "./views/me.js";
 import { logo } from "./logo.js";
+import { icon } from "./icons.js";
 import { planOnFile } from "./onboarding.js";
 
 const VIEWS = {};
@@ -119,6 +120,10 @@ function showMe() {
 document.getElementById("open-welcome").addEventListener("click", showWelcome);
 document.getElementById("open-me").addEventListener("click", showMe);
 document.getElementById("brand").replaceChildren(logo(24));
+// Lucide line icons beside the words of each tab and the Me button (src/icons.js). The words stay the label.
+const TAB_ICONS = { home: "home", chat: "chat", rescue: "buoy", activity: "history", guide: "help" };
+for (const [name, glyph] of Object.entries(TAB_ICONS)) document.getElementById(`tab-${name}`).prepend(icon(glyph));
+document.getElementById("open-me").prepend(icon("user"));
 chatView(ctx, document.getElementById("view-chat"));
 rescueView(ctx, document.getElementById("view-rescue"));
 VIEWS.activity = activityView(ctx, document.getElementById("view-activity"));

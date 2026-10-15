@@ -37,3 +37,23 @@ export function logo(height) {
   node.append(logoMark(height), wordmark);
   return node;
 }
+
+// The heartbeat orb: a violet sphere with the logo's pulse beating across it, as on a heart monitor. Decoration
+// only, so it is hidden from screen readers; with reduced motion asked for, it holds still (styles.css).
+export function orb(size = "large") {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("viewBox", LOGO_VIEWBOX);
+  svg.setAttribute("focusable", "false");
+  for (const kind of ["trace-base", "trace"]) {
+    const path = document.createElementNS(SVG, "path");
+    path.setAttribute("d", LOGO_PATH);
+    path.setAttribute("class", kind);
+    path.setAttribute("pathLength", "100");
+    svg.append(path);
+  }
+  const node = document.createElement("div");
+  node.className = `orb orb-${size}`;
+  node.setAttribute("aria-hidden", "true");
+  node.append(svg);
+  return node;
+}
