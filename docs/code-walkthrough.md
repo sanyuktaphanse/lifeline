@@ -10028,6 +10028,10 @@ PASSPHRASE_DETAIL = f"This API is locked: send the passphrase in the {PASSPHRASE
 # pages, which show only the API's shape and nothing from the ledger.
 OPEN_PATHS = frozenset({"/health", "/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json"})
 
+# The keys a 422 keeps of each validation error: where it is, why, and its kind. FastAPI's input, ctx and url are
+# left out, because input and ctx can carry what the caller sent.
+VALIDATION_FIELDS = ("loc", "msg", "type")
+
 logger = logging.getLogger("lifeline.api")
 ```
 
@@ -10331,10 +10335,9 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def invalid(request: Request, error: RequestValidationError) -> JSONResponse:
-        errors = error.errors()
-        if request.url.path.startswith("/rescue/"):
-            # A rescue request can hold the identity answer, so its 422 never echoes what was sent.
-            errors = [{name: value for name, value in item.items() if name != "input"} for item in errors]
+        # Every 422 names the field and the reason only, never what was sent: a request can hold pasted text,
+        # an identity answer or a body far over the limit. Source: docs/decisions.md, 15 October 2026.
+        errors = [{name: item.get(name) for name in VALIDATION_FIELDS} for item in error.errors()]
         return JSONResponse(status_code=422, content={"detail": jsonable_encoder(errors)})
 
     def known(user: str) -> str:
@@ -10458,7 +10461,7 @@ def create_app(
 
 `create_app` first calls `require_production_secrets`. When `LIFELINE_ENV` is `production` and `LIFELINE_CONFIRM_SECRET` or `LIFELINE_ANCHOR_SECRET` is missing or empty, it raises `RuntimeError` naming the variable, so the API does not start. Before the Stage 10 review an empty confirmation secret signed every token with an empty key, and an empty anchor secret only failed at the first anchor, which never blocks a payment. `development_secrets` names the secrets that fall back to their public development value, for the verify endpoint.
 
-A `ModelAdapterError` on any endpoint, such as a missing API key or a status error from either provider, becomes a `503` with the reason, through `exception_handler`; the reason names the provider and, when there was one, the status, and never the key. `known` answers `404` for any user other than the demo student. `direct` runs a read only tool through `AgentLoop.act`, turns a refusal into a `403` with the rules through `refused`, and answers `404` when the result holds an error instead of the expected key, such as a receipt this student never received.
+A `ModelAdapterError` on any endpoint, such as a missing API key or a status error from either provider, becomes a `503` with the reason, through `exception_handler`; the reason names the provider and, when there was one, the status, and never the key. A request that fails validation, on any endpoint, becomes a `422` through `invalid`, which keeps of each error only the `VALIDATION_FIELDS`, the field, the reason and its kind, so nothing the caller sent comes back, decision 1 of 15 October 2026. `known` answers `404` for any user other than the demo student. `direct` runs a read only tool through `AgentLoop.act`, turns a refusal into a `403` with the rules through `refused`, and answers `404` when the result holds an error instead of the expected key, such as a receipt this student never received.
 
 Each endpoint is a function under a decorator that names its method and path, and its return type is the response model FastAPI checks and documents. `/chat` builds the student's `Message`, setting `lang` only when the request gives one so the loop's detection still works. When the request has `pasted_text`, it becomes a second `Message` with source `pasted_text`, passed to the loop as `pasted`. `/confirm` passes the token to the loop with an empty message. Both return the reply through `_without_tokens`. `/ledger/{user}` returns only the entries whose payload names that student. `/ledger/{user}/verify` checks the whole chain, because one broken entry anywhere breaks every hash after it. `/trace` and `/precheck` run through `direct` and return the contract's `TraceResult` and `PrecheckResult`. `/standing/run_due` runs the same check as the tick at the time the request names and returns the events. It answers `403` when `LIFELINE_ENV` is `production`, because a caller who chooses the time could bring a run forward.
 

@@ -278,3 +278,7 @@ This file records product decisions for Lifeline, newest last, with the date eac
 3. When it is empty the API behaves as before, so the tests and the harness run unchanged. `GET /health` reports `passphrase_required`, true or false, so the app knows whether to ask for it.
 4. In production, `LIFELINE_ENV=production`, the API does not start when the passphrase is empty or shorter than 8 characters. The 8 is `MIN_SECRET_CHARS` in `core/agent.py`: the reply guard looks for a secret only from that length on, so a shorter passphrase could not be redacted from a reply.
 5. The reply guard redacts the passphrase like the other secrets, and CORS allows the header from `localhost` and `127.0.0.1`, so the app can send it.
+
+## 15 October 2026, the 422 detail
+
+1. Every `422` the API answers keeps of each validation error only `loc`, `msg` and `type`, the field and the reason, on every endpoint. FastAPI's `input`, `ctx` and `url` are left out, because `input` and `ctx` can carry what the caller sent, such as pasted text, an identity answer or a body over the limit. It extends to every endpoint what decision 22 did for the rescue, and closes open item 79.

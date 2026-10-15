@@ -1090,7 +1090,7 @@ Response `200`. The ledger's proposal holds `"senders": ["parent", "aunt_or_uncl
 }
 ```
 
-With one sender, or none, `remit_from_china` gives its ordinary answer shown above. A request whose body fails validation is answered with `422`, and that answer echoes the body back to the caller, as open item 79 records; it is never written to the ledger. A quote on `SG>CN` returns one Wise route whose `rule_id` is `cn_wise_in_007`, which lane C can show as the inbound route; the demo mandate does not allow the corridor, so a transfer on it is refused under R05.
+With one sender, or none, `remit_from_china` gives its ordinary answer shown above. A request whose body fails validation is answered with `422`, whose detail names each field and the reason and never repeats what was sent; it is never written to the ledger. A quote on `SG>CN` returns one Wise route whose `rule_id` is `cn_wise_in_007`, which lane C can show as the inbound route; the demo mandate does not allow the corridor, so a transfer on it is refused under R05.
 
 ### Ledger notes from Stage 8
 
@@ -1852,10 +1852,10 @@ The chat tool `record_cash_withdrawal` records an overseas cash withdrawal the s
 | `404` | The `user_id` is not known, on every endpoint that takes a user | `{"detail": "No user <id>."}` |
 | `404` | `/trace` for a receipt this student does not hold | `{"detail": "<reason>"}` |
 | `403` | `/trace` or `/precheck` refused by the mandate engine | `{"detail": {"rule_ids": [...], "reasons": [...]}}` |
-| `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long, or a rescue `trigger` or a `lang` is outside its list | FastAPI's validation detail; a `422` from `/rescue/start` or `/rescue/step` leaves out `input`, because a rescue request can hold the identity answer, and a `lang` outside the list has type `string_pattern_mismatch` |
+| `422` | A field is missing, has the wrong type, or `text` or `pasted_text` is empty or too long, or a rescue `trigger` or a `lang` is outside its list | A list with one item per failed field, each holding only `loc`, `msg` and `type`, the field and the reason; the value sent is never repeated, on every endpoint, so pasted text, an identity answer or a body over the limit never comes back. A `lang` outside the list has type `string_pattern_mismatch` |
 | `403` | `/standing/run_due` when `LIFELINE_ENV` is `production` | `{"detail": "<reason>"}` |
 | `422` | `/note/{user_id}/monthly` with a `month` that is not `YYYY-MM`; the detail never repeats it | `{"detail": "month must be a four digit year, a hyphen and a two digit month."}` |
-| `422` | `/reminders/{user_id}` with a `now` that is not a time with a zone | FastAPI's validation detail |
+| `422` | `/reminders/{user_id}` with a `now` that is not a time with a zone | The same list, with `loc` `["query", "now"]`; the value sent is never repeated |
 | `503` | `/chat` could not get an answer from a model; `/confirm` makes no model call today but would answer a model error the same way, such as a missing key or a status error from the provider; the reason names the provider and, when there was one, the status | `{"detail": "<reason>"}` |
 
 Unknown user, `404`:
@@ -1872,16 +1872,12 @@ Empty text, `422`:
 {
   "detail": [
     {
-      "type": "string_too_short",
       "loc": [
         "body",
         "text"
       ],
       "msg": "String should have at least 1 character",
-      "input": "",
-      "ctx": {
-        "min_length": 1
-      }
+      "type": "string_too_short"
     }
   ]
 }
@@ -1907,4 +1903,4 @@ A refusal by the mandate engine is not an HTTP error. It comes back as `200` wit
 
 ## What no test covers
 
-Every behaviour above has a test in `tests/` except these, which were checked by hand against a running app on 10 October 2026 and are open item 176 of `docs/technical-reference.md`: a `confirmation_rejected` entry with the reason `no_route`; a `422` that echoes the body on the endpoints other than the rescue, which open item 79 also records; a `403` from `/precheck` or `/trace` when the mandate engine refuses, over HTTP; the `422` for a `now` with no time zone and the `404` for an unknown user on `/reminders`; an unknown `action_kind` coming back as `unknown` over HTTP; an anchor after a new payee, a freeze or a new standing mandate, each on its own, where the tests cover a payment and the hourly anchor; the family notice reporting every wrong identity answer; and a transfer the student typed going ahead over HTTP beside a paste that repeats it, which is tested in the loop.
+Every behaviour above has a test in `tests/` except these, which were checked by hand against a running app on 10 October 2026 and are open item 176 of `docs/technical-reference.md`: a `confirmation_rejected` entry with the reason `no_route`; a `403` from `/precheck` or `/trace` when the mandate engine refuses, over HTTP; the `422` for a `now` with no time zone and the `404` for an unknown user on `/reminders`; an unknown `action_kind` coming back as `unknown` over HTTP; an anchor after a new payee, a freeze or a new standing mandate, each on its own, where the tests cover a payment and the hourly anchor; the family notice reporting every wrong identity answer; and a transfer the student typed going ahead over HTTP beside a paste that repeats it, which is tested in the loop.
