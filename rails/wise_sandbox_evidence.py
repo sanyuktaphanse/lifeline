@@ -3,8 +3,9 @@
 `make evidence-wise` runs it. Every payment goes through Lifeline's own API in process, exactly as a student's
 would: a proposal the mandate engine checks, a confirmation with the engine's token, the payment on the Wise sandbox
 rail, and every step in a hash chained ledger, which the run verifies at the end. Only the model is scripted, as in
-`core/harness.py`, so the run needs no model key. The one call that does not pass the engine moves a sandbox transfer
-along Wise's simulated statuses; it moves no money and exists only in Wise's sandbox.
+`core/harness.py`, so the run needs no model key. The two calls that do not pass the engine move a sandbox transfer
+along Wise's simulated statuses and, after a refused payment, read the profile's balance; neither moves money, and both
+exist only in Wise's sandbox.
 
 It refuses to start without WISE_SANDBOX_TOKEN, and neither the token nor a confirmation token reaches the log.
 The ledger and the conversation store go to `.harness_tmp/`, inside the repository and ignored by git.
@@ -26,7 +27,7 @@ from contracts.errors import RailError
 from contracts.interfaces import ModelAdapter
 from contracts.schemas import Message, Role, ToolCall
 from core.model_adapter import environment
-from rails.wise_sandbox import SANDBOX_STEP, STATUS_SOURCE, WiseSandboxClient, WiseSandboxConfig
+from rails.wise_sandbox import SANDBOX_STEP, STATUS_SOURCE, WiseSandboxClient, WiseSandboxConfig, WiseSandboxError
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "evidence" / "wise-sandbox.md"
@@ -111,8 +112,20 @@ def run(client: WiseSandboxClient, out: Path, workdir: Path = WORKDIR) -> list[d
         elif cancel:
             log("confirm", "the student confirms", f"cancel {cancel['status']}{': ' + cancel['reason'] if cancel.get('reason') else ''}")
         else:
-            log("confirm", "the student confirms", "no receipt: " + reply.get("text", "")[:200])
+            log("confirm", "the student confirms", "no receipt: " + reply.get("text", ""))
+            if not any(row["step"] == "balance" for row in rows):
+                balance()
         return reply
+
+    def balance() -> None:
+        # Sandbox only, like the simulate step: it reads the profile's balances and moves nothing, so the log shows
+        # whether a refused funding was for lack of money.
+        try:
+            held = client.balances().get(ALLOWANCE["currency"])
+            result = f"{ALLOWANCE['currency']} balance held: {held if held is not None else 'no balance in this currency'}"
+        except WiseSandboxError as error:
+            result = f"refused: {error}"
+        log("balance", f"the profile's {ALLOWANCE['currency']} balance, sandbox only", result)
 
     def trace(receipt_id: str) -> None:
         response = api.post("/trace", json={"user_id": USER, "receipt_id": receipt_id})
