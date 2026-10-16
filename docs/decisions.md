@@ -282,3 +282,11 @@ This file records product decisions for Lifeline, newest last, with the date eac
 ## 15 October 2026, the 422 detail
 
 1. Every `422` the API answers keeps of each validation error only `loc`, `msg` and `type`, the field and the reason, on every endpoint. FastAPI's `input`, `ctx` and `url` are left out, because `input` and `ctx` can carry what the caller sent, such as pasted text, an identity answer or a body over the limit. It extends to every endpoint what decision 22 did for the rescue, and closes open item 79.
+
+## 16 October 2026, the Wise sandbox run
+
+1. `make evidence-wise` was run against Wise's sandbox with a personal sandbox account, a personal API token, its profile and one SGD recipient for `self_sg`, with the SGD balance funded. Both quotes worked, the engine allowed both 25 SGD transfers under R11, and Wise created both transfers, status `incoming_payment_waiting`.
+2. Wise refused to fund each transfer with a 403 that carried the headers `x-2fa-approval-result` and `x-2fa-approval`. That is Wise's strong customer authentication, which Wise's public keys page says it no longer lets a personal account complete by signed API requests under its PSD2 policy. Only a business account can fund a transfer by API, and the team has none, so no transfer completed and no money moved.
+3. The rail now names that refusal in its own sentence, `SCA_REFUSED` in `rails/wise_sandbox.py`. When Wise creates a transfer and then refuses to fund it, the rail asks Wise to cancel the draft so nothing is left waiting there, and the error in the ledger and the reply names the transfer id and its status. A funding Wise answers with the status REJECTED still leaves the transfer unfunded for a retry, as item 4 of 10 October says.
+4. The evidence run logs a refused confirmation in full and, after the first refusal, reads the profile's balance, sandbox only, so the log shows the refusal was not for lack of money. It now makes two calls that do not pass the engine, the simulation and the balance read, and neither moves money; this updates item 8 of 10 October.
+5. The log is published as it is, in `docs/wise_sandbox_log.md`, rather than claiming a completed transfer. It records live quotes and real sandbox transfers, and Wise's refusal to fund them.

@@ -78,6 +78,8 @@ Without a token the `wise` rail is a fixture. With one, its quotes, transfers, t
 4. Top up the sandbox balance in the sending currency, because the rail funds transfers from it.
 5. Run `make evidence-wise`. It writes `evidence/wise-sandbox.md`, the sandbox operation log: two transfers the demo student proposes and confirms through Lifeline's API and mandate engine, one moved through Wise's simulated statuses and one cancelled, and a check that the ledger verifies. The ledger of the run is kept in `.harness_tmp/wise-sandbox/`.
 
+A personal sandbox account can quote and create transfers, but Wise refuses to fund them by API under its PSD2 policy, which no longer lets a personal account complete strong customer authentication with signed requests. The log of such a run is `docs/wise_sandbox_log.md`. Completing a transfer needs a business sandbox profile.
+
 ## 6. The FISCO BCOS anchor
 
 Optional. `bash chain/setup.sh` starts a four node FISCO BCOS network in Docker, deploys the contract, and prints the four `ANCHOR` and `FISCO_` settings for `.env`. `chain/README.md` gives the details. When the chain cannot be reached, the agent writes an `anchor_failed` note and payments go on.

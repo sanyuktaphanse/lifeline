@@ -9,9 +9,9 @@ Lifeline is a cross border finance agent for students studying abroad, entered i
 | 3. Demo video, no more than 5 minutes | Attached to the submission form; it is not in the repository. |
 | 4. Source code with README, repository link, deployment instructions and test cases | This repository, https://github.com/sanyuktaphanse/lifeline, public, so anyone can clone it: [README.md](../../README.md), [docs/deployment.md](../deployment.md), the backend tests in [tests/](../../tests/) and the app tests in [app/tests/](../../app/tests/) |
 | 5. Security self assessment: permission tier implementation and known risk list | [docs/self_assessment.md](../self_assessment.md) |
-| 6. Execution evidence: simulated account or sandbox operation logs | `evidence/report.md`, which `make evidence` writes and CI uploads as the `evidence-report` artifact on every run whose tests pass; the stranger runs in [suites/scenarios/stranger/](../../suites/scenarios/stranger/) and the live stranger test they replay, [docs/stranger_test.md](../stranger_test.md); and the chain record, [chain/evidence.md](../../chain/evidence.md); and the demo video, which the rules also name here, attached to the submission form |
+| 6. Execution evidence: simulated account or sandbox operation logs | `evidence/report.md`, which `make evidence` writes and CI uploads as the `evidence-report` artifact on every run whose tests pass; the stranger runs in [suites/scenarios/stranger/](../../suites/scenarios/stranger/) and the live stranger test they replay, [docs/stranger_test.md](../stranger_test.md); and the chain record, [chain/evidence.md](../../chain/evidence.md); the Wise sandbox operation log of 16 October 2026, [docs/wise_sandbox_log.md](../wise_sandbox_log.md), which records live quotes and transfers created in Wise's sandbox and Wise's refusal to fund them; and the demo video, which the rules also name here, attached to the submission form |
 
-No money moves anywhere: every rail is a fixture or a simulation, and the Wise sandbox log that `make evidence-wise` writes is pending a sandbox token.
+No money moves anywhere: every rail is a fixture, a simulation or Wise's sandbox. The Wise sandbox log shows Wise refusing to let a personal account fund a transfer by API, so no sandbox transfer completed.
 
 ## How to check this yourself
 
