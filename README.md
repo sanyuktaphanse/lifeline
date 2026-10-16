@@ -19,7 +19,7 @@ make dev
 
 Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. CI runs 3.12, and 3.13 works too. Name the virtual environment `.venv` in the repository folder, because the Makefile runs `.venv/bin/python` when it exists and plain `python` otherwise.
 
-`pytest` collects 1642 tests: 1635 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
+`pytest` collects 1648 tests: 1641 pass, 3 are skipped because no FISCO BCOS node answers, and 4 are expected failures for open items 101, 109 and 110.
 
 `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`.
 
@@ -43,7 +43,7 @@ The API is for developer machines only. It binds to `127.0.0.1` and has no accou
 
 ## Not in this repository yet
 
-1. A real rail. `rails/wise_sandbox.py` calls Wise's sandbox, which moves no money, only when `WISE_SANDBOX_TOKEN` is set; no money moves anywhere today.
+1. A real rail. `rails/wise_sandbox.py` calls Wise's sandbox, which moves no money, only when `WISE_SANDBOX_TOKEN` is set; no money moves anywhere today. A sandbox run on 16 October 2026 took live quotes and created transfers in Wise's sandbox, but Wise refuses to let a personal account fund a payment by API, so no transfer completed; the log is [docs/wise_sandbox_log.md](docs/wise_sandbox_log.md).
 2. A Wise sandbox operation log. `make evidence-wise` writes one, and needs a sandbox token that is not set up yet.
 
 ## Documents
