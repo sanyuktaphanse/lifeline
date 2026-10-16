@@ -20,7 +20,7 @@ python3.12 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 15 October 2026 it gave 1635 passed, 3 skipped and 4 expected failures, 1642 collected, on branch `lane-a/final-docs`.
+The suite needs no key and makes no network call: `tests/conftest.py` fails any test that reaches a real model provider and blanks the Wise sandbox token. On 16 October 2026 it gave 1641 passed, 3 skipped and 4 expected failures, 1648 collected, on branch `lane-a/wise-sandbox-log`.
 
 ```bash
 make evidence
@@ -77,6 +77,8 @@ Without a token the `wise` rail is a fixture. With one, its quotes, transfers, t
 3. Make a recipient in the sandbox for each payee the demo pays, and list them in `WISE_SANDBOX_RECIPIENTS` as `payee_id:recipient_account_id` pairs separated by commas, such as `self_sg:12345678`.
 4. Top up the sandbox balance in the sending currency, because the rail funds transfers from it.
 5. Run `make evidence-wise`. It writes `evidence/wise-sandbox.md`, the sandbox operation log: two transfers the demo student proposes and confirms through Lifeline's API and mandate engine, one moved through Wise's simulated statuses and one cancelled, and a check that the ledger verifies. The ledger of the run is kept in `.harness_tmp/wise-sandbox/`.
+
+A personal sandbox account can quote and create transfers, but Wise refuses to fund them by API under its PSD2 policy, which no longer lets a personal account complete strong customer authentication with signed requests. The log of such a run is `docs/wise_sandbox_log.md`. Completing a transfer needs a business sandbox profile.
 
 ## 6. The FISCO BCOS anchor
 

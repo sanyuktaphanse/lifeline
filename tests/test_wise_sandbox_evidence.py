@@ -7,7 +7,7 @@ import pytest
 
 from rails.wise_sandbox import WiseSandboxClient, WiseSandboxConfig
 from rails.wise_sandbox_evidence import main, run
-from tests.test_wise_sandbox import PROFILE, RECIPIENTS, TOKEN, FakeWise
+from tests.test_wise_sandbox import PROFILE, RECIPIENTS, SCA_SENTENCE, TOKEN, FakeWise
 
 
 def _client(wise):
@@ -67,3 +67,26 @@ def test_the_run_refuses_when_the_demo_payee_has_no_sandbox_recipient(tmp_path):
 
     with pytest.raises(SystemExit, match="WISE_SANDBOX_RECIPIENTS"):
         run(client, tmp_path / "x.md", tmp_path / "run")
+
+
+def test_a_refused_funding_is_logged_in_full_with_the_balance_that_was_held(tmp_path):
+    out = tmp_path / "wise-sandbox.md"
+    balances = [{"id": 1, "currency": "SGD", "type": "STANDARD", "visible": True, "amount": {"value": 1000, "currency": "SGD"}}]
+    wise = FakeWise(fund_code=403, fund_sca=True, balances=balances)
+
+    run(_client(wise), out, tmp_path / "run")
+
+    log = out.read_text(encoding="utf-8")
+    refused = [line for line in log.splitlines() if line.startswith("| ") and "| confirm |" in line and "no receipt" in line]
+    assert len(refused) == 2
+    for line in refused:
+        assert "and refused to fund it: " + SCA_SENTENCE in line
+    balance = [line for line in log.splitlines() if "| balance |" in line]
+    assert len(balance) == 1
+    assert "sandbox only" in balance[0] and "SGD balance held: 1000" in balance[0]
+    assert "receipt" not in _ledger_kinds(tmp_path / "run")
+    assert "first broken entry: none" in log
+    assert TOKEN not in log
+    assert "confirmation_token" not in log
+    assert "made-up-approval-id" not in log
+    assert all(transfer["status"] == "cancelled" for transfer in wise.transfers.values())

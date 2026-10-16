@@ -200,7 +200,7 @@ This is item 5 of the submission: the permission tier implementation and the kno
 
 ### The master plan's limitations on main today
 
-1. Pix and UPI to PayNow are simulated with their published limits. This still holds, and goes further: Wise is not on a real sandbox either. Every rail on `main` is a fake, a simulation or Wise's sandbox, and no real money moves; the sandbox rail runs only when `WISE_SANDBOX_TOKEN` is set, which it is not yet.
+1. Pix and UPI to PayNow are simulated with their published limits. This still holds, and goes further: Wise is not on a real sandbox either. Every rail on `main` is a fake, a simulation or Wise's sandbox, and no real money moves; the sandbox rail runs only when `WISE_SANDBOX_TOKEN` is set. The token is set up, the rail quotes and creates transfers on Wise's sandbox, and Wise's policy stops a personal account funding a payment by API, so the rail has never completed a transfer; the log of the run is `docs/wise_sandbox_log.md`.
 2. Third party freezes depend on partner APIs, and where one is not offered the rescue gives a deep link and says so. This still holds, as `tests/test_agent.py::test_freeze_card_on_revolut_records_not_supported_with_a_deep_link_and_says_so_honestly` shows; the deep link is a placeholder on `example.invalid`, open item 12.
 3. Lifeline does not hold funds and is not a licensed payment institution. This still holds.
 4. Knowledge facts are correct as of their checked dates and can change. This still holds, and no entry has its second check, open item 164. That the agent states the date when asked is not tested.
@@ -275,7 +275,7 @@ python -c "from core.harness import evaluate; r=[e for e in evaluate() if e.suit
 ```
 
 1. Clone the repository and install, in a virtual environment named `.venv`, with `python3.12 -m venv .venv`, or `python3.13 -m venv .venv` if that is what you have. Python 3.12 or later is required: `core/agent.py` uses the generic function syntax of 3.12, so on 3.11 pytest fails at collection with a syntax error before a single test runs. The repository is public, so anyone can clone it; the submitted archive works in place of the clone.
-2. On 15 October 2026, `pytest` collects 1642 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
+2. On 16 October 2026, `pytest` collects 1648 tests: 3 are skipped because no FISCO BCOS node answers, 4 are expected failures for open items 101, 109 and 110, and the rest pass.
 3. `make evidence` prints `58 passed, 0 failed, 8 not automated; stranger runs: 16 passed, 1 expected failing, 0 failed, 0 passes but flagged` and writes `evidence/report.md`, whose By suite table shows the attacks: 28 entries, 27 passed, 1 not automated.
 4. The last command plays the attack scenarios alone and prints `28 attacks, 27 passed, not passed: ['X25 not automated']`.
 5. The attempts behind the security review are in the section Attacks attempted and held of `docs/technical-reference.md`, and the stranger test is `docs/stranger_test.md`.

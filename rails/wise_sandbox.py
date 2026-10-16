@@ -67,6 +67,14 @@ CUSTOMER_ID_NAMESPACE = uuid.UUID("6f1c2b0e-7c55-4c3a-9a51-6b1f1e0d9a11")
 # Source: Wise's quote reference above. Lifeline funds sandbox transfers from the profile's Wise balance.
 PAY_IN = "BALANCE"
 REFERENCE = "Lifeline sandbox"
+# Source: Wise's sandbox, 16 October 2026: funding a transfer from a personal account answered 403 with the header
+# x-2fa-approval, and Wise's public keys page says signed requests no longer complete strong customer authentication
+# on personal accounts (docs/decisions.md, 16 October 2026).
+SCA_HEADER = "x-2fa-approval"
+SCA_REFUSED = (
+    "Wise asked for strong customer authentication to fund the transfer, which Wise no longer allows a personal "
+    "account to complete by API; the payment can only be funded in Wise's own app."
+)
 
 
 class WiseSandboxError(Exception):
@@ -137,6 +145,8 @@ class WiseSandboxClient:
             response = self._http.request(method, path, json=body)
         except httpx.HTTPError as error:
             raise WiseSandboxError(f"The Wise sandbox could not be reached ({type(error).__name__}).") from None
+        if response.status_code == 403 and SCA_HEADER in response.headers:
+            raise WiseSandboxError(SCA_REFUSED)
         if response.status_code >= 400:
             raise WiseSandboxError(f"The Wise sandbox answered {response.status_code}: {_reason(response)}.")
         try:
@@ -243,7 +253,13 @@ class WiseSandboxRail(Rail):
         try:
             quote = self._client.quote(route.currency_from, route.currency_to, route.amount, account)
             transfer = self._client.create_transfer(account, str(quote["id"]), _customer_transaction_id(idempotency_key, request))
-            funding = self._client.fund(int(transfer["id"]))
+            try:
+                funding = self._client.fund(int(transfer["id"]))
+            except WiseSandboxError as error:
+                self._cancel_draft(int(transfer["id"]))
+                raise WiseSandboxError(
+                    f"Wise created transfer {transfer['id']}, status {transfer.get('status')}, and refused to fund it: {error}"
+                ) from None
             if funding.get("status") == "REJECTED":
                 # The transfer stays unfunded, so a retry under the same key finds it and funds it once.
                 raise RailError(
@@ -272,6 +288,13 @@ class WiseSandboxRail(Rail):
         self._requests[idempotency_key] = request
         self._seen[receipt.receipt_id] = (status, now)
         return receipt.model_copy(deep=True)
+
+    def _cancel_draft(self, transfer_id: int) -> None:
+        """Cancel a transfer Wise created but would not fund, so nothing is left waiting on Wise."""
+        try:
+            self._client.cancel(transfer_id)
+        except WiseSandboxError:  # anti-pattern: SILENT-EXCEPT ok, the refused funding is the error the student hears
+            pass
 
     def restore(self, receipt: Receipt, route: Route, mandate_ref: str) -> None:
         """Keep a receipt issued before a restart, as if issued here."""
