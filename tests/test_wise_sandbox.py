@@ -6,13 +6,17 @@ from decimal import Decimal
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
+from api.main import create_app
 from contracts.errors import RailError
 from contracts.interfaces import Rail, Router
-from contracts.schemas import CancelStatus, FreezeStatus, ReceiptStatus, RouteStatus
+from contracts.schemas import CancelStatus, FreezeStatus, Message, ReceiptStatus, Role, RouteStatus, ToolCall
+from core.fake_adapter import FakeModelAdapter
 from rails.fake_router import FakeRouter
 from rails.wise_sandbox import (
     SANDBOX_BASE_URL,
+    SCA_REFUSED,
     STATUS_SOURCE,
     WiseSandboxClient,
     WiseSandboxConfig,
@@ -31,10 +35,17 @@ RECIPIENTS = {"landlord_sp": 8692237, "self_sg": 555}
 class FakeWise:
     """Answers the Wise endpoints the rail uses, keeping transfers by id, as the sandbox would."""
 
-    def __init__(self, fee="5.31", disabled=False, fund_status="COMPLETED", cancel_code=200, quote_code=200, balances=None, balances_code=200):
+    def __init__(
+        self, fee="5.31", disabled=False, fund_status="COMPLETED", cancel_code=200, quote_code=200, balances=None, balances_code=200,
+        fund_code=201, fund_sca=False,
+    ):
         self.fee = fee
         self.disabled = disabled
         self.fund_status = fund_status
+        # fund_code 403 with fund_sca answers as Wise's sandbox did on 16 October 2026 for a personal account: the
+        # strong customer authentication headers and the body {"error": "forbidden"}. Without fund_sca, a bare 403.
+        self.fund_code = fund_code
+        self.fund_sca = fund_sca
         self.cancel_code = cancel_code
         self.quote_code = quote_code
         self.balances = balances if balances is not None else []
@@ -70,6 +81,9 @@ class FakeWise:
             return httpx.Response(200, json=self.transfers[existing])
         if request.method == "POST" and path.endswith("/payments"):
             transfer_id = int(path.split("/")[4])
+            if self.fund_code == 403:
+                headers = {"x-2fa-approval-result": "REJECTED", "x-2fa-approval": "made-up-approval-id"} if self.fund_sca else {}
+                return httpx.Response(403, headers=headers, json={"error": "forbidden"})
             if self.fund_status != "REJECTED":
                 self.transfers[transfer_id]["status"] = "processing"
             return httpx.Response(201, json={"type": "BALANCE", "status": self.fund_status, "errorCode": "insufficient.funds" if self.fund_status == "REJECTED" else None})
@@ -242,6 +256,82 @@ def test_a_rejected_funding_raises_with_wises_code_and_leaves_the_transfer_unfun
 
     assert "Nothing was charged" in str(error.value)
     assert wise.transfers[16521632]["status"] == "incoming_payment_waiting"
+
+
+SCA_SENTENCE = (
+    "Wise asked for strong customer authentication to fund the transfer, which Wise no longer allows a personal "
+    "account to complete by API; the payment can only be funded in Wise's own app."
+)
+
+
+def test_a_funding_refused_for_strong_customer_authentication_says_so():
+    with pytest.raises(WiseSandboxError) as error:
+        _client(FakeWise(fund_code=403, fund_sca=True)).fund(16521632)
+
+    assert str(error.value) == SCA_SENTENCE == SCA_REFUSED
+    assert TOKEN not in str(error.value)
+
+
+def test_a_403_without_the_strong_customer_authentication_header_keeps_the_existing_message():
+    with pytest.raises(WiseSandboxError) as error:
+        _client(FakeWise(fund_code=403)).fund(16521632)
+
+    assert str(error.value) == "The Wise sandbox answered 403: Forbidden."
+
+
+def test_a_refused_funding_cancels_the_draft_transfer_and_the_error_names_it():
+    rail, wise = _rail(FakeWise(fund_code=403, fund_sca=True))
+
+    with pytest.raises(RailError) as error:
+        rail.execute(_route(), "mandate-student_001-v1", "wise-key-0001", "token")
+
+    assert str(error.value).startswith(
+        f"Wise created transfer 16521632, status incoming_payment_waiting, and refused to fund it: {SCA_SENTENCE}"
+    )
+    assert wise.transfers[16521632]["status"] == "cancelled"
+    assert [r.method + " " + r.url.path.split("/")[-1] for r in wise.requests][-1] == "PUT cancel"
+
+
+def test_a_refused_funding_whose_cancel_also_fails_still_reports_the_refusal():
+    rail, wise = _rail(FakeWise(fund_code=403, fund_sca=True, cancel_code=422))
+
+    with pytest.raises(RailError, match="refused to fund it: Wise asked for strong customer authentication"):
+        rail.execute(_route(), "mandate-student_001-v1", "wise-key-0001", "token")
+
+    assert wise.transfers[16521632]["status"] == "incoming_payment_waiting"
+
+
+def test_a_refused_funding_reaches_the_ledger_with_the_transfer_id_and_writes_no_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv("COUNCIL", "")
+    wise = FakeWise(fund_code=403, fund_sca=True)
+    allowance = {"amount": "25", "currency": "SGD", "corridor": "SG>SG", "payee_id": "self_sg", "purpose": "emergency"}
+    call = Message(
+        role=Role.ASSISTANT, text="", tool_calls=[ToolCall(id="call_1", name="propose_transfer", arguments=allowance)],
+        provider="fake", model="fake",
+    )
+    api = TestClient(
+        create_app(
+            adapter=FakeModelAdapter([call]),
+            ledger_path=tmp_path / "ledger.jsonl",
+            conversations_path=tmp_path / "conversations.jsonl",
+            tick_seconds=None,
+            wise_sandbox=_client(wise),
+        )
+    )
+
+    proposed = api.post("/chat", json={"user_id": "student_001", "text": "Send 25 SGD to my own account, emergency"}).json()
+    reply = api.post(
+        "/confirm", json={"user_id": "student_001", "confirmation_token": proposed["confirmation"]["confirmation_token"]}
+    ).json()
+
+    entries = [json.loads(line) for line in (tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()]
+    errors = [e["payload"]["rail_error"] for e in entries if e["kind"] == "note" and "rail_error" in e["payload"]]
+    assert errors and "Wise created transfer 16521632, status incoming_payment_waiting" in errors[0]
+    assert SCA_SENTENCE in errors[0]
+    assert not any(e["kind"] == "receipt" for e in entries)
+    assert reply.get("receipt") is None
+    assert "16521632" in reply["text"]
+    assert wise.transfers[16521632]["status"] == "cancelled"
 
 
 def test_a_wise_error_becomes_a_rail_error_and_records_no_key():
